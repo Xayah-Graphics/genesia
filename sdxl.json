@@ -1,0 +1,15 @@
+{
+  "checkpoint": "C:/Users/xayah/Documents/ComfyUI/models/checkpoints/oneObsession_v22.safetensors",
+  "output": "data/sdxl",
+  "cache": "cmake-build-release/genesia-cache",
+  "positive": "petite, realistic, photorealistic, black hair, long hair, \r\nblue serafuku, red neckerchief, blue sailor collar, long sleeves, pleated skirt, blue beret, \r\nskinny, black thighhighs, slim legs,\r\n1girl, indoors, solo, portrait, looking at viewer, \r\n\r\n(anime CG, realistic painting style), masterpiece, best quality, amazing quality, newest, very aesthetic,newest, highres, year 2025, high resolution, excellent, medium resolution, clean coloring,soft shading, ",
+  "negative": "see-through thighhighs, red rope,\r\n\r\nworst quality,normal quality,quality,lowres,anatomical nonsense,bad anatomy,bad hands, mutated hands,interlocked fingers,extra fingers,watermark,low resolution, old,transparent,low logo, text, username, signature, early, watermark, signature, jpeg artifacts, username, censored, lowres, logo, text, sketch, multiple views, monochrome, thick thighs, ",
+  "width": 1024,
+  "height": 1536,
+  "steps": 50,
+  "cfg": 4.5,
+  "seeds": [
+    659915289870415
+  ],
+  "warmup": 0
+}
