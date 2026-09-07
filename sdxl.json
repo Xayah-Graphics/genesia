@@ -11,5 +11,9 @@
   "seeds": [
     659915289870415
   ],
-  "warmup": 0
+  "warmup": 0,
+  "preview": {
+    "enabled": true,
+    "interval_ms": 1000
+  }
 }

@@ -1,8 +1,9 @@
 module;
 
 #include <GLFW/glfw3.h>
-#include <genesia/cuda.h>
+
 #include "../core/sdxl/control.h"
+#include <genesia/cuda.h>
 
 module genesia.editor;
 
@@ -18,6 +19,7 @@ namespace genesia::editor {
         WindowPlatform window{"Genesia", {1440, 960}};
         Renderer renderer{window};
         Interop interop{renderer.device};
+        Interop preview_interop{renderer.device};
         Session session;
         UserInterface ui;
         bool closing{};
@@ -27,38 +29,46 @@ namespace genesia::editor {
         void run();
     };
 
-    Application::Application(Configuration configuration, std::filesystem::path path)
-        : session{configuration, interop}, ui{std::move(configuration), std::move(path), window, renderer, interop, session} {}
+    Application::Application(Configuration configuration, std::filesystem::path path) : session{configuration, interop, preview_interop}, ui{std::move(configuration), std::move(path), window, renderer, interop, session} {}
 
     void Application::run() {
         std::uint32_t previous_stage{}, previous_step{};
         bool previous_busy{};
         for (;;) {
-            if (window.take_close_request()) { closing = true; session.shutdown(); }
+            if (window.take_close_request()) {
+                closing = true;
+                session.shutdown();
+            }
             bool busy, done, pending;
             {
                 const std::lock_guard lock{session.mutex};
-                busy = session.active.has_value();
-                done = session.worker_done;
-                pending = !session.events.empty();
+                busy    = session.active.has_value();
+                done    = session.worker_done;
+                pending = !session.events.empty() || !session.previews.empty();
             }
             if (closing && done && !pending) break;
-            const auto stage = ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{session.control.data()[0].stage}.load();
-            const auto step = ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{session.control.data()[0].completed}.load();
-            const bool animating = glfwGetTime() < ui.animate_until || std::abs(ui.composer_amount - float(ui.composer_open)) > 0.01F || std::abs(ui.history_amount - float(ui.history_open)) > 0.01F;
-            if (!std::exchange(window.redraw, false) && !pending && !animating && stage == previous_stage && step == previous_step && busy == previous_busy) {
-                glfwWaitEventsTimeout(busy ? 0.1 : 1.0);
+            const auto stage     = ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{session.control.data()[0].stage}.load();
+            const auto step      = ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{session.control.data()[0].completed}.load();
+            const double now     = glfwGetTime();
+            const bool animating = now < ui.animate_until || std::abs(ui.composer_amount - float(ui.composer_open)) > 0.01F || std::abs(ui.history_amount - float(ui.history_open)) > 0.01F;
+            if (!std::exchange(window.redraw, false) && !pending && !animating && now < ui.refresh_at && stage == previous_stage && step == previous_step && busy == previous_busy) {
+                glfwWaitEventsTimeout(std::min(busy ? 0.1 : 1.0, std::max(0.0, ui.refresh_at - now)));
                 continue;
             }
             previous_stage = stage;
-            previous_step = step;
-            previous_busy = busy;
-            if (!renderer.begin()) { glfwPollEvents(); continue; }
+            previous_step  = step;
+            previous_busy  = busy;
+            if (!renderer.begin()) {
+                glfwPollEvents();
+                continue;
+            }
             ui.receive();
             ui.draw();
             renderer.present();
             if (busy && glfwGetTime() < ui.animate_until) frame_times.push_back(renderer.last_frame_seconds);
-            glfwWaitEventsTimeout(glfwGetTime() < ui.animate_until || animating ? 1.0 / 120 : busy ? 0.1 : 1.0);
+            const double wait = std::min(ui.refresh_at - glfwGetTime(), glfwGetTime() < ui.animate_until || animating ? 1.0 / 120 : busy ? 0.1 : 1.0);
+            if (wait > 0) glfwWaitEventsTimeout(wait);
+            else glfwPollEvents();
         }
         if (!frame_times.empty()) {
             std::ranges::sort(frame_times);
@@ -74,4 +84,4 @@ namespace genesia::editor {
         Application application{std::move(configuration), configuration_path};
         application.run();
     }
-}
+} // namespace genesia::editor

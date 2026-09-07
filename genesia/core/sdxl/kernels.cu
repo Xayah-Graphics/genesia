@@ -1,10 +1,10 @@
 #include "kernels.h"
-#include <cuda_fp16.h>
-#include <cuda_bf16.h>
-#include <genesia/cuda.h>
-#include <cuda/launch>
 #include <algorithm>
 #include <cub/block/block_scan.cuh>
+#include <cuda/launch>
+#include <cuda_bf16.h>
+#include <cuda_fp16.h>
+#include <genesia/cuda.h>
 
 namespace genesia::sdxl::kernels {
     __global__ void embedding_kernel(__half* output, const __half* token, const __half* position, const std::int32_t* ids, const int rows, const int width) {
@@ -21,8 +21,8 @@ namespace genesia::sdxl::kernels {
         const int i = blockIdx.x * blockDim.x + threadIdx.x;
         if (i >= rows * width) return;
         const float weight = weights[i / width];
-        const float base = float(empty[i % (77 * width)]);
-        output[i] = __half(fmaf(weight, float(input[i]) - base, base));
+        const float base   = float(empty[i % (77 * width)]);
+        output[i]          = __half(fmaf(weight, float(input[i]) - base, base));
     }
 
     __global__ void conditioning_kernel(__half* output, const __half* clip_l, const __half* clip_g, const int positive, const int negative, const int length) {
@@ -30,17 +30,18 @@ namespace genesia::sdxl::kernels {
         if (i >= 2 * length * 2048) return;
         const int batch = i / (length * 2048);
         const int token = i / 2048 % length;
-        const int row = batch * positive * 77 + token;
-        const int c = i % 2048;
-        output[i] = token < (batch ? negative : positive) * 77 ? (c < 768 ? clip_l[row * 768 + c] : clip_g[row * 1280 + c - 768]) : __half(0.0F);
+        const int row   = batch * positive * 77 + token;
+        const int c     = i % 2048;
+        output[i]       = token < (batch ? negative : positive) * 77 ? (c < 768 ? clip_l[row * 768 + c] : clip_g[row * 1280 + c - 768]) : __half(0.0F);
     }
 
-    template<class T> __global__ void time_embedding_kernel(T* output, const float* times, const int count, const int width) {
+    template <class T>
+    __global__ void time_embedding_kernel(T* output, const float* times, const int count, const int width) {
         const int i = blockIdx.x * blockDim.x + threadIdx.x;
         if (i >= count * width) return;
         const float frequency = expf(-9.210340371976184F * float(i % (width / 2)) / float(width / 2));
-        const float angle = times[i / width] * frequency;
-        output[i] = T(i % width < width / 2 ? cosf(angle) : sinf(angle));
+        const float angle     = times[i / width] * frequency;
+        output[i]             = T(i % width < width / 2 ? cosf(angle) : sinf(angle));
     }
 
     __global__ void conditions_kernel(__half* output, const __half* pooled, const float* geometry) {
@@ -52,29 +53,30 @@ namespace genesia::sdxl::kernels {
         const int i = blockIdx.x * blockDim.x + threadIdx.x;
         if (i >= steps * 2560) return;
         const float value = float(times[i / 2560 * 1280 + i % 1280]) + float(labels[i % 2560]);
-        output[i] = __half(float(value) / (1.0F + expf(-float(value))));
+        output[i]         = __half(float(value) / (1.0F + expf(-float(value))));
     }
 
     __global__ void training_kernel(float* training) {
         __shared__ cub::BlockScan<float, 256>::TempStorage storage;
         float values[4];
-        #pragma unroll
+#pragma unroll
         for (int j = 0; j < 4; ++j) {
-            const int i = threadIdx.x * 4 + j;
+            const int i      = threadIdx.x * 4 + j;
             const float beta = fmaf(float(i) / 999.0F, sqrtf(0.012F) - sqrtf(0.00085F), sqrtf(0.00085F));
-            values[j] = i < 1000 ? log1pf(-beta * beta) : 0.0F;
+            values[j]        = i < 1000 ? log1pf(-beta * beta) : 0.0F;
         }
         cub::BlockScan<float, 256>(storage).InclusiveSum(values, values);
-        #pragma unroll
-        for (int j = 0; j < 4; ++j) if (threadIdx.x * 4 + j < 1000) training[threadIdx.x * 4 + j] = sqrtf(expm1f(-values[j]));
+#pragma unroll
+        for (int j = 0; j < 4; ++j)
+            if (threadIdx.x * 4 + j < 1000) training[threadIdx.x * 4 + j] = sqrtf(expm1f(-values[j]));
     }
 
     __global__ void schedule_kernel(SamplingStep* output, float* times, const float* training, const int steps) {
         const int i = blockIdx.x * blockDim.x + threadIdx.x;
         if (i > steps) return;
         const float sigma = i == steps ? 0.0F : training[999 - i * 1000 / steps];
-        const float next = i + 1 >= steps ? 0.0F : training[999 - (i + 1) * 1000 / steps];
-        output[i] = {sigma, next - sigma, rsqrtf(fmaf(sigma, sigma, 1.0F))};
+        const float next  = i + 1 >= steps ? 0.0F : training[999 - (i + 1) * 1000 / steps];
+        output[i]         = {sigma, next - sigma, rsqrtf(fmaf(sigma, sigma, 1.0F))};
         if (i < steps) times[i] = float(999 - i * 1000 / steps);
     }
 
@@ -83,11 +85,11 @@ namespace genesia::sdxl::kernels {
         if (i >= count / 4) return;
         uint4 counter{static_cast<unsigned>(i), 0, 0, 0};
         uint2 key{static_cast<unsigned>(*seed), static_cast<unsigned>(*seed >> 32)};
-        #pragma unroll
+#pragma unroll
         for (int round = 0; round < 10; ++round) {
             const unsigned high0 = __umulhi(0xd2511f53u, counter.x);
             const unsigned high1 = __umulhi(0xcd9e8d57u, counter.z);
-            counter = {high1 ^ counter.y ^ key.x, 0xcd9e8d57u * counter.z, high0 ^ counter.w ^ key.y, 0xd2511f53u * counter.x};
+            counter              = {high1 ^ counter.y ^ key.x, 0xcd9e8d57u * counter.z, high0 ^ counter.w ^ key.y, 0xd2511f53u * counter.x};
             key.x += 0x9e3779b9u;
             key.y += 0xbb67ae85u;
         }
@@ -96,22 +98,44 @@ namespace genesia::sdxl::kernels {
         sincosf(float(counter.w) * 0x1p-32F * 6.283185307179586F, &sine1, &cosine1);
         const float radius0 = sqrtf(-2.0F * logf((float(counter.x) + 1.0F) * 0x1p-32F));
         const float radius1 = sqrtf(-2.0F * logf((float(counter.z) + 1.0F) * 0x1p-32F));
-        const float scale = sqrtf(fmaf(schedule[0].sigma, schedule[0].sigma, 1.0F));
+        const float scale   = sqrtf(fmaf(schedule[0].sigma, schedule[0].sigma, 1.0F));
         const float4 values{radius0 * sine0 * scale, radius0 * cosine0 * scale, radius1 * sine1 * scale, radius1 * cosine1 * scale};
         reinterpret_cast<float4*>(state)[i] = values;
         const float data[4]{values.x, values.y, values.z, values.w};
-        #pragma unroll
+#pragma unroll
         for (int j = 0; j < 4; ++j) input[i * 4 + j] = input[count + i * 4 + j] = __half(data[j] * schedule[0].inverse);
         if (i == 0) *step = 0;
     }
 
-    __global__ void euler_kernel(float* state, __half* input, const __half* epsilon, const SamplingStep* schedule, const int* step, const float cfg, const int count) {
+    __global__ void snapshot_begin_kernel(int* selected, SnapshotSlot* slots) {
+        *selected = -1;
+        for (int i = 0; i < 3; ++i) {
+            if (::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{slots[i].state}.load(::cuda::memory_order_acquire) == std::uint32_t(SnapshotState::requested)) {
+                *selected = i;
+                break;
+            }
+        }
+    }
+
+    __global__ void snapshot_publish_kernel(const int* selected, SnapshotSlot* slots, const int* step) {
+        const int i = *selected;
+        if (i < 0) return;
+        slots[i].step = *step + 1;
+        ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{slots[i].state}.store(std::uint32_t(SnapshotState::ready), ::cuda::memory_order_release);
+    }
+
+    template <bool preview>
+    __global__ void euler_kernel(float* state, __half* input, const __half* epsilon, const SamplingStep* schedule, const int* step, const float cfg, const int count, float* snapshots, const int* selected) {
         const int i = blockIdx.x * blockDim.x + threadIdx.x;
         if (i >= count) return;
-        const int index = *step;
+        const int index        = *step;
         const float derivative = fmaf(cfg, float(epsilon[i]) - float(epsilon[i + count]), float(epsilon[i + count]));
+        if constexpr (preview) {
+            const int slot = *selected;
+            if (slot >= 0) snapshots[slot * count + i] = fmaf(-schedule[index].sigma, derivative, state[i]);
+        }
         const float value = fmaf(schedule[index].delta, derivative, state[i]);
-        state[i] = value;
+        state[i]          = value;
         if (schedule[index + 1].sigma != 0.0F) input[i] = input[i + count] = __half(value * schedule[index + 1].inverse);
     }
 
@@ -166,8 +190,18 @@ namespace genesia::sdxl::kernels {
     void initialize(const ::cuda::stream_ref stream, float* state, void* input, int* step, const std::uint64_t* seed, const SamplingStep* schedule, const int count) {
         ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((count / 4 + 255) / 256), ::cuda::block_dims(256))), initialize_kernel, state, static_cast<__half*>(input), step, seed, schedule, count);
     }
-    void euler(const ::cuda::stream_ref stream, float* state, void* input, const void* epsilon, const SamplingStep* schedule, const int* step, const float cfg, const int count) {
-        ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((count + 255) / 256), ::cuda::block_dims(256))), euler_kernel, state, static_cast<__half*>(input), static_cast<const __half*>(epsilon), schedule, step, cfg, count);
+    void snapshot_begin(const ::cuda::stream_ref stream, int* selected, SnapshotSlot* slots) {
+        ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims(1), ::cuda::block_dims(1))), snapshot_begin_kernel, selected, slots);
+    }
+
+    void snapshot_publish(const ::cuda::stream_ref stream, const int* selected, SnapshotSlot* slots, const int* step) {
+        ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims(1), ::cuda::block_dims(1))), snapshot_publish_kernel, selected, slots, step);
+    }
+
+    void euler(const ::cuda::stream_ref stream, float* state, void* input, const void* epsilon, const SamplingStep* schedule, const int* step, const float cfg, const int count, float* snapshots, const int* selected) {
+        const auto config = ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((count + 255) / 256), ::cuda::block_dims(256)));
+        if (snapshots) ::cuda::launch(stream, config, euler_kernel<true>, state, static_cast<__half*>(input), static_cast<const __half*>(epsilon), schedule, step, cfg, count, snapshots, selected);
+        else ::cuda::launch(stream, config, euler_kernel<false>, state, static_cast<__half*>(input), static_cast<const __half*>(epsilon), schedule, step, cfg, count, snapshots, selected);
     }
     void advance(const ::cuda::stream_ref stream, int* step, const int count, const cudaGraphConditionalHandle loop, const cudaGraphConditionalHandle decode, Control* control) {
         ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims(1), ::cuda::block_dims(1))), advance_kernel, step, count, loop, decode, control);
@@ -178,4 +212,4 @@ namespace genesia::sdxl::kernels {
     void pixels(const ::cuda::stream_ref stream, std::uint8_t* output, const void* input, const int count) {
         ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((count + 255) / 256), ::cuda::block_dims(256))), pixels_kernel, output, static_cast<const __nv_bfloat16*>(input), count);
     }
-}
+} // namespace genesia::sdxl::kernels

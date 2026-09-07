@@ -65,9 +65,14 @@ namespace genesia::editor {
     LRESULT CALLBACK WindowPlatform::window_proc(HWND window, const UINT message, const WPARAM wparam, const LPARAM lparam) {
         WindowPlatform* platform = static_cast<WindowPlatform*>(GetPropW(window, L"GenesiaWindow"));
         if (platform == nullptr) return DefWindowProcW(window, message, wparam, lparam);
-        if ((message >= WM_MOUSEFIRST && message <= WM_MOUSELAST) || (message >= WM_KEYFIRST && message <= WM_KEYLAST)
-            || message == WM_SIZE || message == WM_DPICHANGED || message == WM_PAINT || message == WM_SETFOCUS || message == WM_KILLFOCUS) platform->redraw = true;
+        if ((message >= WM_MOUSEFIRST && message <= WM_MOUSELAST) || (message >= WM_KEYFIRST && message <= WM_KEYLAST) || message == WM_SIZE || message == WM_DPICHANGED || message == WM_PAINT || message == WM_SETFOCUS || message == WM_KILLFOCUS) platform->redraw = true;
         switch (message) {
+        case WM_KEYDOWN:
+            if (wparam == VK_ESCAPE) {
+                platform->request_close();
+                return 0;
+            }
+            break;
         case WM_NCCALCSIZE:
             if (wparam != 0) return 0;
             break;
@@ -93,8 +98,8 @@ namespace genesia::editor {
                     if (top) return HTTOP;
                     if (bottom) return HTBOTTOM;
                 }
-                const auto& region = platform->drag_region;
-                if (point.x >= region[0] && point.y >= region[1] && point.x < region[2] && point.y < region[3]) return HTCAPTION;
+                for (const auto& region : platform->drag_regions)
+                    if (point.x >= region[0] && point.y >= region[1] && point.x < region[2] && point.y < region[3]) return HTCAPTION;
                 return HTCLIENT;
             }
         case WM_GETMINMAXINFO:
@@ -104,7 +109,7 @@ namespace genesia::editor {
                 MINMAXINFO& minmax    = *reinterpret_cast<MINMAXINFO*>(lparam);
                 minmax.ptMaxPosition  = {monitor_info.rcWork.left - monitor_info.rcMonitor.left, monitor_info.rcWork.top - monitor_info.rcMonitor.top};
                 minmax.ptMaxSize      = {monitor_info.rcWork.right - monitor_info.rcWork.left, monitor_info.rcWork.bottom - monitor_info.rcWork.top};
-                const auto dpi = GetDpiForWindow(window);
+                const auto dpi        = GetDpiForWindow(window);
                 minmax.ptMinTrackSize = {MulDiv(960, dpi, 96), MulDiv(600, dpi, 96)};
                 return 0;
             }

@@ -63,9 +63,9 @@ namespace genesia::neural {
         graph.set_io_data_type(dtype).set_intermediate_data_type(cudnn_frontend::DataType_t::FLOAT).set_compute_data_type(cudnn_frontend::DataType_t::FLOAT);
         auto input  = graph.tensor(cudnn_frontend::graph::Tensor_attributes{}.set_name("input").set_uid(1).set_dim({n, input_width, h, w}).set_stride({static_cast<std::int64_t>(h) * w * input_width, 1, static_cast<std::int64_t>(w) * input_width, input_width}));
         auto weight = graph.tensor(cudnn_frontend::graph::Tensor_attributes{}.set_name("weight").set_uid(2).set_dim({output_width, input_width, kernel, kernel}).set_stride({static_cast<std::int64_t>(kernel) * kernel * input_width, 1, static_cast<std::int64_t>(kernel) * input_width, input_width}));
+        auto result = graph.conv_fprop(input, weight, cudnn_frontend::graph::Conv_fprop_attributes{}.set_padding({padding, padding}).set_stride({stride, stride}).set_dilation({1, 1}));
         auto bias   = graph.tensor(cudnn_frontend::graph::Tensor_attributes{}.set_name("bias").set_uid(3).set_dim({1, output_width, 1, 1}).set_stride({output_width, 1, output_width, output_width}));
-        auto hidden = graph.conv_fprop(input, weight, cudnn_frontend::graph::Conv_fprop_attributes{}.set_padding({padding, padding}).set_stride({stride, stride}).set_dilation({1, 1}));
-        auto result = graph.pointwise(hidden, bias, cudnn_frontend::graph::Pointwise_attributes{}.set_mode(cudnn_frontend::PointwiseMode_t::ADD));
+        result      = graph.pointwise(result, bias, cudnn_frontend::graph::Pointwise_attributes{}.set_mode(cudnn_frontend::PointwiseMode_t::ADD));
         if (residual) {
             auto skip = graph.tensor_like(input, "residual");
             skip->set_uid(5).set_dim({n, output_width, (h + 2 * padding - kernel) / stride + 1, (w + 2 * padding - kernel) / stride + 1}).set_stride({static_cast<std::int64_t>((h + 2 * padding - kernel) / stride + 1) * ((w + 2 * padding - kernel) / stride + 1) * output_width, 1, static_cast<std::int64_t>((w + 2 * padding - kernel) / stride + 1) * output_width, output_width});
@@ -124,7 +124,7 @@ namespace genesia::neural {
         intermediate       = ::cuda::device_buffer<std::byte>{stream, ::cuda::device_default_memory_pool(stream.device())};
         intermediate_data  = nullptr;
         intermediate_bytes = 0;
-        workspace          = ::cuda::device_buffer<std::byte>{stream, ::cuda::device_default_memory_pool(stream.device()), 1uz << 30, ::cuda::no_init};
+        workspace          = ::cuda::device_buffer<std::byte>{stream, ::cuda::device_default_memory_pool(stream.device()), (1uz << 30), ::cuda::no_init};
         workspace_data     = workspace.data();
         workspace_bytes    = workspace.size();
     }
@@ -137,7 +137,7 @@ namespace genesia::neural {
         workspace                = ::cuda::device_buffer<std::byte>{stream, ::cuda::device_default_memory_pool(stream.device()), offset + intermediate_bytes, ::cuda::no_init};
         workspace_data           = workspace.data();
         workspace_bytes          = required_workspace;
-        intermediate_data        = workspace.data() + offset;
+        intermediate_data        = intermediate_bytes ? workspace.data() + offset : nullptr;
         return std::move(workspace);
     }
 
@@ -156,7 +156,7 @@ namespace genesia::neural {
     }
 
     void InferenceRuntime::convolution(const TensorView output, const TensorView input, const Conv& layer, const TensorView residual) {
-        const std::array<int, 10> key{input.n, input.h, input.w, input.c, layer.weight.n, layer.weight.h, layer.stride, layer.padding, int(input.scalar), residual.data != nullptr};
+        const std::array<int, 10> key{input.n, input.h, input.w, input.c, layer.weight.n, layer.weight.h, layer.stride, layer.padding, int(input.scalar), int(residual.data != nullptr)};
         auto plan = std::ranges::find_if(convolutions, [&](const ConvPlan& value) { return value.key == key; });
         std::unordered_map<std::int64_t, void*> tensors{{1, input.data}, {2, layer.weight.data}, {3, layer.bias.data}, {4, output.data}};
         if (residual.data) tensors.emplace(5, residual.data);
@@ -171,7 +171,7 @@ namespace genesia::neural {
                 check(plan->graph.build_operation_graph(dnn));
                 check(plan->graph.create_execution_plans({cudnn_frontend::HeurMode_t::A}));
                 plan->graph.deselect_numeric_notes({cudnn_frontend::NumericalNote_t::NONDETERMINISTIC, cudnn_frontend::NumericalNote_t::REDUCED_PRECISION_REDUCTION});
-                plan->graph.deselect_workspace_greater_than(1uz << 30);
+                plan->graph.deselect_workspace_greater_than((1uz << 30));
                 check(plan->graph.check_support(dnn));
                 check(plan->graph.build_plans(cudnn_frontend::BuildPlanPolicy_t::ALL));
                 ::cuda::device_buffer<std::byte> temporary{stream, ::cuda::device_default_memory_pool(stream.device()), output.bytes(), ::cuda::no_init};
@@ -205,15 +205,23 @@ namespace genesia::neural {
             return;
         }
         if (dimension == 512) {
-            const std::size_t count = std::size_t(queries) * keys;
+            // Each query chunk attends to every key, retaining global attention
+            // without materializing the full spatial attention matrix.
+            constexpr int chunk     = 256;
+            const std::size_t count = std::size_t(std::min(queries, chunk)) * keys;
             auto* storage           = static_cast<std::byte*>(scratch(count * 6));
-            const TensorView scores{storage, 1, 1, queries, keys, Scalar::f32};
-            const TensorView probabilities{storage + count * 4, 1, 1, queries, keys, Scalar::bf16};
-            const MatmulShape qk{queries, keys, dimension, key_stride, query_stride, Scalar::bf16, Scalar::f32, true, false, false};
-            const MatmulShape pv{queries, dimension, keys, key_stride, keys, Scalar::bf16, Scalar::bf16, false, false, false};
-            matmul(scores, key, query, qk, 1.0F / std::sqrt(float(dimension)));
-            kernels::attention_softmax(stream, probabilities.data, static_cast<const float*>(scores.data), queries, keys);
-            matmul(output, value, probabilities, pv);
+            for (int start = 0; start < queries; start += chunk) {
+                const int rows = std::min(chunk, queries - start);
+                const TensorView scores{storage, 1, 1, rows, keys, Scalar::f32};
+                const TensorView probabilities{storage + count * 4, 1, 1, rows, keys, Scalar::bf16};
+                const TensorView q{static_cast<std::byte*>(query.data) + std::size_t(start) * query_stride * 2, 1, 1, rows, dimension, Scalar::bf16};
+                const TensorView result{static_cast<std::byte*>(output.data) + std::size_t(start) * dimension * 2, 1, 1, rows, dimension, Scalar::bf16};
+                const MatmulShape qk{rows, keys, dimension, key_stride, query_stride, Scalar::bf16, Scalar::f32, true, false, false};
+                const MatmulShape pv{rows, dimension, keys, key_stride, keys, Scalar::bf16, Scalar::bf16, false, false, false};
+                matmul(scores, key, q, qk, 1.0F / std::sqrt(float(dimension)));
+                kernels::attention_softmax(stream, probabilities.data, static_cast<const float*>(scores.data), rows, keys);
+                matmul(result, value, probabilities, pv);
+            }
             return;
         }
         const std::array<int, 10> shape{query.n, queries, keys, heads, dimension, query_stride, key_stride, int(query.scalar), causal, lengths != nullptr};
@@ -232,7 +240,7 @@ namespace genesia::neural {
                 check(plan->graph.build_operation_graph(dnn));
                 check(plan->graph.create_execution_plans({cudnn_frontend::HeurMode_t::A}));
                 plan->graph.deselect_numeric_notes({cudnn_frontend::NumericalNote_t::NONDETERMINISTIC, cudnn_frontend::NumericalNote_t::REDUCED_PRECISION_REDUCTION});
-                plan->graph.deselect_workspace_greater_than(1uz << 30);
+                plan->graph.deselect_workspace_greater_than((1uz << 30));
                 check(plan->graph.check_support(dnn));
                 check(plan->graph.build_plans(cudnn_frontend::BuildPlanPolicy_t::ALL));
                 check(plan->graph.autotune(dnn, tensors, workspace_data));
@@ -280,7 +288,7 @@ namespace genesia::neural {
                 check(cudaEventCreate(&stop));
                 cublasLtMatmulPreference_t preference{};
                 check(cublasLtMatmulPreferenceCreate(&preference));
-                const std::size_t workspace_bytes    = 1uz << 30;
+                const std::size_t workspace_bytes    = (1uz << 30);
                 const std::uint32_t reduction_scheme = CUBLASLT_REDUCTION_SCHEME_NONE | CUBLASLT_REDUCTION_SCHEME_COMPUTE_TYPE;
                 check(cublasLtMatmulPreferenceSetAttribute(preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &workspace_bytes, sizeof(workspace_bytes)));
                 check(cublasLtMatmulPreferenceSetAttribute(preference, CUBLASLT_MATMUL_PREF_REDUCTION_SCHEME_MASK, &reduction_scheme, sizeof(reduction_scheme)));

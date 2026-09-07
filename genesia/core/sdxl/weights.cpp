@@ -28,10 +28,10 @@ namespace genesia::sdxl {
         view = static_cast<const std::byte*>(MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0));
         if (!view) throw std::system_error{static_cast<int>(GetLastError()), std::system_category(), "SDXL checkpoint view"};
 #elif defined(__linux__)
-        mapped_size = std::filesystem::file_size(path);
+        mapped_size    = std::filesystem::file_size(path);
         const int file = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
         if (file == -1) throw std::system_error{errno, std::generic_category(), "SDXL checkpoint open"};
-        view = static_cast<const std::byte*>(::mmap(nullptr, mapped_size, PROT_READ, MAP_PRIVATE, file, 0));
+        view                    = static_cast<const std::byte*>(::mmap(nullptr, mapped_size, PROT_READ, MAP_PRIVATE, file, 0));
         const int mapping_error = errno;
         ::close(file);
         if (view == MAP_FAILED) throw std::system_error{mapping_error, std::generic_category(), "SDXL checkpoint mapping"};

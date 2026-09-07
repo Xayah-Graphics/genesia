@@ -22,9 +22,9 @@ namespace genesia::sdxl {
 
     Output::Output(const ::cuda::stream_ref stream, const int w, const int h) : pixels{stream, ::cuda::pinned_default_memory_pool(), std::size_t(w) * h * 3, ::cuda::no_init}, latent{stream, ::cuda::pinned_default_memory_pool(), std::size_t(w / 8) * (h / 8) * 4, ::cuda::no_init}, width{w}, height{h}, stream{stream} {}
 
-    Inference::Inference(Model& network, Parameters options, Control& control)
-        : parameters{std::move(options)}, model{network}, control{control}, unet_layout{parameters.height / 8, parameters.width / 8, parameters.steps}, vae_layout{parameters.height, parameters.width}, workspace{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device())}, unet{model.runtime.stream, parameters.height / 8, parameters.width / 8}, schedule{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), parameters.steps + 1uz, ::cuda::no_init}, seed{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), 1, ::cuda::no_init}, operator_workspace{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device())}, latent{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), std::size_t(parameters.width / 8) * (parameters.height / 8) * 4, ::cuda::no_init}, step{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), 1, ::cuda::no_init},
-          input{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), latent.size() * 2, ::cuda::no_init}, epsilon{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), latent.size() * 2, ::cuda::no_init}, decoder{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), std::size_t(parameters.width) * parameters.height * 256, ::cuda::no_init}, decoded{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), std::size_t(parameters.width) * parameters.height * 3, ::cuda::no_init}, image{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), decoded.size(), ::cuda::no_init}, scaled_latent{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), latent.size(), ::cuda::no_init},
+    Inference::Inference(Model& network, Parameters options, Control& control, Snapshots* snapshots)
+        : parameters{std::move(options)}, model{network}, control{control}, snapshots{snapshots}, unet_layout{parameters.height / 8, parameters.width / 8, parameters.steps}, vae_layout{parameters.height, parameters.width}, workspace{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device())}, unet{model.runtime.stream, parameters.height / 8, parameters.width / 8}, schedule{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), parameters.steps + 1uz, ::cuda::no_init}, seed{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), 1, ::cuda::no_init}, operator_workspace{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device())}, latent{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), std::size_t(parameters.width / 8) * (parameters.height / 8) * 4, ::cuda::no_init},
+          step{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), 1, ::cuda::no_init}, input{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), latent.size() * 2, ::cuda::no_init}, epsilon{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), latent.size() * 2, ::cuda::no_init}, decoder{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), std::size_t(parameters.width) * parameters.height * 256, ::cuda::no_init}, decoded{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), std::size_t(parameters.width) * parameters.height * 3, ::cuda::no_init}, image{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), decoded.size(), ::cuda::no_init}, scaled_latent{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), latent.size(), ::cuda::no_init},
           outputs{Output{model.runtime.stream, parameters.width, parameters.height}, Output{model.runtime.stream, parameters.width, parameters.height}} {
         const auto started = std::chrono::steady_clock::now();
         const auto stream  = model.runtime.stream;
@@ -103,7 +103,7 @@ namespace genesia::sdxl {
         const std::vector<cudaGraphNode_t> decode_prefix{dependencies, dependencies + dependency_count};
         neural::check(cudaStreamEndCapture(stream.get(), &captured));
         node.conditional.handle = decode_condition;
-        node.conditional.type = cudaGraphCondTypeIf;
+        node.conditional.type   = cudaGraphCondTypeIf;
         cudaGraphNode_t decode_node{};
         neural::check(cudaGraphAddNode(&decode_node, graph, decode_prefix.data(), nullptr, decode_prefix.size(), &node));
         neural::check(cudaStreamBeginCaptureToGraph(stream.get(), node.conditional.phGraph_out[0], nullptr, nullptr, 0, cudaStreamCaptureModeThreadLocal));
@@ -136,10 +136,10 @@ namespace genesia::sdxl {
     }
 
     const Output& Inference::generate(const std::uint64_t seed) {
-        Output& result    = outputs[output_index++ % 2];
-        result.seed = seed;
+        Output& result       = outputs[output_index++ % 2];
+        result.seed          = seed;
         result.device_pixels = image.data();
-        result.cancelled = false;
+        result.cancelled     = false;
         ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.completed}.store(0);
         ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.stage}.store(static_cast<std::uint32_t>(Stage::sampling));
         const auto stream = model.runtime.stream;
@@ -174,7 +174,9 @@ namespace genesia::sdxl {
         const int height = parameters.height / 8;
         const int width  = parameters.width / 8;
         model.unet.forward({epsilon.data(), 2, height, width, 4}, {input.data(), 2, height, width, 4}, step.data(), unet, model.runtime, unet_layout.view(workspace.data()));
-        kernels::euler(model.runtime.stream, latent.data(), input.data(), epsilon.data(), schedule.data(), step.data(), parameters.cfg, height * width * 4);
+        if (snapshots) kernels::snapshot_begin(model.runtime.stream, snapshots->selected.data(), snapshots->slots.data());
+        kernels::euler(model.runtime.stream, latent.data(), input.data(), epsilon.data(), schedule.data(), step.data(), parameters.cfg, height * width * 4, snapshots ? snapshots->latent.data() : nullptr, snapshots ? snapshots->selected.data() : nullptr);
+        if (snapshots) kernels::snapshot_publish(model.runtime.stream, snapshots->selected.data(), snapshots->slots.data(), step.data());
     }
 
     void Inference::decode() {

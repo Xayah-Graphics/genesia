@@ -26,6 +26,7 @@ export namespace genesia::editor {
         std::uint64_t upload(const Image& image);
         void upload(std::uint64_t id, const void* rgba, int width, int height, bool initial);
         void copy(std::uint64_t id, const runtime::Buffer& source, vk::Semaphore semaphore, std::uint64_t ready);
+        void discard(vk::Semaphore semaphore, std::uint64_t ready);
         void retire(std::uint64_t id);
 
     private:
@@ -62,4 +63,4 @@ export namespace genesia::editor {
         void update_fonts();
         void draw();
     };
-}
+} // namespace genesia::editor

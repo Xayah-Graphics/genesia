@@ -24,7 +24,7 @@ namespace genesia::editor {
 
         GLFWwindow* window{};
         HWND native_window{};
-        std::array<float, 4> drag_region{};
+        std::array<std::array<float, 4>, 2> drag_regions{};
         bool redraw{true};
 
     private:

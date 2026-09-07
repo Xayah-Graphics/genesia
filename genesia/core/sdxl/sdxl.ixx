@@ -14,6 +14,7 @@ import genesia.sdxl.workspace;
 import genesia.sdxl.text;
 import genesia.sdxl.unet;
 import genesia.sdxl.vae;
+import genesia.sdxl.preview;
 
 export namespace genesia::sdxl {
     struct Parameters final {
@@ -38,7 +39,11 @@ export namespace genesia::sdxl {
         Clip clip_l;
         Clip clip_g;
         UNet unet;
-        VAE vae;
+
+    public:
+        const VAE vae;
+
+    private:
         ::cuda::device_buffer<float> training;
     };
 
@@ -69,7 +74,7 @@ export namespace genesia::sdxl {
         double precompute_seconds{};
         double tuning_seconds{};
 
-        Inference(Model& model, Parameters parameters, Control& control);
+        Inference(Model& model, Parameters parameters, Control& control, Snapshots* snapshots = nullptr);
         ~Inference();
         Inference(const Inference&)            = delete;
         Inference& operator=(const Inference&) = delete;
@@ -80,6 +85,7 @@ export namespace genesia::sdxl {
     private:
         Model& model;
         Control& control;
+        Snapshots* snapshots;
         UNetWorkspaceLayout unet_layout;
         VAEWorkspaceLayout vae_layout;
         ::cuda::device_buffer<std::byte> workspace;

@@ -42,22 +42,30 @@ export namespace genesia::editor {
         float zoom{1};
         bool fit_image{true};
         ImVec2 pan{};
-        std::uint64_t latest_texture{};
+        bool image_live{};
+        float progress_alpha{};
+        std::string progress_label;
+        std::uint64_t observed_task{std::numeric_limits<std::uint64_t>::max()};
+        std::uint32_t preview_step{};
+        std::uint64_t transition_texture{};
+        int transition_width{}, transition_height{};
+        double transition_started{};
         std::uint64_t image_texture{};
         std::uint64_t selected{std::numeric_limits<std::uint64_t>::max()};
         int image_width{}, image_height{};
         double animate_until{};
+        double refresh_at{std::numeric_limits<double>::infinity()};
         std::vector<double> display_times;
         std::string shown_error;
 
         UserInterface(Configuration settings, std::filesystem::path path, WindowPlatform& platform, Renderer& display, Interop& bridge, Session& generation);
         void receive();
+        void show_image(std::uint64_t texture, int width, int height, bool transition);
         void submit();
         void canvas(float scale, ImVec2 size, float composer_height);
-        void chrome(float scale, ImVec2 size);
+        void top_strip(float scale, ImVec2 size);
         void composer(float scale, ImVec2 size, float height);
         void history_drawer(float scale, ImVec2 size);
-        void status(float scale, ImVec2 size, float composer_height);
         void draw();
     };
-}
+} // namespace genesia::editor

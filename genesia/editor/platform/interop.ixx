@@ -3,7 +3,6 @@ module;
 export module genesia.editor.platform.interop;
 import genesia.editor.runtime.device;
 import genesia.editor.runtime.resources;
-import genesia.sdxl;
 import std;
 import vulkan;
 
@@ -21,6 +20,7 @@ export namespace genesia::editor {
         std::array<Slot, 2> slots;
         explicit Interop(runtime::Device& device);
         ~Interop();
-        std::uint64_t publish(const sdxl::Output& output, std::size_t slot);
+        void prepare(int width, int height, ::cuda::stream_ref stream);
+        std::uint64_t publish(const std::uint8_t* pixels, int width, int height, ::cuda::stream_ref stream, std::size_t slot);
     };
-}
+} // namespace genesia::editor

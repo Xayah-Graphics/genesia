@@ -85,6 +85,7 @@ target_sources(
         genesia/core/sdxl/kernels.cu
         genesia/core/sdxl/text.cpp
         genesia/core/sdxl/unet.cpp
+        genesia/core/sdxl/preview.cpp
         genesia/core/sdxl/vae.cpp
         genesia/core/sdxl/sdxl.cpp
         genesia/core/headless.cpp
@@ -98,6 +99,7 @@ target_sources(
         genesia/core/sdxl/weights.ixx
         genesia/core/sdxl/text.ixx
         genesia/core/sdxl/unet.ixx
+        genesia/core/sdxl/preview.ixx
         genesia/core/sdxl/vae.ixx
         genesia/core/sdxl/sdxl.ixx
         genesia/core/headless.ixx
