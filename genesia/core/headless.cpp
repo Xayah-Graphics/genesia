@@ -30,7 +30,7 @@ namespace genesia::headless {
             const auto generation_started = std::chrono::steady_clock::now();
             const auto& result = inference.generate(configuration.seeds[i]);
             const Record record{configuration.parameters, result.seed, directory / std::format("{:03}-{}", i, result.seed), load_seconds, inference.prepare_seconds,
-                result.sample_seconds, result.decode_seconds, inference.resident_bytes, inference.cache_hits, inference.cache_misses, generation_started};
+                result.sample_seconds, result.decode_seconds, inference.resident_bytes, inference.cache_hits, inference.cache_misses, generation_started, configuration.prompt, configuration.catalog};
             std::println("GENERATE seed={} sample={:.3f}s decode={:.3f}s", result.seed, result.sample_seconds, result.decode_seconds);
             std::cout.flush();
             saves[i % 2] = std::async(std::launch::async, [&result, record] { save(result, record); });

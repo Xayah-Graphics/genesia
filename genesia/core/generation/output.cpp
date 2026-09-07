@@ -38,7 +38,7 @@ namespace genesia {
         const auto& p = record.parameters;
         const double save_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
         const double generation_to_saved_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - record.generation_started).count();
-        const nlohmann::json run{
+        nlohmann::json run{
             {"backend", "CUDA"}, {"sampling_execution", "cuda_graph_while"}, {"device", "NVIDIA GeForce RTX 5090"},
             {"seed", record.seed}, {"width", p.width}, {"height", p.height}, {"steps", p.steps}, {"cfg", p.cfg}, {"positive", p.positive}, {"negative", p.negative},
             {"sampler", "euler"}, {"scheduler", "simple"}, {"denoise", 1.0}, {"latent_scale", 0.13025}, {"latent_layout", "NCHW"},
@@ -49,6 +49,20 @@ namespace genesia {
             {"timing", {{"load_seconds", record.load_seconds}, {"prepare_seconds", record.prepare_seconds}, {"initialize_seconds", output.initialize_seconds},
                 {"sample_seconds", output.sample_seconds}, {"decode_seconds", output.decode_seconds}, {"transfer_seconds", output.transfer_seconds},
                 {"save_seconds", save_seconds}, {"generation_to_saved_seconds", generation_to_saved_seconds}}}};
+        run["tag_catalog_sha256"] = prompt::Catalog::sha256;
+        for (const auto& [name, side] : {std::pair{"positive", &record.prompt.positive}, std::pair{"negative", &record.prompt.negative}}) {
+            auto& saved = run["prompt"][name];
+            saved["fixed"] = side->fixed;
+            saved["groups"] = nlohmann::json::array();
+            for (const auto& group : side->groups) {
+                nlohmann::json tags = nlohmann::json::array();
+                for (const auto tag : group.tags) {
+                    const auto& entry = record.catalog->tags[tag.id];
+                    tags.push_back({{"name", entry.name}, {"text", entry.text}, {"weight", tag.weight}, {"source", entry.category == -1 ? "custom" : "danbooru"}});
+                }
+                saved["groups"].push_back({{"name", group.name}, {"enabled", group.enabled}, {"tags", std::move(tags)}});
+            }
+        }
         std::ofstream report{record.directory / "run.json"};
         report.exceptions(std::ios::badbit | std::ios::failbit);
         report << run.dump(2) << '\n';

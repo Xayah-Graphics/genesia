@@ -45,10 +45,10 @@ namespace genesia::editor {
         stream.sync();
     }
 
-    void Session::enqueue(sdxl::Parameters parameters, const std::uint64_t seed) {
+    void Session::enqueue(sdxl::Parameters parameters, const std::uint64_t seed, prompt::Pair prompt) {
         {
             const std::lock_guard lock{mutex};
-            queue.push_back({next_id++, std::move(parameters), seed});
+            queue.push_back({next_id++, std::move(parameters), seed, std::move(prompt)});
         }
         condition.notify_all();
     }
@@ -168,7 +168,7 @@ namespace genesia::editor {
                     if (!output.cancelled) {
                         const auto generated = std::chrono::steady_clock::now();
                         const auto ready     = interop.publish(output.device_pixels, output.width, output.height, output.stream, slot);
-                        Record record{request.parameters, request.seed, directory / std::format("{:03}-{}", request.id, request.seed), load_seconds, inference->prepare_seconds, output.sample_seconds, output.decode_seconds, inference->resident_bytes, inference->cache_hits, inference->cache_misses, generation_started};
+                        Record record{request.parameters, request.seed, directory / std::format("{:03}-{}", request.id, request.seed), load_seconds, inference->prepare_seconds, output.sample_seconds, output.decode_seconds, inference->resident_bytes, inference->cache_hits, inference->cache_misses, generation_started, request.prompt, configuration.catalog};
                         auto preview = thumbnail(output);
                         {
                             const std::lock_guard lock{mutex};

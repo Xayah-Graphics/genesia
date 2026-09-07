@@ -91,6 +91,8 @@ target_sources(
         genesia/core/headless.cpp
         genesia/core/generation/configuration.cpp
         genesia/core/generation/output.cpp
+        genesia/core/prompt/catalog.cpp
+        genesia/core/prompt/prompt.cpp
         PUBLIC
         FILE_SET cxx_modules TYPE CXX_MODULES FILES
         genesia/core/neural/inference-runtime.ixx
@@ -105,6 +107,8 @@ target_sources(
         genesia/core/headless.ixx
         genesia/core/generation/configuration.ixx
         genesia/core/generation/output.ixx
+        genesia/core/prompt/catalog.ixx
+        genesia/core/prompt/prompt.ixx
 )
 target_include_directories(genesia_core PUBLIC "${GENESIA_CLION_CUDA_INCLUDE_DIRECTORY}")
 target_compile_options(genesia_core PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:-lineinfo>")
@@ -149,6 +153,7 @@ if (GENESIA_BUILD_UI)
             genesia/editor/platform/interop.cu
             genesia/editor/session/session.cpp
             genesia/editor/ui/ui.cpp
+            genesia/editor/ui/tag-editor.cpp
             genesia/editor/editor.cpp
             PUBLIC
             FILE_SET cxx_modules TYPE CXX_MODULES FILES
@@ -162,6 +167,7 @@ if (GENESIA_BUILD_UI)
             genesia/editor/platform/interop.ixx
             genesia/editor/session/session.ixx
             genesia/editor/ui/ui.ixx
+            genesia/editor/ui/tag-editor.ixx
     )
     target_compile_definitions(
             genesia_editor
@@ -197,6 +203,9 @@ endif ()
 # ============================================================================
 # Runtime Resources
 # ============================================================================
+configure_file(assets/tags/danbooru.csv assets/tags/danbooru.csv COPYONLY)
+target_compile_definitions(genesia_core PRIVATE GENESIA_TAG_CATALOG="${PROJECT_BINARY_DIR}/assets/tags/danbooru.csv")
+
 if (WIN32)
     add_custom_command(
             TARGET genesia POST_BUILD

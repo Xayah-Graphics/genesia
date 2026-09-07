@@ -1,6 +1,7 @@
 export module genesia.generation.output;
 
 import genesia.sdxl;
+import genesia.prompt;
 import std;
 
 export namespace genesia {
@@ -16,6 +17,8 @@ export namespace genesia {
         std::size_t cache_hits{};
         std::size_t cache_misses{};
         std::chrono::steady_clock::time_point generation_started;
+        prompt::Pair prompt;
+        std::shared_ptr<const prompt::Catalog> catalog;
     };
     struct Image final {
         int width{};

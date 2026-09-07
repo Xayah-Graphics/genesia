@@ -16,7 +16,7 @@ import std;
 
 namespace genesia::editor {
     struct Application final {
-        WindowPlatform window{"Genesia", {1440, 960}};
+        WindowPlatform window{"Genesia", {1920, 1080}};
         Renderer renderer{window};
         Interop interop{renderer.device};
         Interop preview_interop{renderer.device};

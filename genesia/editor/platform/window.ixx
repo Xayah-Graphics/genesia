@@ -21,10 +21,11 @@ namespace genesia::editor {
 
         void request_close() noexcept;
         [[nodiscard]] bool take_close_request() noexcept;
+        void toggle_fullscreen();
 
         GLFWwindow* window{};
         HWND native_window{};
-        std::array<std::array<float, 4>, 2> drag_regions{};
+        std::array<float, 4> drag_region{};
         bool redraw{true};
 
     private:
@@ -43,6 +44,9 @@ namespace genesia::editor {
             GlfwLifetime glfw{};
             std::unique_ptr<GLFWwindow, decltype(&glfwDestroyWindow)> glfw_window{nullptr, glfwDestroyWindow};
             WNDPROC original_window_proc{};
+            WINDOWPLACEMENT windowed_placement{sizeof(WINDOWPLACEMENT)};
+            LONG_PTR windowed_style{};
+            bool fullscreen{};
             bool close_requested{};
         } state;
     };

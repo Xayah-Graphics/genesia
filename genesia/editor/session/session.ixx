@@ -14,6 +14,7 @@ export namespace genesia::editor {
         std::uint64_t id{};
         sdxl::Parameters parameters;
         std::uint64_t seed{};
+        prompt::Pair prompt;
     };
     enum class EventKind { generated, saved, loaded };
     struct Event final {
@@ -56,7 +57,7 @@ export namespace genesia::editor {
 
         Session(Configuration configuration, Interop& interop, Interop& preview_interop);
         ~Session();
-        void enqueue(sdxl::Parameters parameters, std::uint64_t seed);
+        void enqueue(sdxl::Parameters parameters, std::uint64_t seed, prompt::Pair prompt);
         void stop();
         void resume();
         void load(std::uint64_t id, std::filesystem::path path);

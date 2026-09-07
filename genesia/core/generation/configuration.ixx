@@ -1,6 +1,7 @@
 export module genesia.generation.configuration;
 
 import genesia.sdxl;
+export import genesia.prompt;
 import std;
 
 export namespace genesia {
@@ -16,6 +17,9 @@ export namespace genesia {
         std::vector<std::uint64_t> seeds;
         int warmup{};
         PreviewSettings preview;
+        std::vector<prompt::CustomTag> custom_tags;
+        std::shared_ptr<const prompt::Catalog> catalog;
+        prompt::Pair prompt;
     };
     Configuration read_configuration(const std::filesystem::path& path);
     void write_configuration(const Configuration& configuration, const std::filesystem::path& path);
