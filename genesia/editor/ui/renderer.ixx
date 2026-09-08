@@ -16,6 +16,7 @@ export namespace genesia::editor {
         vk::Extent2D extent{};
         float dpi{1};
         bool visible{true};
+        int hand_cursor{-1};
         double last_frame_seconds{};
 
         explicit Renderer(WindowPlatform& window);

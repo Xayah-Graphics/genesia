@@ -1,141 +1,139 @@
 {
-  "checkpoint": "C:/Users/xayah/Documents/ComfyUI/models/checkpoints/oneObsession_v22.safetensors",
-  "output": "data/sdxl",
   "cache": "genesia-cache",
-  "width": 1024,
-  "height": 1536,
-  "steps": 50,
   "cfg": 4.5,
-  "seeds": [
-    659915289870415
-  ],
-  "warmup": 0,
-  "preview": {
-    "enabled": true,
-    "interval_ms": 1000
-  },
+  "checkpoint": "C:/Users/xayah/Documents/ComfyUI/models/checkpoints/oneObsession_v22.safetensors",
   "custom_tags": [
     {
       "name": "blue_beret",
       "text": "blue beret"
     }
   ],
+  "height": 1536,
+  "output": "data/sdxl",
+  "preview": {
+    "enabled": true,
+    "interval_ms": 1000
+  },
   "prompt": {
-    "positive": {
-      "fixed": "(anime CG, realistic painting style), masterpiece, best quality, amazing quality, newest, very aesthetic, newest, highres, year 2025, high resolution, excellent, medium resolution, clean coloring, soft shading",
-      "groups": [
-        {
-          "name": "Group 1",
-          "enabled": true,
-          "tags": [
-            {
-              "name": "petite",
-              "weight": 1
-            },
-            {
-              "name": "realistic",
-              "weight": 1
-            },
-            {
-              "name": "photorealistic",
-              "weight": 1
-            },
-            {
-              "name": "black_hair",
-              "weight": 1
-            },
-            {
-              "name": "long_hair",
-              "weight": 1
-            },
-            {
-              "name": "blue_serafuku",
-              "weight": 1
-            },
-            {
-              "name": "red_neckerchief",
-              "weight": 1
-            },
-            {
-              "name": "blue_sailor_collar",
-              "weight": 1
-            },
-            {
-              "name": "long_sleeves",
-              "weight": 1
-            },
-            {
-              "name": "pleated_skirt",
-              "weight": 1
-            },
-            {
-              "name": "blue_beret",
-              "weight": 1
-            },
-            {
-              "name": "skinny",
-              "weight": 1
-            },
-            {
-              "name": "black_thighhighs",
-              "weight": 1
-            },
-            {
-              "name": "slim_legs",
-              "weight": 1
-            },
-            {
-              "name": "1girl",
-              "weight": 1
-            },
-            {
-              "name": "indoors",
-              "weight": 1
-            },
-            {
-              "name": "solo",
-              "weight": 1
-            },
-            {
-              "name": "portrait",
-              "weight": 1
-            },
-            {
-              "name": "looking_at_viewer",
-              "weight": 1
-            }
-          ]
-        },
-        {
-          "name": "Group 2",
-          "enabled": true,
-          "tags": []
-        },
-        {
-          "name": "Group 3",
-          "enabled": true,
-          "tags": []
-        }
-      ]
-    },
     "negative": {
       "fixed": "worst quality, normal quality, quality, lowres, anatomical nonsense, bad anatomy, bad hands, mutated hands, interlocked fingers, extra fingers, watermark, low resolution, old, transparent, low logo, text, username, signature, early, watermark, signature, jpeg artifacts, username, censored, lowres, logo, text, sketch, multiple views, monochrome, thick thighs",
       "groups": [
         {
-          "name": "Group 1",
           "enabled": true,
           "tags": [
             {
               "name": "see-through_thighhighs",
-              "weight": 1
+              "weight": 1.0
             },
             {
               "name": "red_rope",
-              "weight": 1
+              "weight": 1.0
+            }
+          ]
+        }
+      ]
+    },
+    "positive": {
+      "fixed": "(anime CG, realistic painting style), masterpiece, best quality, amazing quality, newest, very aesthetic, newest, highres, year 2025, high resolution, excellent, medium resolution, clean coloring, soft shading",
+      "groups": [
+        {
+          "enabled": true,
+          "tags": [
+            {
+              "name": "petite",
+              "weight": 1.0
+            },
+            {
+              "name": "realistic",
+              "weight": 1.0
+            },
+            {
+              "name": "photorealistic",
+              "weight": 1.0
+            }
+          ]
+        },
+        {
+          "enabled": true,
+          "tags": [
+            {
+              "name": "black_hair",
+              "weight": 1.0
+            },
+            {
+              "name": "long_hair",
+              "weight": 1.0
+            },
+            {
+              "name": "blue_serafuku",
+              "weight": 1.0
+            },
+            {
+              "name": "red_neckerchief",
+              "weight": 1.0
+            },
+            {
+              "name": "blue_sailor_collar",
+              "weight": 1.0
+            },
+            {
+              "name": "long_sleeves",
+              "weight": 1.0
+            },
+            {
+              "name": "pleated_skirt",
+              "weight": 1.0
+            },
+            {
+              "name": "blue_beret",
+              "weight": 1.0
+            },
+            {
+              "name": "skinny",
+              "weight": 1.0
+            },
+            {
+              "name": "black_thighhighs",
+              "weight": 1.0
+            },
+            {
+              "name": "slim_legs",
+              "weight": 1.0
+            }
+          ]
+        },
+        {
+          "enabled": true,
+          "tags": [
+            {
+              "name": "1girl",
+              "weight": 1.0
+            },
+            {
+              "name": "indoors",
+              "weight": 1.0
+            },
+            {
+              "name": "solo",
+              "weight": 1.0
+            },
+            {
+              "name": "portrait",
+              "weight": 1.0
+            },
+            {
+              "name": "looking_at_viewer",
+              "weight": 1.0
             }
           ]
         }
       ]
     }
-  }
+  },
+  "seeds": [
+    16494404764960740964
+  ],
+  "steps": 50,
+  "warmup": 0,
+  "width": 1024
 }

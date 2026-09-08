@@ -7,7 +7,6 @@
 
 namespace genesia::neural::kernels {
     void convert(const ::cuda::stream_ref stream, void* output, const void* input, std::size_t count, int source_type, int destination_type);
-    void layout(const ::cuda::stream_ref stream, void* output, const void* input, int batch, int height, int width, int channels, int scalar_type, bool to_nhwc);
     void convert_layout(::cuda::stream_ref stream, void* output, const void* input, int batch, int spatial, int channels, int source, int destination);
     void activation(const ::cuda::stream_ref stream, void* output, const void* input, std::size_t count, int scalar_type, int activation);
     void geglu(::cuda::stream_ref stream, void* output, const void* input, const void* bias, int rows, int width);

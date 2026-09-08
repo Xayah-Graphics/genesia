@@ -1,5 +1,4 @@
 module;
-#include "../neural/inference-kernels.h"
 #include "kernels.h"
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
@@ -20,11 +19,11 @@ namespace genesia::sdxl {
         stream.sync();
     }
 
-    Output::Output(const ::cuda::stream_ref stream, const int w, const int h) : pixels{stream, ::cuda::pinned_default_memory_pool(), std::size_t(w) * h * 3, ::cuda::no_init}, latent{stream, ::cuda::pinned_default_memory_pool(), std::size_t(w / 8) * (h / 8) * 4, ::cuda::no_init}, width{w}, height{h}, stream{stream} {}
+    Output::Output(const ::cuda::stream_ref stream, const int w, const int h) : pixels{stream, ::cuda::pinned_default_memory_pool(), std::size_t(w) * h * 3, ::cuda::no_init}, width{w}, height{h}, stream{stream} {}
 
     Inference::Inference(Model& network, Parameters options, Control& control, Snapshots* snapshots)
         : parameters{std::move(options)}, model{network}, control{control}, snapshots{snapshots}, unet_layout{parameters.height / 8, parameters.width / 8, parameters.steps}, vae_layout{parameters.height, parameters.width}, workspace{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device())}, unet{model.runtime.stream, parameters.height / 8, parameters.width / 8}, schedule{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), parameters.steps + 1uz, ::cuda::no_init}, seed{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), 1, ::cuda::no_init}, operator_workspace{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device())}, latent{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), std::size_t(parameters.width / 8) * (parameters.height / 8) * 4, ::cuda::no_init},
-          step{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), 1, ::cuda::no_init}, input{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), latent.size() * 2, ::cuda::no_init}, epsilon{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), latent.size() * 2, ::cuda::no_init}, decoder{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), std::size_t(parameters.width) * parameters.height * 256, ::cuda::no_init}, decoded{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), std::size_t(parameters.width) * parameters.height * 3, ::cuda::no_init}, image{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), decoded.size(), ::cuda::no_init}, scaled_latent{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), latent.size(), ::cuda::no_init},
+          step{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), 1, ::cuda::no_init}, input{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), latent.size() * 2, ::cuda::no_init}, epsilon{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), latent.size() * 2, ::cuda::no_init}, decoder{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), std::size_t(parameters.width) * parameters.height * 256, ::cuda::no_init}, decoded{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), std::size_t(parameters.width) * parameters.height * 3, ::cuda::no_init}, image{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), decoded.size(), ::cuda::no_init},
           outputs{Output{model.runtime.stream, parameters.width, parameters.height}, Output{model.runtime.stream, parameters.width, parameters.height}} {
         const auto started = std::chrono::steady_clock::now();
         const auto stream  = model.runtime.stream;
@@ -67,11 +66,9 @@ namespace genesia::sdxl {
         denoise();
         decode();
         operator_workspace = model.runtime.finish_preparation();
-        neural::check(cudaEventCreate(&begin));
         neural::check(cudaEventCreate(&initialized));
         neural::check(cudaEventCreate(&sampled));
         neural::check(cudaEventCreate(&decoded_event));
-        neural::check(cudaEventCreate(&copied));
         neural::check(cudaGraphCreate(&graph, 0));
         neural::check(cudaGraphConditionalHandleCreate(&loop, graph, 1, cudaGraphCondAssignDefault));
         neural::check(cudaGraphConditionalHandleCreate(&decode_condition, graph, 0, cudaGraphCondAssignDefault));
@@ -108,7 +105,6 @@ namespace genesia::sdxl {
         neural::check(cudaGraphAddNode(&decode_node, graph, decode_prefix.data(), nullptr, decode_prefix.size(), &node));
         neural::check(cudaStreamBeginCaptureToGraph(stream.get(), node.conditional.phGraph_out[0], nullptr, nullptr, 0, cudaStreamCaptureModeThreadLocal));
         decode();
-        neural::kernels::layout(stream, scaled_latent.data(), latent.data(), 1, parameters.height / 8, parameters.width / 8, 4, 0, false);
         neural::check(cudaStreamEndCapture(stream.get(), &captured));
         neural::check(cudaStreamBeginCaptureToGraph(stream.get(), graph, &decode_node, nullptr, 1, cudaStreamCaptureModeThreadLocal));
         neural::check(cudaEventRecordWithFlags(decoded_event, stream.get(), cudaEventRecordExternal));
@@ -128,23 +124,19 @@ namespace genesia::sdxl {
         model.runtime.stream.sync();
         cudaGraphExecDestroy(executable);
         cudaGraphDestroy(graph);
-        cudaEventDestroy(begin);
         cudaEventDestroy(initialized);
         cudaEventDestroy(sampled);
         cudaEventDestroy(decoded_event);
-        cudaEventDestroy(copied);
     }
 
     const Output& Inference::generate(const std::uint64_t seed) {
         Output& result       = outputs[output_index++ % 2];
-        result.seed          = seed;
         result.device_pixels = image.data();
         result.cancelled     = false;
         ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.completed}.store(0);
         ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.stage}.store(static_cast<std::uint32_t>(Stage::sampling));
         const auto stream = model.runtime.stream;
         ::cuda::copy_bytes(stream, ::cuda::std::span<const std::uint64_t>{&seed, 1}, this->seed);
-        neural::check(cudaEventRecord(begin, stream.get()));
         neural::check(cudaGraphLaunch(executable, stream.get()));
         neural::check(cudaEventSynchronize(decoded_event));
         if (::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.cancel}.load()) {
@@ -154,18 +146,12 @@ namespace genesia::sdxl {
         }
         ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.stage}.store(static_cast<std::uint32_t>(Stage::transferring));
         ::cuda::copy_bytes(stream, image, result.pixels);
-        ::cuda::copy_bytes(stream, scaled_latent, result.latent);
-        neural::check(cudaEventRecord(copied, stream.get()));
-        neural::check(cudaEventSynchronize(copied));
+        stream.sync();
         float milliseconds;
-        neural::check(cudaEventElapsedTime(&milliseconds, begin, initialized));
-        result.initialize_seconds = milliseconds * 0.001;
         neural::check(cudaEventElapsedTime(&milliseconds, initialized, sampled));
         result.sample_seconds = milliseconds * 0.001;
         neural::check(cudaEventElapsedTime(&milliseconds, sampled, decoded_event));
         result.decode_seconds = milliseconds * 0.001;
-        neural::check(cudaEventElapsedTime(&milliseconds, decoded_event, copied));
-        result.transfer_seconds = milliseconds * 0.001;
         ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.stage}.store(static_cast<std::uint32_t>(Stage::complete));
         return result;
     }

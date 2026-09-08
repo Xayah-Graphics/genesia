@@ -19,7 +19,7 @@ namespace genesia::editor {
         return ::cuda::stream{::cuda::devices[0], high ? greatest : least};
     }
 
-    Session::Session(Configuration configuration, Interop& bridge, Interop& preview_bridge) : configuration{std::move(configuration)}, interop{bridge}, preview_interop{preview_bridge}, stream{priority_stream(true)}, control{stream, ::cuda::pinned_default_memory_pool(), 1, ::cuda::no_init}, preview_enabled{this->configuration.preview.enabled} {
+    Session::Session(Configuration configuration, Interop& bridge, Interop& preview_bridge) : configuration{std::move(configuration)}, images{this->configuration.output}, interop{bridge}, preview_interop{preview_bridge}, stream{priority_stream(true)}, control{stream, ::cuda::pinned_default_memory_pool(), 1, ::cuda::no_init}, preview_enabled{this->configuration.preview.enabled} {
         std::construct_at(control.data());
         preview_stream = priority_stream(false);
         neural::check(cudaEventCreateWithFlags(&preview_finished, cudaEventDisableTiming));
@@ -90,7 +90,8 @@ namespace genesia::editor {
             ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].stage}.store(static_cast<std::uint32_t>(sdxl::Stage::loading));
             const auto load_started = std::chrono::steady_clock::now();
             model                   = std::make_unique<sdxl::Model>(stream, configuration.checkpoint, configuration.cache);
-            const auto load_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - load_started).count();
+            std::println("LOAD {:.3f}s", std::chrono::duration<double>(std::chrono::steady_clock::now() - load_started).count());
+            std::cout.flush();
             std::unique_ptr<sdxl::Inference> inference;
             struct PendingWrites final {
                 Session& session;
@@ -100,7 +101,6 @@ namespace genesia::editor {
                 }
             } pending_writes{*this};
             std::size_t iteration{};
-            const auto directory = session_directory(configuration.output);
             {
                 const std::lock_guard lock{mutex};
                 model_ready = true;
@@ -135,6 +135,8 @@ namespace genesia::editor {
                     }
                     ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].stage}.store(static_cast<std::uint32_t>(sdxl::Stage::preparing));
                     inference = std::make_unique<sdxl::Inference>(*model, request.parameters, control.data()[0], snapshots.get());
+                    std::println("READY prepare={:.3f}s cache={}/{} memory={:.2f}GiB", inference->prepare_seconds, inference->cache_hits, inference->cache_misses, inference->resident_bytes / double(1ull << 30));
+                    std::cout.flush();
                     interop.prepare(request.parameters.width, request.parameters.height, stream);
                     iteration = 0;
                 }
@@ -154,12 +156,8 @@ namespace genesia::editor {
                         }
                         preview_sampling = true;
                     }
-                    std::size_t free_bytes, total_bytes;
-                    neural::check(cudaMemGetInfo(&free_bytes, &total_bytes));
-                    inference->resident_bytes = total_bytes - free_bytes;
                     condition.notify_all();
-                    const auto generation_started = std::chrono::steady_clock::now();
-                    const auto& output            = inference->generate(request.seed);
+                    const auto& output = inference->generate(request.seed);
                     {
                         const std::lock_guard lock{mutex};
                         preview_sampling = false;
@@ -168,7 +166,7 @@ namespace genesia::editor {
                     if (!output.cancelled) {
                         const auto generated = std::chrono::steady_clock::now();
                         const auto ready     = interop.publish(output.device_pixels, output.width, output.height, output.stream, slot);
-                        Record record{request.parameters, request.seed, directory / std::format("{:03}-{}", request.id, request.seed), load_seconds, inference->prepare_seconds, output.sample_seconds, output.decode_seconds, inference->resident_bytes, inference->cache_hits, inference->cache_misses, generation_started, request.prompt, configuration.catalog};
+                        Record record{request.parameters, request.seed, {}, configuration.checkpoint.filename(), request.prompt, configuration.catalog};
                         auto preview = thumbnail(output);
                         {
                             const std::lock_guard lock{mutex};
@@ -336,10 +334,10 @@ namespace genesia::editor {
             }
             try {
                 if (task.output) {
-                    save(*task.output, task.record);
+                    auto path = images.save(*task.output, task.record);
                     const std::lock_guard lock{mutex};
                     saving[task.slot] = false;
-                    events.push_back({EventKind::saved, task.id});
+                    events.push_back({EventKind::saved, task.id, {.path = std::move(path)}});
                 } else {
                     auto image = read_image(task.path);
                     const std::lock_guard lock{mutex};

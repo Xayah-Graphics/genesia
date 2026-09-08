@@ -21,12 +21,11 @@ namespace genesia::neural::kernels {
     }
 
     template <class O, class I>
-    __global__ void layout_kernel(O* output, const I* input, const int spatial, const int channels, const std::size_t count, const bool to_nhwc) {
+    __global__ void convert_layout_kernel(O* output, const I* input, const int spatial, const int channels, const std::size_t count) {
         const std::size_t i = blockIdx.x * blockDim.x + threadIdx.x;
         if (i >= count) return;
         const std::size_t nchw = (i / (spatial * channels) * channels + i % channels) * spatial + i / channels % spatial;
-        if (to_nhwc) output[i] = O(float(input[nchw]));
-        else output[nchw] = O(float(input[i]));
+        output[i] = O(float(input[nchw]));
     }
 
     template <class T>
@@ -188,13 +187,9 @@ namespace genesia::neural::kernels {
     void convert(const ::cuda::stream_ref stream, void* output, const void* input, const std::size_t count, const int source, const int destination) {
         dispatch(destination, [&]<class O>() { dispatch(source, [&]<class I>() { ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((count + 255) / 256), ::cuda::block_dims(256))), convert_kernel<O, I>, static_cast<O*>(output), static_cast<const I*>(input), count); }); });
     }
-    void layout(const ::cuda::stream_ref stream, void* output, const void* input, const int batch, const int height, const int width, const int channels, const int scalar, const bool to_nhwc) {
-        const std::size_t count = std::size_t(batch) * height * width * channels;
-        dispatch(scalar, [&]<class T>() { ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((count + 255) / 256), ::cuda::block_dims(256))), layout_kernel<T, T>, static_cast<T*>(output), static_cast<const T*>(input), height * width, channels, count, to_nhwc); });
-    }
     void convert_layout(const ::cuda::stream_ref stream, void* output, const void* input, const int batch, const int spatial, const int channels, const int source, const int destination) {
         const std::size_t count = std::size_t(batch) * spatial * channels;
-        dispatch(destination, [&]<class O>() { dispatch(source, [&]<class I>() { ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((count + 255) / 256), ::cuda::block_dims(256))), layout_kernel<O, I>, static_cast<O*>(output), static_cast<const I*>(input), spatial, channels, count, true); }); });
+        dispatch(destination, [&]<class O>() { dispatch(source, [&]<class I>() { ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((count + 255) / 256), ::cuda::block_dims(256))), convert_layout_kernel<O, I>, static_cast<O*>(output), static_cast<const I*>(input), spatial, channels, count); }); });
     }
 
     void activation(const ::cuda::stream_ref stream, void* output, const void* input, const std::size_t count, const int scalar, const int kind) {

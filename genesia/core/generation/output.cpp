@@ -1,6 +1,5 @@
 module;
 #include <genesia/cuda.h>
-#include <cudnn.h>
 #include <nlohmann/json.hpp>
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
@@ -11,73 +10,119 @@ module;
 #include <stb_image_resize2.h>
 module genesia.generation.output;
 
-import genesia.sdxl;
-import genesia.sdxl.tokenizer;
 import std;
 
 namespace genesia {
-    std::filesystem::path session_directory(const std::filesystem::path& root) {
-        return root / std::format("{:%Y%m%d-%H%M%S}", std::chrono::floor<std::chrono::milliseconds>(std::chrono::system_clock::now()));
+    namespace {
+        constexpr auto crc_table = [] {
+            std::array<std::uint32_t, 256> table{};
+            for (std::uint32_t i = 0; i < table.size(); ++i) {
+                auto crc = i;
+                for (int bit = 0; bit < 8; ++bit) crc = (crc >> 1) ^ (crc & 1 ? 0xedb88320u : 0u);
+                table[i] = crc;
+            }
+            return table;
+        }();
+
+        void write_chunk(std::ofstream& file, const std::string_view type, const std::string_view data) {
+            const auto length = std::byteswap(static_cast<std::uint32_t>(data.size()));
+            std::uint32_t crc = 0xffffffffu;
+            for (const auto bytes : {type, data})
+                for (const unsigned char byte : bytes) crc = crc_table[(crc ^ byte) & 0xff] ^ (crc >> 8);
+            crc = std::byteswap(~crc);
+            file.write(reinterpret_cast<const char*>(&length), sizeof(length));
+            file.write(type.data(), type.size());
+            file.write(data.data(), data.size());
+            file.write(reinterpret_cast<const char*>(&crc), sizeof(crc));
+        }
     }
-    void save(const sdxl::Output& output, const Record& record) {
+
+    ImageWriter::ImageWriter(std::filesystem::path root) : directory{std::move(root)} {
+        std::filesystem::create_directories(directory);
+        for (const auto& entry : std::filesystem::directory_iterator{directory}) {
+            const auto filename = entry.path().filename().u8string();
+            if (!filename.starts_with(u8"genesia_") || !filename.ends_with(u8".png")) continue;
+            const std::string_view digits{reinterpret_cast<const char*>(filename.data()) + 8, filename.size() - 12};
+            std::uint64_t index{};
+            const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), index);
+            if (parsed.ec == std::errc{} && parsed.ptr == digits.data() + digits.size()) next_index = std::max(next_index, index + 1);
+        }
+    }
+
+    std::filesystem::path ImageWriter::save(const sdxl::Output& output, const Record& record) {
         const auto started = std::chrono::steady_clock::now();
-        std::filesystem::create_directories(record.directory);
-        const auto image = record.directory / "image.png";
-        if (!stbi_write_png(image.string().c_str(), output.width, output.height, 3, output.pixels.data(), output.width * 3)) throw std::runtime_error{"PNG write failed"};
-        const std::uint64_t bytes = output.latent.size() * sizeof(float);
-        const nlohmann::json tensor{{"latent", {{"dtype", "F32"}, {"shape", {1, 4, output.height / 8, output.width / 8}}, {"data_offsets", {0, bytes}}}}};
-        std::string header = tensor.dump();
-        header.append((8 - header.size() % 8) % 8, ' ');
-        const std::uint64_t size = header.size();
-        std::ofstream latent{record.directory / "latent.safetensors", std::ios::binary};
-        latent.exceptions(std::ios::badbit | std::ios::failbit);
-        latent.write(reinterpret_cast<const char*>(&size), 8);
-        latent.write(header.data(), header.size());
-        latent.write(reinterpret_cast<const char*>(output.latent.data()), bytes);
-        latent.close();
-        const auto& p = record.parameters;
-        const double save_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
-        const double generation_to_saved_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - record.generation_started).count();
-        nlohmann::json run{
-            {"backend", "CUDA"}, {"sampling_execution", "cuda_graph_while"}, {"device", "NVIDIA GeForce RTX 5090"},
-            {"seed", record.seed}, {"width", p.width}, {"height", p.height}, {"steps", p.steps}, {"cfg", p.cfg}, {"positive", p.positive}, {"negative", p.negative},
-            {"sampler", "euler"}, {"scheduler", "simple"}, {"denoise", 1.0}, {"latent_scale", 0.13025}, {"latent_layout", "NCHW"},
-            {"rng", "philox4x32_10_box_muller_v1"}, {"tokenizer", sdxl::Tokenizer::implementation},
-            {"precision", {{"clip", "float16"}, {"unet", "float16"}, {"vae", "bfloat16"}, {"sampling", "float32"}}},
-            {"toolchain", {{"cuda_runtime", CUDART_VERSION}, {"cudnn", cudnnGetVersion()}, {"architecture", "sm_120a"}}},
-            {"cache", {{"hits", record.cache_hits}, {"misses", record.cache_misses}}}, {"device_memory_used_bytes", record.resident_bytes},
-            {"timing", {{"load_seconds", record.load_seconds}, {"prepare_seconds", record.prepare_seconds}, {"initialize_seconds", output.initialize_seconds},
-                {"sample_seconds", output.sample_seconds}, {"decode_seconds", output.decode_seconds}, {"transfer_seconds", output.transfer_seconds},
-                {"save_seconds", save_seconds}, {"generation_to_saved_seconds", generation_to_saved_seconds}}}};
-        run["tag_catalog_sha256"] = prompt::Catalog::sha256;
-        for (const auto& [name, side] : {std::pair{"positive", &record.prompt.positive}, std::pair{"negative", &record.prompt.negative}}) {
-            auto& saved = run["prompt"][name];
+        const auto model = record.model.u8string();
+        nlohmann::json metadata{
+            {"version", 1}, {"model", std::string{model.begin(), model.end()}}, {"seed", record.seed},
+            {"steps", record.parameters.steps}, {"cfg", record.parameters.cfg}, {"sampler", "euler"}, {"scheduler", "simple"}};
+        for (const auto& [name, side, text] : {std::tuple{"positive", &record.prompt.positive, &record.parameters.positive},
+                                              std::tuple{"negative", &record.prompt.negative, &record.parameters.negative}}) {
+            auto& saved = metadata["prompt"][name];
+            saved["text"] = *text;
             saved["fixed"] = side->fixed;
             saved["groups"] = nlohmann::json::array();
             for (const auto& group : side->groups) {
                 nlohmann::json tags = nlohmann::json::array();
                 for (const auto tag : group.tags) {
                     const auto& entry = record.catalog->tags[tag.id];
-                    tags.push_back({{"name", entry.name}, {"text", entry.text}, {"weight", tag.weight}, {"source", entry.category == -1 ? "custom" : "danbooru"}});
+                    auto& saved_tag = tags.emplace_back(nlohmann::json{{"name", entry.name}, {"weight", tag.weight}});
+                    if (entry.category == -1) saved_tag["text"] = entry.text;
                 }
-                saved["groups"].push_back({{"name", group.name}, {"enabled", group.enabled}, {"tags", std::move(tags)}});
+                saved["groups"].push_back({{"enabled", group.enabled}, {"tags", std::move(tags)}});
             }
         }
-        std::ofstream report{record.directory / "run.json"};
-        report.exceptions(std::ios::badbit | std::ios::failbit);
-        report << run.dump(2) << '\n';
-        std::println("SAVE {} {:.3f}s", record.directory.string(), save_seconds);
+        std::string text{"genesia"};
+        // iTXt: keyword terminator, compression flag/method, empty language and translated keyword.
+        text.append(5, '\0');
+        text += metadata.dump();
+        int length{};
+        const std::unique_ptr<unsigned char, decltype(&std::free)> png{
+            stbi_write_png_to_mem(output.pixels.data(), output.width * 3, output.width, output.height, 3, &length), &std::free};
+        if (!png) throw std::runtime_error{"PNG encoding failed"};
+
+        std::filesystem::path path;
+        std::ofstream file;
+        for (;;) {
+            path = directory / std::format("genesia_{:06}.png", next_index++);
+            file.open(path, std::ios::binary | std::ios::noreplace);
+            if (file.is_open()) break;
+            if (!std::filesystem::exists(path)) throw std::runtime_error{std::format("Cannot create output image: {}", path.string())};
+            file.clear();
+        }
+        file.exceptions(std::ios::badbit | std::ios::failbit);
+        try {
+            // stb writes the PNG signature and IHDR first; insert metadata before IDAT.
+            file.write(reinterpret_cast<const char*>(png.get()), 33);
+            write_chunk(file, "sRGB", std::string_view{"\0", 1});
+            write_chunk(file, "iTXt", text);
+            file.write(reinterpret_cast<const char*>(png.get() + 33), length - 33);
+            file.close();
+        } catch (...) {
+            file.exceptions(std::ios::goodbit);
+            file.close();
+            std::filesystem::remove(path);
+            throw;
+        }
+        std::println("SAVE {} {:.3f}s", path.string(), std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
         std::cout.flush();
+        return path;
     }
+
     Image read_image(const std::filesystem::path& path) {
+        std::ifstream file{path, std::ios::binary | std::ios::ate};
+        file.exceptions(std::ios::badbit | std::ios::failbit);
+        std::vector<std::uint8_t> encoded(static_cast<std::size_t>(file.tellg()));
+        file.seekg(0);
+        file.read(reinterpret_cast<char*>(encoded.data()), encoded.size());
         Image result;
         int channels;
-        auto* pixels = stbi_load(path.string().c_str(), &result.width, &result.height, &channels, 3);
+        const std::unique_ptr<unsigned char, decltype(&stbi_image_free)> pixels{
+            stbi_load_from_memory(encoded.data(), static_cast<int>(encoded.size()), &result.width, &result.height, &channels, 3), &stbi_image_free};
         if (!pixels) throw std::runtime_error{stbi_failure_reason()};
-        result.pixels.assign(pixels, pixels + std::size_t(result.width) * result.height * 3);
-        stbi_image_free(pixels);
+        result.pixels.assign(pixels.get(), pixels.get() + std::size_t(result.width) * result.height * 3);
         return result;
     }
+
     Image thumbnail(const sdxl::Output& output) {
         Image result{192, std::max(1, output.height * 192 / output.width)};
         result.pixels.resize(std::size_t(result.width) * result.height * 3);

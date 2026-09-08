@@ -85,7 +85,9 @@ namespace genesia::editor {
         signals.clear();
         float scale, vertical;
         glfwGetWindowContentScale(window.window, &scale, &vertical);
+        if (scale != dpi || !window.hand_cursors[0]) window.prepare_hand_cursors(scale);
         if (scale != dpi) ImGui::GetStyle().ScaleAllSizes(scale / dpi);
+        hand_cursor = -1;
         dpi                            = scale;
         ImGui::GetStyle().FontSizeBase = 15.5F;
         ImGui::GetStyle().FontScaleDpi = dpi;
@@ -95,6 +97,14 @@ namespace genesia::editor {
     }
 
     void Renderer::present() {
+        auto& io = ImGui::GetIO();
+        if (hand_cursor >= 0) {
+            io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
+            glfwSetCursor(window.window, window.hand_cursors[hand_cursor]);
+        } else if (io.ConfigFlags & ImGuiConfigFlags_NoMouseCursorChange) {
+            io.ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
+            glfwSetCursor(window.window, nullptr);
+        }
         ImGui::Render();
         update_fonts();
         if (visible) draw();

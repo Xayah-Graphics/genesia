@@ -25,9 +25,7 @@ export namespace genesia::editor {
     };
     struct TagEditor final {
         std::uint32_t id{};
-        bool collapsed{};
-        std::string rename;
-        bool rename_focus{};
+        bool background_hovered{};
         std::string input;
         std::string analyzed_input;
         std::size_t cursor{}, analyzed_cursor{}, completion_begin{}, completion_end{};
@@ -49,22 +47,25 @@ export namespace genesia::editor {
         void replace(prompt::Group& group, std::vector<prompt::Tag> tags);
         bool commit(prompt::Group& group, const prompt::Catalog& catalog, std::optional<std::uint32_t> candidate = {});
         float measure(const prompt::Group& group, const prompt::Catalog& catalog, float width, float scale) const;
-        bool draw(const char* payload_type, std::size_t group_index, prompt::Group& group, const TagSearch& search, float width, float scale, std::optional<TagMove>& move);
+        void draw(const char* payload_type, std::size_t group_index, prompt::Group& group, const TagSearch& search, float width, float scale, std::optional<TagMove>& move);
         static int input_callback(ImGuiInputTextCallbackData* data);
     };
     struct PromptEditor final {
         std::array<std::vector<TagEditor>, 2> groups;
+        std::array<TagEditor, 2> additions;
+        std::array<bool, 2> adding{};
         std::vector<prompt::Pair> undo, redo;
         std::uint32_t next_id{};
-        bool negative{};
+        bool negative_open{};
         bool valid{true};
         bool escape_owned{}, focus_input{};
 
         void reset(const prompt::Pair& prompt, bool clear_history = true);
         void suspend();
-        bool remember(prompt::Pair before, const prompt::Pair& after);
+        void remember(prompt::Pair before, const prompt::Pair& after);
         bool commit(prompt::Pair& prompt, const prompt::Catalog& catalog);
-        float measure(const prompt::Pair& prompt, const prompt::Catalog& catalog, float width, float scale) const;
-        bool draw(prompt::Pair& prompt, const TagSearch& search, float scale);
+        void draw_groups(prompt::Side& side, std::size_t side_index, const TagSearch& search, float scale);
+        void draw(prompt::Pair& prompt, const TagSearch& search, float scale);
     };
+    void view_prompt(const prompt::Pair& prompt, const prompt::Catalog& catalog, float scale);
 }

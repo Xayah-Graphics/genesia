@@ -9,7 +9,6 @@ export namespace genesia::prompt {
         bool operator==(const Tag&) const = default;
     };
     struct Group final {
-        std::string name;
         std::vector<Tag> tags;
         bool enabled{true};
         bool operator==(const Group&) const = default;

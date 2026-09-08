@@ -19,7 +19,7 @@ namespace genesia {
             const auto& input = json.at("prompt").at(name);
             side->fixed = input.at("fixed");
             for (const auto& source : input.at("groups")) {
-                auto& group = side->groups.emplace_back(source.at("name").get<std::string>(), std::vector<prompt::Tag>{}, source.at("enabled").get<bool>());
+                auto& group = side->groups.emplace_back(std::vector<prompt::Tag>{}, source.at("enabled").get<bool>());
                 for (const auto& tag : source.at("tags")) {
                     const auto id = result.catalog->resolve(tag.at("name").get<std::string>());
                     if (!id) throw std::invalid_argument{std::format("prompt.{}: {}", name, id.error())};
@@ -45,7 +45,7 @@ namespace genesia {
             for (const auto& group : side->groups) {
                 nlohmann::json tags = nlohmann::json::array();
                 for (const auto tag : group.tags) tags.push_back({{"name", configuration.catalog->tags[tag.id].name}, {"weight", tag.weight}});
-                output["groups"].push_back({{"name", group.name}, {"enabled", group.enabled}, {"tags", std::move(tags)}});
+                output["groups"].push_back({{"enabled", group.enabled}, {"tags", std::move(tags)}});
             }
         }
         std::ofstream file{path};

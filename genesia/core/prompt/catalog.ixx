@@ -17,7 +17,6 @@ export namespace genesia::prompt {
         std::uint32_t tag;
     };
     struct Catalog final {
-        static constexpr std::string_view sha256 = "c3f80081281d56350046208792f29cbf55870657083116a16465545c183d7459";
         std::string storage;
         std::vector<CatalogTag> tags;
         std::vector<CatalogKey> names;

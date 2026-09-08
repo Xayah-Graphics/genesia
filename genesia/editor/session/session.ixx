@@ -36,6 +36,7 @@ export namespace genesia::editor {
     };
     struct Session final {
         const Configuration configuration;
+        ImageWriter images;
         Interop& interop;
         Interop& preview_interop;
         ::cuda::stream stream;

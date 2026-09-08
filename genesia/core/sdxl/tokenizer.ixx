@@ -9,7 +9,6 @@ export namespace genesia::sdxl {
     };
     // ASCII prompts; HTML entities are literal. Scratch and word cache belong to the model.
     struct Tokenizer final {
-        static constexpr std::string_view implementation    = "genesia_clip_ascii_bpe_v1";
         static constexpr std::string_view vocabulary_sha256 = "a83e0809aa4c3af7208b2df632a7a69668c6d48775b3c3fe4e1b1199d1f8b8f4";
         Tokens encode(std::string_view text, std::int32_t padding);
 

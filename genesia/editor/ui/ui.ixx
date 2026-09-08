@@ -16,6 +16,19 @@ import std;
 
 export namespace genesia::editor {
     struct UserInterface final {
+        struct ImageView final {
+            float zoom{1};
+            bool fit{true};
+            bool dragging{};
+            ImVec2 center{0.5F, 0.5F};
+            float initial_zoom{1}, target_zoom{1};
+            ImVec2 anchor{}, pivot{};
+            double started{-1};
+
+            void scale_to(float ratio, ImVec2 position, ImVec2 image, bool fitting, double now);
+            void update(ImVec2 available, ImVec2 image, double now);
+            void constrain(ImVec2 available, ImVec2 image);
+        };
         struct History final {
             std::uint64_t id;
             Record record;
@@ -28,8 +41,8 @@ export namespace genesia::editor {
             void* value{};
         };
         struct ControlLayout final {
-            float left_width, right_width, latest_width, image_label_width, height;
-            bool different, stacked, image_above;
+            float right_width, image_label_width;
+            bool different, image_above;
         };
 
         Configuration configuration;
@@ -45,16 +58,13 @@ export namespace genesia::editor {
         std::vector<History> history;
         std::uint64_t seed{};
         bool random_seed{true};
-        bool composer_open{true};
+        bool tags_open{};
         bool history_open{};
         ParameterEdit parameter_edit;
         bool following_latest{true};
-        bool edited_since_submit{};
-        float composer_amount{1};
+        float tags_amount{};
         float history_amount{};
-        float zoom{1};
-        bool fit_image{true};
-        ImVec2 pan{};
+        ImageView view;
         bool image_live{};
         float progress_alpha{};
         std::string progress_label;
@@ -66,6 +76,7 @@ export namespace genesia::editor {
         double transition_started{};
         std::uint64_t image_texture{};
         std::uint64_t selected{std::numeric_limits<std::uint64_t>::max()};
+        std::optional<std::uint64_t> requested_image;
         int image_width{}, image_height{};
         double animate_until{};
         double refresh_at{std::numeric_limits<double>::infinity()};
@@ -75,18 +86,19 @@ export namespace genesia::editor {
 
         UserInterface(Configuration settings, std::filesystem::path path, WindowPlatform& platform, Renderer& display, Interop& bridge, Session& generation);
         void receive();
-        void show_image(std::uint64_t texture, int width, int height, bool transition);
+        void show_image(std::uint64_t texture, int width, int height, std::uint64_t id, bool transition);
         bool prepare_prompt();
         void commit_parameters();
         void save_settings();
         void submit();
+        void return_to_create();
         ControlLayout control_layout(float scale, ImVec2 size) const;
-        void canvas(float scale, ImVec2 size, float composer_height, float controls_height);
+        void canvas(float scale, ImVec2 size);
         void generation_settings(float scale, ImVec2 size);
         void top_strip(float scale, ImVec2 size);
-        void composer(float scale, ImVec2 size, float height, float controls_height);
+        void tag_column(float scale, ImVec2 size, const ControlLayout& layout);
         void bottom_controls(float scale, ImVec2 size, const ControlLayout& layout);
-        void history_drawer(float scale, ImVec2 size);
+        void history_strip(float scale, ImVec2 size);
         void draw();
     };
 } // namespace genesia::editor

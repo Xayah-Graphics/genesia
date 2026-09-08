@@ -23,18 +23,16 @@ namespace genesia::headless {
         std::println("READY load={:.3f}s prepare={:.3f}s cache={}/{} memory={:.2f}GiB", load_seconds, inference.prepare_seconds, inference.cache_hits, inference.cache_misses, inference.resident_bytes / double(1ull << 30));
         std::cout.flush();
         for (int i = 0; i < configuration.warmup; ++i) inference.generate(configuration.seeds.front());
-        const auto directory = session_directory(configuration.output);
-        std::array<std::future<void>, 2> saves;
-        for (std::size_t i = 0; i < configuration.seeds.size(); ++i) {
-            if (saves[i % 2].valid()) saves[i % 2].get();
-            const auto generation_started = std::chrono::steady_clock::now();
-            const auto& result = inference.generate(configuration.seeds[i]);
-            const Record record{configuration.parameters, result.seed, directory / std::format("{:03}-{}", i, result.seed), load_seconds, inference.prepare_seconds,
-                result.sample_seconds, result.decode_seconds, inference.resident_bytes, inference.cache_hits, inference.cache_misses, generation_started, configuration.prompt, configuration.catalog};
-            std::println("GENERATE seed={} sample={:.3f}s decode={:.3f}s", result.seed, result.sample_seconds, result.decode_seconds);
+        ImageWriter images{configuration.output};
+        std::future<void> pending_save;
+        for (const auto seed : configuration.seeds) {
+            const auto& result = inference.generate(seed);
+            if (pending_save.valid()) pending_save.get();
+            const Record record{configuration.parameters, seed, {}, configuration.checkpoint.filename(), configuration.prompt, configuration.catalog};
+            std::println("GENERATE seed={} sample={:.3f}s decode={:.3f}s", seed, result.sample_seconds, result.decode_seconds);
             std::cout.flush();
-            saves[i % 2] = std::async(std::launch::async, [&result, record] { save(result, record); });
+            pending_save = std::async(std::launch::async, [&images, &result, record] { images.save(result, record); });
         }
-        for (auto& save : saves) if (save.valid()) save.get();
+        if (pending_save.valid()) pending_save.get();
     }
 }

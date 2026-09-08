@@ -22,11 +22,13 @@ namespace genesia::editor {
         void request_close() noexcept;
         [[nodiscard]] bool take_close_request() noexcept;
         void toggle_fullscreen();
+        void prepare_hand_cursors(float scale);
 
         GLFWwindow* window{};
         HWND native_window{};
         std::array<float, 4> drag_region{};
         bool redraw{true};
+        std::array<GLFWcursor*, 2> hand_cursors{};
 
     private:
         struct GlfwLifetime {

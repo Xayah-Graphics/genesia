@@ -51,6 +51,7 @@ namespace genesia::editor {
     }
 
     WindowPlatform::~WindowPlatform() {
+        for (auto* cursor : hand_cursors) glfwDestroyCursor(cursor);
         SetWindowLongPtrW(this->native_window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(this->state.original_window_proc));
         RemovePropW(this->native_window, L"GenesiaWindow");
     }
@@ -84,6 +85,56 @@ namespace genesia::editor {
             SetWindowPos(native_window, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
         }
         redraw = true;
+    }
+
+    void WindowPlatform::prepare_hand_cursors(const float scale) {
+        constexpr std::array<float, 2> open[]{
+            {8, 21}, {6, 17}, {3, 14}, {2.5F, 12}, {3.5F, 11}, {5, 12}, {6, 13},
+            {5, 6}, {5.6F, 4.8F}, {6.8F, 5}, {7.4F, 6}, {8, 11}, {8, 3}, {9, 2},
+            {10.2F, 2.6F}, {10.5F, 10}, {11.1F, 2}, {12.5F, 1.5F}, {13.5F, 2.5F}, {13, 10},
+            {15, 4}, {16.4F, 3.8F}, {17.2F, 4.8F}, {15.8F, 12}, {18.2F, 7.8F},
+            {19.5F, 7.5F}, {20.3F, 8.8F}, {18, 16}, {17, 18}, {16, 21}};
+        constexpr std::array<float, 2> closed[]{
+            {7, 21}, {6, 18}, {3.5F, 14}, {3, 11.5F}, {4, 10.5F}, {5.5F, 11}, {7, 13},
+            {6.6F, 8}, {7.5F, 6.5F}, {9.2F, 6.5F}, {10, 7.5F}, {10.4F, 6.5F},
+            {12, 6}, {13, 7}, {14, 6.5F}, {15.5F, 7}, {16, 8}, {17, 7.6F},
+            {18.5F, 8.4F}, {19, 10}, {18, 16}, {17, 18}, {16, 21}};
+        const std::array<std::span<const std::array<float, 2>>, 2> outlines{open, closed};
+        const int size = static_cast<int>(std::ceil(32 * scale));
+        std::vector<unsigned char> pixels(std::size_t(size) * size * 4);
+        for (std::size_t shape = 0; shape < outlines.size(); ++shape) {
+            const auto polygon = outlines[shape];
+            // Rasterize the outlines at the current DPI; native cursors then move independently of rendering.
+            for (int y = 0; y < size; ++y)
+                for (int x = 0; x < size; ++x) {
+                    unsigned shade{}, covered{};
+                    for (int sample = 0; sample < 16; ++sample) {
+                        const float px = (x + (sample % 4 + 0.5F) / 4) * 24 / size;
+                        const float py = (y + (sample / 4 + 0.5F) / 4) * 24 / size;
+                        bool inside{};
+                        float distance = std::numeric_limits<float>::max();
+                        for (std::size_t i = 0, previous = polygon.size() - 1; i < polygon.size(); previous = i++) {
+                            const auto a = polygon[previous], b = polygon[i];
+                            if ((a[1] > py) != (b[1] > py) && px < a[0] + (py - a[1]) * (b[0] - a[0]) / (b[1] - a[1])) inside = !inside;
+                            const float dx = b[0] - a[0], dy = b[1] - a[1];
+                            const float t = std::clamp(((px - a[0]) * dx + (py - a[1]) * dy) / (dx * dx + dy * dy), 0.0F, 1.0F);
+                            const float ex = px - a[0] - t * dx, ey = py - a[1] - t * dy;
+                            distance = std::min(distance, ex * ex + ey * ey);
+                        }
+                        if (inside || distance <= 0.16F) {
+                            shade += distance <= 0.16F ? 24 : 248;
+                            ++covered;
+                        }
+                    }
+                    auto* pixel = pixels.data() + (std::size_t(y) * size + x) * 4;
+                    pixel[0] = pixel[1] = pixel[2] = covered ? static_cast<unsigned char>(shade / covered) : 0;
+                    pixel[3] = static_cast<unsigned char>(covered * 255 / 16);
+                }
+            const GLFWimage image{size, size, pixels.data()};
+            auto* cursor = glfwCreateCursor(&image, size * 11 / 24, size * 12 / 24);
+            if (!cursor) throw std::runtime_error{"Cannot create image cursor"};
+            glfwDestroyCursor(std::exchange(hand_cursors[shape], cursor));
+        }
     }
 
     WindowPlatform::GlfwLifetime::GlfwLifetime() {

@@ -49,14 +49,10 @@ export namespace genesia::sdxl {
 
     struct Output final {
         ::cuda::host_buffer<std::uint8_t> pixels;
-        ::cuda::host_buffer<float> latent;
-        std::uint64_t seed{};
         int width;
         int height;
-        double initialize_seconds{};
         double sample_seconds{};
         double decode_seconds{};
-        double transfer_seconds{};
         bool cancelled{};
         const std::uint8_t* device_pixels{};
         ::cuda::stream_ref stream;
@@ -100,18 +96,15 @@ export namespace genesia::sdxl {
         ::cuda::device_buffer<__nv_bfloat16> decoder;
         ::cuda::device_buffer<__nv_bfloat16> decoded;
         ::cuda::device_buffer<std::uint8_t> image;
-        ::cuda::device_buffer<float> scaled_latent;
         std::array<Output, 2> outputs;
         std::size_t output_index{};
         cudaGraph_t graph{};
         cudaGraphExec_t executable{};
         cudaGraphConditionalHandle loop{};
         cudaGraphConditionalHandle decode_condition{};
-        cudaEvent_t begin{};
         cudaEvent_t initialized{};
         cudaEvent_t sampled{};
         cudaEvent_t decoded_event{};
-        cudaEvent_t copied{};
 
         void denoise();
         void decode();

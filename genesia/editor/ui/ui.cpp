@@ -24,7 +24,8 @@ namespace genesia::editor {
         constexpr float top_strip_height = 48;
         constexpr float control_height = 40;
         constexpr float bottom_margin = 24;
-        constexpr float panel_gap = 12;
+        constexpr float tag_column_width = 800;
+        constexpr float history_strip_width = 96;
 
         void control_shade(const ImVec2 minimum, const ImVec2 maximum, const float scale) {
             auto* draw = ImGui::GetWindowDrawList();
@@ -70,7 +71,7 @@ namespace genesia::editor {
             return clicked;
         }
 
-        bool number_field(const char* id, const char* label, const ImGuiDataType type, void* value, const ImVec2 size, const void* step, const char* format, const float scale, UserInterface::ParameterEdit& edit) {
+        void number_field(const char* id, const char* label, const ImGuiDataType type, void* value, const ImVec2 size, const void* step, const char* format, const float scale, UserInterface::ParameterEdit& edit) {
             const auto origin = ImGui::GetCursorScreenPos();
             const ImVec2 end{origin.x + size.x, origin.y + size.y};
             const auto key = ImGui::GetID(id);
@@ -104,17 +105,52 @@ namespace genesia::editor {
             ImGui::PushStyleColor(ImGuiCol_FrameBg, {0, 0, 0, 0});
             ImGui::PushStyleColor(ImGuiCol_Text, {0.65F + 0.25F * alpha, 0.65F + 0.25F * alpha, 0.71F + 0.23F * alpha, 1});
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {4 * scale, (size.y - ImGui::GetFontSize()) / 2});
-            const bool changed = ImGui::InputScalar(id, type, value, nullptr, nullptr, format);
+            ImGui::InputScalar(id, type, value, nullptr, nullptr, format);
             ImGui::PopStyleVar();
             ImGui::PopStyleColor(2);
             if (ImGui::IsItemActive()) edit = {key, type, value};
             else if (edit.id == key) edit = {};
             if (ImGui::IsItemActive()) draw->AddLine({origin.x + inset + 4 * scale, end.y - 6 * scale}, {end.x - 4 * scale, end.y - 6 * scale}, ImGui::GetColorU32(ImVec4{0.65F, 0.60F, 0.88F, 0.8F}), scale);
             if (stepped) ImGui::MarkItemEdited(key);
-            return changed || stepped;
         }
 
     } // namespace
+
+    void UserInterface::ImageView::scale_to(const float ratio, const ImVec2 position, const ImVec2 image, const bool fitting, const double now) {
+        fit          = fitting;
+        dragging     = false;
+        initial_zoom = zoom;
+        target_zoom  = ratio;
+        anchor       = {center.x + position.x / (image.x * zoom), center.y + position.y / (image.y * zoom)};
+        pivot        = position;
+        started      = now;
+    }
+
+    void UserInterface::ImageView::update(const ImVec2 available, const ImVec2 image, const double now) {
+        const float fitted = std::min(available.x / image.x, available.y / image.y);
+        if (fit || target_zoom <= fitted) {
+            fit         = true;
+            target_zoom = fitted;
+        }
+        if (started >= 0) {
+            const float progress = std::clamp(float((now - started) / 0.12), 0.0F, 1.0F);
+            const float eased    = 1 - (1 - progress) * (1 - progress) * (1 - progress);
+            zoom = std::max(fitted, std::exp(std::lerp(std::log(initial_zoom), std::log(target_zoom), eased)));
+            center = {anchor.x - pivot.x / (image.x * zoom), anchor.y - pivot.y / (image.y * zoom)};
+            if (progress == 1) {
+                zoom    = target_zoom;
+                started = -1;
+            }
+        } else zoom = target_zoom;
+        constrain(available, image);
+    }
+
+    void UserInterface::ImageView::constrain(const ImVec2 available, const ImVec2 image) {
+        const float horizontal = std::min(0.5F, available.x / (2 * image.x * zoom));
+        const float vertical   = std::min(0.5F, available.y / (2 * image.y * zoom));
+        center.x = std::clamp(center.x, horizontal, 1 - horizontal);
+        center.y = std::clamp(center.y, vertical, 1 - vertical);
+    }
 
     UserInterface::UserInterface(Configuration settings, std::filesystem::path path, WindowPlatform& platform, Renderer& display, Interop& bridge, Session& generation) : configuration{std::move(settings)}, configuration_path{std::move(path)}, window{platform}, renderer{display}, interop{bridge}, session{generation}, draft{configuration.parameters}, prompt{configuration.prompt}, tag_search{*configuration.catalog}, seed{configuration.seeds.front()} {
         prompt_editor.reset(prompt);
@@ -173,7 +209,8 @@ namespace genesia::editor {
             }
             const auto texture = renderer.texture({std::uint32_t(frame.width), std::uint32_t(frame.height)});
             renderer.copy(texture, source.buffer, *source.timeline, frame.ready);
-            show_image(texture, frame.width, frame.height, !image_live || selected != frame.id);
+            show_image(texture, frame.width, frame.height, frame.id, !image_live || selected != frame.id);
+            requested_image.reset();
             selected     = frame.id;
             image_live   = true;
             preview_step = frame.step;
@@ -185,25 +222,31 @@ namespace genesia::editor {
                 if (following_latest) {
                     const auto texture = renderer.texture({std::uint32_t(event.record.parameters.width), std::uint32_t(event.record.parameters.height)});
                     renderer.copy(texture, source.buffer, *source.timeline, event.ready);
-                    show_image(texture, event.record.parameters.width, event.record.parameters.height, true);
+                    show_image(texture, event.record.parameters.width, event.record.parameters.height, event.id, true);
+                    requested_image.reset();
                     image_live = false;
                     selected   = event.id;
                 } else renderer.discard(*source.timeline, event.ready);
-                if (!edited_since_submit && !ImGui::GetIO().WantTextInput) composer_open = false;
                 animate_until = glfwGetTime() + 0.2;
                 display_times.push_back(std::chrono::duration<double>(std::chrono::steady_clock::now() - event.generated_at).count());
             } else if (event.kind == EventKind::saved) {
-                for (auto& item : history)
-                    if (item.id == event.id) item.saved = true;
-            } else if (event.id == selected && !image_live) {
-                show_image(renderer.upload(event.image), event.image.width, event.image.height, true);
-                fit_image = true;
-                pan       = {};
+                auto& item = *std::ranges::find(history, event.id, &History::id);
+                item.record.path = std::move(event.record.path);
+                item.saved = true;
+                if (following_latest && !active && event.id == history.back().id && (image_live || selected != event.id)) {
+                    requested_image = event.id;
+                    session.load(event.id, item.record.path);
+                }
+            } else if (requested_image && event.id == *requested_image) {
+                show_image(renderer.upload(event.image), event.image.width, event.image.height, event.id, false);
+                selected = event.id;
+                image_live = false;
+                requested_image.reset();
             }
         }
     }
 
-    void UserInterface::show_image(const std::uint64_t texture, const int width, const int height, const bool transition) {
+    void UserInterface::show_image(const std::uint64_t texture, const int width, const int height, const std::uint64_t id, const bool transition) {
         if (transition_texture) renderer.retire(std::exchange(transition_texture, 0));
         if (transition) {
             transition_texture = image_texture;
@@ -212,17 +255,14 @@ namespace genesia::editor {
             transition_started = glfwGetTime();
             animate_until      = transition_started + 0.12;
         } else if (image_texture) renderer.retire(image_texture);
-        if (image_width != width || image_height != height) {
-            fit_image = true;
-            pan       = {};
-        }
+        if (selected != id || image_width != width || image_height != height) view = {};
         image_texture = texture;
         image_width   = width;
         image_height  = height;
     }
 
     bool UserInterface::prepare_prompt() {
-        if (!prompt_editor.commit(prompt, *configuration.catalog)) { composer_open = true; return false; }
+        if (!prompt_editor.commit(prompt, *configuration.catalog)) return false;
         draft.positive = prompt::compose(*configuration.catalog, prompt.positive);
         draft.negative = prompt::compose(*configuration.catalog, prompt.negative);
         return true;
@@ -231,7 +271,7 @@ namespace genesia::editor {
     void UserInterface::commit_parameters() {
         if (!parameter_edit.id) return;
         auto* input = ImGui::GetInputTextState(parameter_edit.id);
-        if (ImGui::DataTypeApplyFromText(input->TextA.Data, parameter_edit.type, parameter_edit.value, ImGui::DataTypeGetInfo(parameter_edit.type)->ScanFmt)) edited_since_submit = true;
+        ImGui::DataTypeApplyFromText(input->TextA.Data, parameter_edit.type, parameter_edit.value, ImGui::DataTypeGetInfo(parameter_edit.type)->ScanFmt);
         // The value is committed; do not replay the text after a parameter action.
         input->ID = 0;
         if (ImGui::GetCurrentContext()->InputTextDeactivatedState.ID == parameter_edit.id) ImGui::GetCurrentContext()->InputTextDeactivatedState.ID = 0;
@@ -256,67 +296,108 @@ namespace genesia::editor {
             seed = (std::uint64_t(source()) << 32) | source();
         }
         session.enqueue(draft, seed, prompt);
-        edited_since_submit = false;
-        animate_until       = glfwGetTime() + 0.2;
+        animate_until = glfwGetTime() + 0.2;
+    }
+
+    void UserInterface::return_to_create() {
+        following_latest = true;
+        requested_image.reset();
+        preview_step = 0;
+        bool active;
+        {
+            const std::lock_guard lock{session.mutex};
+            active = session.active.has_value();
+        }
+        if (!active && !history.empty() && history.back().saved && (image_live || selected != history.back().id)) {
+            requested_image = history.back().id;
+            session.load(*requested_image, history.back().record.path);
+        }
     }
 
     UserInterface::ControlLayout UserInterface::control_layout(const float scale, const ImVec2 size) const {
         ControlLayout layout{};
-        layout.left_width = ImGui::CalcTextSize("Prompt").x + 24 * scale;
-        if (!following_latest) layout.latest_width = ImGui::CalcTextSize("View live").x + 36 * scale;
-        layout.different = image_texture && (image_width != draft.width || image_height != draft.height);
-        const float dimensions_width = 112 * scale + (layout.different ? ImGui::CalcTextSize("Next").x + 12 * scale : 0);
+        layout.different = following_latest && image_texture && (image_width != draft.width || image_height != draft.height);
+        const float dimensions_width = following_latest ? 112 * scale + (layout.different ? ImGui::CalcTextSize("Next").x + 12 * scale : 0)
+            : image_texture ? ImGui::CalcTextSize(std::format("{} \xC3\x97 {}", image_width, image_height).c_str()).x : 0;
         if (layout.different) layout.image_label_width = ImGui::CalcTextSize(std::format("{} {} \xC3\x97 {} \xE2\x86\x92", image_live ? "Preview" : "Image", image_width, image_height).c_str()).x + 12 * scale;
-        layout.right_width = layout.latest_width + layout.image_label_width + dimensions_width + (image_texture ? 116 * scale : 0);
-        const float available = size.x - (2 * bottom_margin + history_amount * 300) * scale;
+        layout.right_width = layout.image_label_width + dimensions_width + (image_texture ? 116 * scale : 0);
+        const float available = size.x - (2 * bottom_margin + history_amount * history_strip_width) * scale;
         layout.image_above = layout.right_width > available;
         if (layout.image_above) layout.right_width -= layout.image_label_width;
-        layout.stacked = layout.image_above || layout.left_width + layout.right_width + panel_gap * scale > available;
-        layout.height = (control_height + (layout.stacked ? control_height + 8 : 0)) * scale;
         return layout;
     }
 
-    void UserInterface::canvas(const float scale, const ImVec2 size, const float composer_height, const float controls_height) {
+    void UserInterface::canvas(const float scale, const ImVec2 size) {
         ImGui::SetNextWindowPos({0, 0});
         ImGui::SetNextWindowSize(size);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
-        ImGui::Begin("##Canvas", nullptr, overlay | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav);
-        ImGui::InvisibleButton("##ImageArea", size);
+        ImGui::Begin("##Canvas", nullptr, overlay | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollWithMouse);
+        const auto& io = ImGui::GetIO();
+        const float left = history_amount * history_strip_width * scale;
+        const float right = size.x - tags_amount * tag_column_width * scale;
+        const ImVec2 origin{(left + right) / 2, size.y / 2};
+        const ImVec2 available{(right - left) * io.DisplayFramebufferScale.x, size.y * io.DisplayFramebufferScale.y};
+        ImGui::SetCursorScreenPos({left, 0});
+        ImGui::InvisibleButton("##ImageArea", {right - left, size.y});
         const bool hovered = ImGui::IsItemHovered();
-        const float left   = history_amount * 300 * scale;
-        const float bottom = size.y - composer_amount * (composer_height + controls_height + (bottom_margin + panel_gap) * scale);
-        const ImVec2 center{(left + size.x) / 2, bottom / 2};
-        const ImVec2 available{size.x - left, std::max(64 * scale, bottom)};
+        const bool held = ImGui::IsItemActive();
+        const bool activated = ImGui::IsItemActivated();
         auto* draw = ImGui::GetWindowDrawList();
         if (image_texture) {
-            const float fitted = std::min(available.x / image_width, available.y / image_height);
-            if (fit_image) zoom = fitted;
-            if (hovered && ImGui::GetIO().MouseWheel != 0) {
-                const float next = std::clamp(zoom * std::pow(1.15F, ImGui::GetIO().MouseWheel), 0.05F, 16.0F);
-                const auto mouse = ImGui::GetIO().MousePos;
-                pan              = {mouse.x - center.x - (mouse.x - center.x - pan.x) * next / zoom, mouse.y - center.y - (mouse.y - center.y - pan.y) * next / zoom};
-                zoom             = next;
-                fit_image        = false;
+            const double now = glfwGetTime();
+            const ImVec2 image{float(image_width), float(image_height)};
+            view.update(available, image, now);
+            const float fitted = std::min(available.x / image.x, available.y / image.y);
+            const ImVec2 dimensions{image.x * view.zoom / io.DisplayFramebufferScale.x, image.y * view.zoom / io.DisplayFramebufferScale.y};
+            const ImVec2 first{origin.x - view.center.x * dimensions.x, origin.y - view.center.y * dimensions.y};
+            const bool over_image = hovered && ImGui::IsMouseHoveringRect(first, {first.x + dimensions.x, first.y + dimensions.y});
+            const bool movable = image.x * view.zoom > available.x + 0.5F || image.y * view.zoom > available.y + 0.5F;
+            if (!held) view.dragging = false;
+            if (activated && over_image && movable && !ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                view.dragging    = true;
+                view.fit         = false;
+                view.target_zoom = view.zoom;
+                view.started     = -1;
             }
-            if (hovered && ImGui::IsKeyDown(ImGuiKey_Space) && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-                pan.x += ImGui::GetIO().MouseDelta.x;
-                pan.y += ImGui::GetIO().MouseDelta.y;
-                fit_image = false;
-                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+            if (view.dragging && !activated) {
+                view.center.x -= io.MouseDelta.x * io.DisplayFramebufferScale.x / (image.x * view.zoom);
+                view.center.y -= io.MouseDelta.y * io.DisplayFramebufferScale.y / (image.y * view.zoom);
             }
-            if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-                fit_image = true;
-                pan       = {};
+            const bool double_clicked = over_image && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+            if (hovered && !view.dragging && io.MouseWheel != 0) {
+                ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
+                const float next = std::clamp(view.target_zoom * std::pow(1.15F, io.MouseWheel), fitted, std::max(16.0F, fitted));
+                if (next != view.target_zoom) {
+                    const ImVec2 pivot{(io.MousePos.x - origin.x) * io.DisplayFramebufferScale.x, (io.MousePos.y - origin.y) * io.DisplayFramebufferScale.y};
+                    view.scale_to(next, pivot, image, next == fitted, now);
+                    animate_until = std::max(animate_until, now + 0.12);
+                }
+            } else if (double_clicked) {
+                const bool fitting = !view.fit || fitted >= 1;
+                const ImVec2 pivot = fitting ? ImVec2{} : ImVec2{(io.MousePos.x - origin.x) * io.DisplayFramebufferScale.x, (io.MousePos.y - origin.y) * io.DisplayFramebufferScale.y};
+                view.scale_to(fitting ? fitted : 1, pivot, image, fitting, now);
+                animate_until = std::max(animate_until, now + 0.12);
             }
-            const ImVec2 minimum{center.x + pan.x - image_width * zoom / 2, center.y + pan.y - image_height * zoom / 2};
-            const ImVec2 maximum{minimum.x + image_width * zoom, minimum.y + image_height * zoom};
-            draw->PushClipRect({left, 0}, {size.x, std::max(0.0F, bottom)}, true);
-            const float fade = std::clamp(float((glfwGetTime() - transition_started) / 0.12), 0.0F, 1.0F);
+            view.constrain(available, image);
+            if (view.dragging || (over_image && movable)) renderer.hand_cursor = view.dragging ? 1 : 0;
+            ImVec2 minimum{origin.x - view.center.x * image.x * view.zoom / io.DisplayFramebufferScale.x, origin.y - view.center.y * image.y * view.zoom / io.DisplayFramebufferScale.y};
+            if (view.zoom == 1 && view.started < 0) {
+                minimum.x = std::round(minimum.x * io.DisplayFramebufferScale.x) / io.DisplayFramebufferScale.x;
+                minimum.y = std::round(minimum.y * io.DisplayFramebufferScale.y) / io.DisplayFramebufferScale.y;
+            }
+            const ImVec2 maximum{minimum.x + image.x * view.zoom / io.DisplayFramebufferScale.x, minimum.y + image.y * view.zoom / io.DisplayFramebufferScale.y};
+            draw->PushClipRect({left, 0}, {right, size.y}, true);
+            const float fade = std::clamp(float((now - transition_started) / 0.12), 0.0F, 1.0F);
             if (transition_texture) {
-                const float previous_zoom = fit_image ? std::min(available.x / transition_width, available.y / transition_height) : zoom;
-                const ImVec2 origin{center.x + pan.x - transition_width * previous_zoom / 2, center.y + pan.y - transition_height * previous_zoom / 2};
-                draw->AddImage(transition_texture, origin, {origin.x + transition_width * previous_zoom, origin.y + transition_height * previous_zoom});
+                const float previous_zoom = view.fit ? std::min(available.x / transition_width, available.y / transition_height) : view.zoom;
+                const ImVec2 previous_size{transition_width * previous_zoom / io.DisplayFramebufferScale.x, transition_height * previous_zoom / io.DisplayFramebufferScale.y};
+                ImVec2 previous{origin.x - view.center.x * previous_size.x, origin.y - view.center.y * previous_size.y};
+                if (previous_zoom == 1 && view.started < 0) {
+                    previous.x = std::round(previous.x * io.DisplayFramebufferScale.x) / io.DisplayFramebufferScale.x;
+                    previous.y = std::round(previous.y * io.DisplayFramebufferScale.y) / io.DisplayFramebufferScale.y;
+                }
+                draw->AddImage(transition_texture, previous, {previous.x + previous_size.x, previous.y + previous_size.y});
             }
             draw->AddImage(image_texture, minimum, maximum, {0, 0}, {1, 1}, ImGui::GetColorU32(ImVec4{1, 1, 1, transition_texture ? fade : 1.0F}));
             draw->PopClipRect();
@@ -324,13 +405,13 @@ namespace genesia::editor {
             const char* title = "Imagine something new.";
             ImGui::PushFont(nullptr, 30);
             const auto text = ImGui::CalcTextSize(title);
-            draw->AddText(ImGui::GetFont(), ImGui::GetFontSize(), {center.x - text.x / 2, center.y - 30 * scale}, IM_COL32(218, 219, 230, 255), title);
+            draw->AddText(ImGui::GetFont(), ImGui::GetFontSize(), {origin.x - text.x / 2, origin.y - 30 * scale}, IM_COL32(218, 219, 230, 255), title);
             ImGui::PopFont();
             const char* subtitle = "A few words. A world of possibilities.";
             const auto hint      = ImGui::CalcTextSize(subtitle);
-            draw->AddText({center.x - hint.x / 2, center.y + 20 * scale}, IM_COL32(119, 121, 137, 255), subtitle);
-            draw->AddCircle({center.x, center.y - 88 * scale}, 14 * scale, IM_COL32(145, 142, 225, 180), 32, 1.5F * scale);
-            draw->AddCircleFilled({center.x + 14 * scale, center.y - 100 * scale}, 3 * scale, IM_COL32(184, 182, 250, 255));
+            draw->AddText({origin.x - hint.x / 2, origin.y + 20 * scale}, IM_COL32(119, 121, 137, 255), subtitle);
+            draw->AddCircle({origin.x, origin.y - 88 * scale}, 14 * scale, IM_COL32(145, 142, 225, 180), 32, 1.5F * scale);
+            draw->AddCircleFilled({origin.x + 14 * scale, origin.y - 100 * scale}, 3 * scale, IM_COL32(184, 182, 250, 255));
         }
         ImGui::End();
         ImGui::PopStyleVar(2);
@@ -356,11 +437,11 @@ namespace genesia::editor {
         const float width = ImGui::GetContentRegionAvail().x;
         const ImVec2 field_size{(width - 24 * scale) / 2, row_height};
         constexpr int steps_step = 1;
-        if (number_field("##Steps", "Steps", ImGuiDataType_S32, &draft.steps, field_size, &steps_step, "%d", scale, parameter_edit)) edited_since_submit = true;
+        number_field("##Steps", "Steps", ImGuiDataType_S32, &draft.steps, field_size, &steps_step, "%d", scale, parameter_edit);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Sampling steps for the next image\nUp / Down: 1\nEnter to confirm, Esc to undo");
         ImGui::SameLine(0, 24 * scale);
         constexpr float cfg_step = 0.1F;
-        if (number_field("##CFG", "CFG", ImGuiDataType_Float, &draft.cfg, field_size, &cfg_step, "%.1f", scale, parameter_edit)) edited_since_submit = true;
+        number_field("##CFG", "CFG", ImGuiDataType_Float, &draft.cfg, field_size, &cfg_step, "%.1f", scale, parameter_edit);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Guidance scale for the next image\nUp / Down: 0.1\nEnter to confirm, Esc to undo");
         const auto origin = ImGui::GetCursorScreenPos();
         auto* draw = ImGui::GetWindowDrawList();
@@ -368,7 +449,7 @@ namespace genesia::editor {
         draw->AddText({origin.x + 4 * scale, origin.y + (row_height - ImGui::GetFontSize()) / 2}, ImGui::GetColorU32(ImGuiCol_TextDisabled), "Seed");
         if (!random_seed) {
             ImGui::SetCursorScreenPos({origin.x + seed_label_width, origin.y});
-            if (number_field("##Seed", "", ImGuiDataType_U64, &seed, {width - seed_label_width - mode_width - 8 * scale, row_height}, nullptr, "%llu", scale, parameter_edit)) edited_since_submit = true;
+            number_field("##Seed", "", ImGuiDataType_U64, &seed, {width - seed_label_width - mode_width - 8 * scale, row_height}, nullptr, "%llu", scale, parameter_edit);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Seed for the next image\nEnter to confirm, Esc to undo");
         }
         ImGui::SetCursorScreenPos({origin.x + width - mode_width, origin.y});
@@ -386,7 +467,6 @@ namespace genesia::editor {
         if (mode_clicked || (row_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Middle))) {
             commit_parameters();
             random_seed = !random_seed;
-            edited_since_submit = true;
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) ImGui::CloseCurrentPopup();
         ImGui::PopStyleVar();
@@ -469,14 +549,15 @@ namespace genesia::editor {
         if (ImGui::BeginPopup("Application")) {
             ImGui::MenuItem("Live preview", nullptr, &configuration.preview.enabled);
             ImGui::Separator();
-            if (ImGui::MenuItem("Save configuration", "Ctrl+S")) save_settings();
+            if (ImGui::MenuItem("Save configuration", "Ctrl+S", false, following_latest)) save_settings();
             if (ImGui::MenuItem("Open output folder")) ShellExecuteW(window.native_window, L"open", std::filesystem::absolute(configuration.output).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
             ImGui::EndPopup();
         }
         const bool queue_visible      = queued != 0 || paused || ImGui::IsPopupOpen("Queue");
         const std::string queue_label = queue_visible ? std::format("Queue  {}", queued) : "";
         const char* stop_label        = active ? "Stop" : paused && !failed ? "Resume" : "";
-        float controls_width = 150 * scale;
+        const float primary_width = (following_latest ? 150 : 184) * scale;
+        float controls_width = primary_width;
         for (const char* label : {queue_label.c_str(), stop_label})
             if (*label) controls_width += ImGui::CalcTextSize(label).x + 28 * scale;
         const bool queue_paused = paused && !active && !failed;
@@ -550,55 +631,66 @@ namespace genesia::editor {
         }
         ImGui::SetCursorScreenPos({x, minimum.y});
         ImGui::PushFont(nullptr, 18);
-        ImGui::BeginDisabled(unavailable || !prompt_editor.valid);
-        if (text_button("##Generate", "Generate", scale, 150 * scale, false, true)) submit();
-        ImGui::EndDisabled();
-        const bool generate_hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
-        const bool settings_requested = (generate_hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) || (ImGui::IsItemFocused() && ImGui::Shortcut(ImGuiMod_Shift | ImGuiKey_F10));
-        if (settings_requested) {
-            commit_parameters();
-            ImGui::OpenPopup("Generation settings");
+        if (following_latest) {
+            ImGui::BeginDisabled(unavailable || !prompt_editor.valid);
+            if (text_button("##Generate", "Generate", scale, primary_width, false, true)) submit();
+            ImGui::EndDisabled();
+            const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+            const bool settings_requested = (hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) || (ImGui::IsItemFocused() && ImGui::Shortcut(ImGuiMod_Shift | ImGuiKey_F10));
+            if (settings_requested) {
+                commit_parameters();
+                ImGui::OpenPopup("Generation settings");
+            }
+            ImGui::PopFont();
+            if (hovered && !ImGui::IsPopupOpen("Generation settings")) {
+                if (!prompt_editor.valid) ImGui::SetTooltip("Finish the tag input before generating.\nTab: show tags\nRight-click: generation settings");
+                else ImGui::SetTooltip("%s\nCtrl+Shift+\x60\nRight-click: generation settings", active ? "Add image to queue" : "Generate image");
+            }
+            generation_settings(scale, size);
+        } else {
+            if (text_button("##Create", "Back to create", scale, primary_width, false, true)) return_to_create();
+            ImGui::PopFont();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Return to your draft\nTab: show image tags");
         }
-        ImGui::PopFont();
-        if (generate_hovered && !ImGui::IsPopupOpen("Generation settings")) {
-            if (!prompt_editor.valid) ImGui::SetTooltip("Finish the tag input before generating.\nRight-click: generation settings");
-            else ImGui::SetTooltip("%s\nCtrl+Shift+\x60\nRight-click: generation settings", active ? "Add image to queue" : "Generate image");
-        }
-        generation_settings(scale, size);
         window.drag_region = {};
         if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) window.drag_region = {left_end, 0, group_left - 4 * scale, maximum.y};
         ImGui::End();
     }
 
-    void UserInterface::composer(const float scale, const ImVec2 size, const float height, const float controls_height) {
-        if (!composer_open) prompt_editor.suspend();
-        if (composer_amount < 0.03F) return;
-        const float width = std::min(840 * scale, size.x - (48 + 300 * history_amount) * scale);
-        const float center = (size.x + history_amount * 300 * scale) / 2;
-        const float y = size.y - (bottom_margin + panel_gap) * scale - controls_height - height + (1 - composer_amount) * 12 * scale;
-        ImGui::SetNextWindowPos({center - width / 2, y});
-        ImGui::SetNextWindowSize({width, height});
-        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, composer_amount);
-        ImGui::Begin("##Composer", nullptr, overlay | (composer_open ? ImGuiWindowFlags_None : ImGuiWindowFlags_NoInputs));
-        if (prompt_editor.draw(prompt, tag_search, scale)) edited_since_submit = true;
-        ImGui::End();
+    void UserInterface::tag_column(const float scale, const ImVec2 size, const ControlLayout& layout) {
+        if (!tags_open || !following_latest) prompt_editor.suspend();
+        if (tags_amount < 0.03F) return;
+        const float top = (top_strip_height + 24) * scale;
+        const float bottom = (bottom_margin + control_height + 16 + (layout.image_above ? control_height + 8 : 0)) * scale;
+        ImGui::SetNextWindowPos({size.x - tag_column_width * scale, top});
+        ImGui::SetNextWindowSize({tag_column_width * scale, size.y - top - bottom});
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {16 * scale, 0});
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, tags_amount);
+        ImGui::Begin("##TagColumn", nullptr, overlay | ImGuiWindowFlags_NoBackground | (tags_open ? ImGuiWindowFlags_None : ImGuiWindowFlags_NoInputs));
+        if (following_latest) ImGui::TextUnformatted("Next image");
+        else if (image_texture && !image_live) ImGui::Text("Image %03llu", static_cast<unsigned long long>(selected + 1));
+        else ImGui::TextUnformatted("Image");
+        ImGui::PushFont(nullptr, 12);
+        ImGui::TextDisabled(following_latest ? "Draft" : "Read only");
+        ImGui::PopFont();
+        ImGui::Dummy({0, 12 * scale});
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
+        ImGui::BeginChild(following_latest ? "##DraftTags" : "##ImageTags", {0, 0}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
+        if (following_latest) prompt_editor.draw(prompt, tag_search, scale);
+        else if (image_texture && !image_live) {
+            const auto& item = *std::ranges::find(history, selected, &History::id);
+            ImGui::PushID(static_cast<int>(selected));
+            view_prompt(item.record.prompt, *item.record.catalog, scale);
+            ImGui::PopID();
+        } else ImGui::TextDisabled("Loading image...");
+        ImGui::EndChild();
         ImGui::PopStyleVar();
+        ImGui::End();
+        ImGui::PopStyleVar(2);
     }
 
     void UserInterface::bottom_controls(const float scale, const ImVec2 size, const ControlLayout& layout) {
-        const float left = (bottom_margin + history_amount * 300) * scale;
         const float y = size.y - (bottom_margin + control_height) * scale;
-        const float left_y = y - (layout.stacked ? control_height + 8 : 0) * scale;
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
-        ImGui::SetNextWindowPos({left, left_y});
-        ImGui::SetNextWindowSize({layout.left_width, control_height * scale});
-        ImGui::Begin("##PromptControls", nullptr, overlay | ImGuiWindowFlags_NoBackground);
-        ImGui::PopStyleVar();
-        if (image_texture) control_shade({left, left_y}, {left + layout.left_width, left_y + control_height * scale}, scale);
-        if (text_button("##Prompt", "Prompt", scale, 0, composer_open)) composer_open = !composer_open;
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Edit prompt\nTab");
-        ImGui::End();
-
         const float right = size.x - bottom_margin * scale;
         const float x = right - layout.right_width;
         ImGui::SetNextWindowPos({x, y});
@@ -607,23 +699,7 @@ namespace genesia::editor {
         ImGui::Begin("##ImageControls", nullptr, overlay | ImGuiWindowFlags_NoBackground);
         ImGui::PopStyleVar();
         if (image_texture) control_shade({x, y}, {right, y + control_height * scale}, scale);
-        if (layout.latest_width) {
-            bool active;
-            {
-                const std::lock_guard lock{session.mutex};
-                active = session.active.has_value();
-            }
-            if (text_button("##Latest", active ? "View live" : "Latest", scale, layout.latest_width - 12 * scale)) {
-                following_latest = true;
-                preview_step = 0;
-                if (!active && !history.empty()) {
-                    selected = history.back().id;
-                    image_live = false;
-                    session.load(selected, history.back().record.directory / "image.png");
-                }
-            }
-        }
-        float dimensions_x = x + layout.latest_width;
+        float dimensions_x = x;
         auto* draw = ImGui::GetWindowDrawList();
         if (layout.different) {
             const float info_x = layout.image_above ? right - layout.image_label_width : dimensions_x;
@@ -634,124 +710,122 @@ namespace genesia::editor {
             draw->PopClipRect();
             if (!layout.image_above) dimensions_x += layout.image_label_width;
         }
-        const ImVec2 dimensions_origin{dimensions_x, y};
-        if (layout.different) {
-            draw->AddText({dimensions_x + 4 * scale, y + (control_height * scale - ImGui::GetFontSize()) / 2}, ImGui::GetColorU32(ImGuiCol_TextDisabled), "Next");
-            dimensions_x += ImGui::CalcTextSize("Next").x + 12 * scale;
-        }
-        ImGui::SetCursorScreenPos({dimensions_x, y});
-        constexpr int dimension_step = 64;
-        if (number_field("##Width", "", ImGuiDataType_S32, &draft.width, {48 * scale, control_height * scale}, &dimension_step, "%d", scale, parameter_edit)) edited_since_submit = true;
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Next image width\nUp / Down: 64 px\nMiddle-click: swap dimensions\nRight-click: presets");
-        draw->AddText({dimensions_x + 51 * scale, y + (control_height * scale - ImGui::GetFontSize()) / 2}, ImGui::GetColorU32(ImGuiCol_TextDisabled), "\xC3\x97");
-        ImGui::SetCursorScreenPos({dimensions_x + 64 * scale, y});
-        if (number_field("##Height", "", ImGuiDataType_S32, &draft.height, {48 * scale, control_height * scale}, &dimension_step, "%d", scale, parameter_edit)) edited_since_submit = true;
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Next image height\nUp / Down: 64 px\nMiddle-click: swap dimensions\nRight-click: presets");
-        const bool dimensions_hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::IsMouseHoveringRect(dimensions_origin, ImGui::GetItemRectMax());
-        if (dimensions_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
-            commit_parameters();
-            std::swap(draft.width, draft.height);
-            edited_since_submit = true;
-        }
-        if (dimensions_hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
-            commit_parameters();
-            ImGui::OpenPopup("Resolution presets");
-        }
-        if (ImGui::BeginPopup("Resolution presets")) {
-            for (const auto& [label, width, height] : std::array{std::tuple{"Portrait  1024 x 1536", 1024, 1536}, std::tuple{"Square  1024 x 1024", 1024, 1024}, std::tuple{"Landscape  1536 x 1024", 1536, 1024}}) {
-                if (ImGui::MenuItem(label, nullptr, draft.width == width && draft.height == height)) {
-                    draft.width = width;
-                    draft.height = height;
-                    edited_since_submit = true;
-                }
+        if (following_latest) {
+            const ImVec2 dimensions_origin{dimensions_x, y};
+            if (layout.different) {
+                draw->AddText({dimensions_x + 4 * scale, y + (control_height * scale - ImGui::GetFontSize()) / 2}, ImGui::GetColorU32(ImGuiCol_TextDisabled), "Next");
+                dimensions_x += ImGui::CalcTextSize("Next").x + 12 * scale;
             }
-            if (image_texture) {
-                ImGui::Separator();
-                if (ImGui::MenuItem("Use image size")) {
-                    draft.width = image_width;
-                    draft.height = image_height;
-                    edited_since_submit = true;
-                }
+            ImGui::SetCursorScreenPos({dimensions_x, y});
+            constexpr int dimension_step = 64;
+            number_field("##Width", "", ImGuiDataType_S32, &draft.width, {48 * scale, control_height * scale}, &dimension_step, "%d", scale, parameter_edit);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Next image width\nUp / Down: 64 px\nMiddle-click: swap dimensions\nRight-click: presets");
+            draw->AddText({dimensions_x + 51 * scale, y + (control_height * scale - ImGui::GetFontSize()) / 2}, ImGui::GetColorU32(ImGuiCol_TextDisabled), "\xC3\x97");
+            ImGui::SetCursorScreenPos({dimensions_x + 64 * scale, y});
+            number_field("##Height", "", ImGuiDataType_S32, &draft.height, {48 * scale, control_height * scale}, &dimension_step, "%d", scale, parameter_edit);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Next image height\nUp / Down: 64 px\nMiddle-click: swap dimensions\nRight-click: presets");
+            const bool dimensions_hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::IsMouseHoveringRect(dimensions_origin, ImGui::GetItemRectMax());
+            if (dimensions_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+                commit_parameters();
+                std::swap(draft.width, draft.height);
             }
-            ImGui::EndPopup();
+            if (dimensions_hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
+                commit_parameters();
+                ImGui::OpenPopup("Resolution presets");
+            }
+            if (ImGui::BeginPopup("Resolution presets")) {
+                for (const auto& [label, width, height] : std::array{std::tuple{"Portrait  1024 x 1536", 1024, 1536}, std::tuple{"Square  1024 x 1024", 1024, 1024}, std::tuple{"Landscape  1536 x 1024", 1536, 1024}}) {
+                    if (ImGui::MenuItem(label, nullptr, draft.width == width && draft.height == height)) {
+                        draft.width = width;
+                        draft.height = height;
+                    }
+                }
+                if (image_texture) {
+                    ImGui::Separator();
+                    if (ImGui::MenuItem("Use image size")) {
+                        draft.width = image_width;
+                        draft.height = image_height;
+                    }
+                }
+                ImGui::EndPopup();
+            }
+        } else if (image_texture) {
+            ImGui::SetCursorScreenPos({dimensions_x, y});
+            const auto label = std::format("{} \xC3\x97 {}", image_width, image_height);
+            ImGui::Dummy({ImGui::CalcTextSize(label.c_str()).x, control_height * scale});
+            draw->AddText({dimensions_x, y + (control_height * scale - ImGui::GetFontSize()) / 2}, ImGui::GetColorU32(ImGuiCol_TextDisabled), label.c_str());
         }
         if (image_texture) {
             ImGui::SetCursorScreenPos({right - 104 * scale, y});
-            if (text_button("##View", std::format("{}{:.0f}%", fit_image ? "Fit \xC2\xB7 " : "", zoom * 100).c_str(), scale, 104 * scale)) {
-                fit_image = false;
-                zoom = 1;
-                pan = {};
+            const ImVec2 image{float(image_width), float(image_height)};
+            const auto& io = ImGui::GetIO();
+            const float width = size.x - (history_amount * history_strip_width + tags_amount * tag_column_width) * scale;
+            const float fitted = std::min(width * io.DisplayFramebufferScale.x / image.x, size.y * io.DisplayFramebufferScale.y / image.y);
+            if (text_button("##View", std::format("{}{:.0f}%", view.fit ? "Fit \xC2\xB7 " : "", view.zoom * 100).c_str(), scale, 104 * scale)) {
+                const double now = glfwGetTime();
+                view.scale_to(std::max(1.0F, fitted), {}, image, fitted >= 1, now);
+                animate_until = std::max(animate_until, now + 0.12);
             }
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Left-click: view at 100%%\nMiddle-click: fit image");
+                ImGui::SetTooltip("Left-click: view at 100%%\nMiddle-click: fit image\nFit is the minimum zoom\nImage: scroll to zoom, drag to pan, double-click to toggle fit / 100%%");
                 if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
-                    fit_image = true;
-                    pan = {};
+                    const double now = glfwGetTime();
+                    view.scale_to(fitted, {}, image, true, now);
+                    animate_until = std::max(animate_until, now + 0.12);
                 }
             }
         }
         ImGui::End();
     }
 
-    void UserInterface::history_drawer(const float scale, const ImVec2 size) {
+    void UserInterface::history_strip(const float scale, const ImVec2 size) {
         if (history_amount < 0.03F) return;
-        ImGui::SetNextWindowPos({16 * scale - (1 - history_amount) * 300 * scale, 52 * scale});
-        ImGui::SetNextWindowSize({280 * scale, size.y - 76 * scale});
+        ImGui::SetNextWindowPos({8 * scale, (top_strip_height + 24) * scale});
+        ImGui::SetNextWindowSize({(history_strip_width - 16) * scale, size.y - (top_strip_height + 48) * scale});
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, history_amount);
-        ImGui::Begin("##HistoryDrawer", nullptr, overlay);
-        ImGui::TextDisabled("SESSION HISTORY");
-        ImGui::Spacing();
-        if (history.empty()) {
-            ImGui::TextWrapped("Your images will appear here.");
-            ImGui::TextDisabled("Only this session is shown.");
-        }
-        ImGui::BeginChild("##Thumbnails", {0, 0});
-        for (std::size_t reverse = 0; reverse < history.size(); ++reverse) {
-            auto& item = history[history.size() - 1 - reverse];
+        ImGui::Begin("##HistoryStrip", nullptr, overlay | ImGuiWindowFlags_NoBackground | (history_open ? ImGuiWindowFlags_None : ImGuiWindowFlags_NoInputs));
+        if (history.empty()) ImGui::TextWrapped("No images yet.");
+        ImGui::BeginChild("##Thumbnails", {0, 0}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
+        for (auto& item : std::views::reverse(history)) {
             ImGui::PushID(static_cast<int>(item.id));
-            const float card_width = 112 * scale;
-            const ImVec2 p         = ImGui::GetCursorScreenPos();
-            const ImVec2 card{card_width, 164 * scale};
-            if (ImGui::InvisibleButton("Image", card) && item.saved) {
+            const float width = ImGui::GetContentRegionAvail().x;
+            const float fit = std::min((width - 16 * scale) / item.record.parameters.width, 96 * scale / item.record.parameters.height);
+            const float w = fit * item.record.parameters.width;
+            const float h = fit * item.record.parameters.height;
+            const auto p = ImGui::GetCursorScreenPos();
+            if (ImGui::InvisibleButton("Image", {width, h + 28 * scale}, ImGuiButtonFlags_EnableNav) && item.saved) {
+                commit_parameters();
+                prompt_editor.suspend();
                 following_latest = false;
-                selected         = item.id;
-                image_live       = false;
-                session.load(item.id, item.record.directory / "image.png");
+                requested_image.reset();
+                if (selected != item.id || image_live) {
+                    requested_image = item.id;
+                    session.load(item.id, item.record.path);
+                } else if (transition_texture) renderer.retire(std::exchange(transition_texture, 0));
             }
             const bool hovered = ImGui::IsItemHovered();
-            const bool chosen  = item.id == selected;
-            auto* draw         = ImGui::GetWindowDrawList();
-            if (hovered) draw->AddRectFilled(p, {p.x + card.x, p.y + card.y}, IM_COL32(30, 31, 38, 255), 6 * scale);
-            const float fit = std::min((card_width - 12 * scale) / item.record.parameters.width, 134 * scale / item.record.parameters.height);
-            const float w   = fit * item.record.parameters.width;
-            const float h   = fit * item.record.parameters.height;
-            const ImVec2 minimum{p.x + (card_width - w) / 2, p.y + (142 * scale - h) / 2};
-            draw->AddImage(item.texture, minimum, {minimum.x + w, minimum.y + h});
-            if (chosen) draw->AddLine({p.x + 8 * scale, p.y + card.y - scale}, {p.x + card.x - 8 * scale, p.y + card.y - scale}, IM_COL32(151, 145, 241, 210), 2 * scale);
+            const bool chosen = !following_latest && item.id == requested_image.value_or(selected);
+            auto* draw = ImGui::GetWindowDrawList();
+            const ImVec2 minimum{p.x + (width - w) / 2, p.y};
+            draw->AddImage(item.texture, minimum, {minimum.x + w, minimum.y + h}, {0, 0}, {1, 1},
+                ImGui::GetColorU32(ImVec4{1, 1, 1, chosen || hovered ? 1.0F : 0.75F}));
+            if (chosen) draw->AddLine({p.x + 2 * scale, p.y + 4 * scale}, {p.x + 2 * scale, p.y + h - 4 * scale}, ImGui::GetColorU32(ImVec4{0.65F, 0.60F, 0.88F, 0.9F}), 2 * scale);
             ImGui::PushFont(nullptr, 12);
-            draw->AddText(ImGui::GetFont(), ImGui::GetFontSize(), {p.x + 8 * scale, p.y + 144 * scale}, IM_COL32(173, 175, 190, 255), std::format("#{:02}   {:.1f}s", item.id + 1, item.record.sample_seconds + item.record.decode_seconds).c_str());
+            const auto label = std::format("{:03}", item.id + 1);
+            draw->AddText({p.x + (width - ImGui::CalcTextSize(label.c_str()).x) / 2, p.y + h + 6 * scale},
+                ImGui::GetColorU32(ImGuiCol_TextDisabled), label.c_str());
             ImGui::PopFont();
-            if (hovered) ImGui::SetTooltip("%d x %d\nSeed: %llu%s", item.record.parameters.width, item.record.parameters.height, static_cast<unsigned long long>(item.record.seed), item.saved ? "" : "\nSaving...");
+            if (hovered) ImGui::SetTooltip("%d x %d\nSeed: %llu%s", item.record.parameters.width, item.record.parameters.height, static_cast<unsigned long long>(item.record.seed), item.saved ? "\nTab: show tags" : "\nSaving...");
             if (ImGui::BeginPopupContextItem()) {
-                if (ImGui::MenuItem("Reuse settings")) {
-                    commit_parameters();
-                    draft               = item.record.parameters;
-                    prompt              = item.record.prompt;
-                    prompt_editor.reset(prompt);
-                    seed                = item.record.seed;
-                    random_seed         = false;
-                    composer_open       = true;
-                    edited_since_submit = true;
-                }
-                if (ImGui::MenuItem("Open image folder", nullptr, false, item.saved)) ShellExecuteW(window.native_window, L"open", std::filesystem::absolute(item.record.directory).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                if (ImGui::MenuItem("Open image folder", nullptr, false, item.saved)) ShellExecuteW(window.native_window, L"open", std::filesystem::absolute(item.record.path.parent_path()).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
                 ImGui::EndPopup();
             }
             ImGui::PopID();
-            if (reverse % 2 == 0 && reverse + 1 < history.size()) ImGui::SameLine(0, 12 * scale);
         }
         ImGui::EndChild();
         ImGui::End();
-        ImGui::PopStyleVar();
+        ImGui::PopStyleVar(2);
     }
 
     void UserInterface::draw() {
@@ -761,9 +835,9 @@ namespace genesia::editor {
         const float scale         = renderer.dpi;
         const auto size           = ImGui::GetIO().DisplaySize;
         const float interpolation = std::min(1.0F, ImGui::GetIO().DeltaTime / 0.045F);
-        composer_amount           = std::lerp(composer_amount, composer_open ? 1.0F : 0.0F, interpolation);
+        tags_amount               = std::lerp(tags_amount, tags_open ? 1.0F : 0.0F, interpolation);
         history_amount            = std::lerp(history_amount, history_open ? 1.0F : 0.0F, interpolation);
-        if (std::abs(composer_amount - float(composer_open)) < 0.01F) composer_amount = float(composer_open);
+        if (std::abs(tags_amount - float(tags_open)) < 0.01F) tags_amount = float(tags_open);
         if (std::abs(history_amount - float(history_open)) < 0.01F) history_amount = float(history_open);
         std::string error;
         {
@@ -773,15 +847,12 @@ namespace genesia::editor {
             error                   = session.error;
         }
         const auto controls = control_layout(scale, size);
-        const float tag_width = std::min(840 * scale, size.x - (48 + 300 * history_amount) * scale) - 40 * scale;
-        const float composer_height = std::min({prompt_editor.measure(prompt, *configuration.catalog, tag_width, scale),
-            size.y * 0.4F, size.y - controls.height - (bottom_margin + panel_gap + 56) * scale});
-        const bool dismissing = escape_owned || parameter_edit.id || (composer_open && prompt_editor.escape_owned) || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        const bool dismissing = escape_owned || parameter_edit.id || (tags_open && following_latest && prompt_editor.escape_owned) || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
         if (renderer.visible) {
-            canvas(scale, size, composer_height, controls.height);
-            composer(scale, size, composer_height, controls.height);
+            canvas(scale, size);
+            tag_column(scale, size, controls);
             bottom_controls(scale, size, controls);
-            history_drawer(scale, size);
+            history_strip(scale, size);
             top_strip(scale, size);
             if (!error.empty() && error != shown_error) {
                 shown_error = error;
@@ -794,12 +865,14 @@ namespace genesia::editor {
                 if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
                 ImGui::EndPopup();
             }
-            if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_GraveAccent, ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverActive)) submit();
-            if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S, ImGuiInputFlags_RouteGlobal)) save_settings();
+            if (following_latest && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_GraveAccent, ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverActive)) submit();
+            if (following_latest && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S, ImGuiInputFlags_RouteGlobal)) save_settings();
             if (ImGui::Shortcut(ImGuiKey_F11, ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverActive)) window.toggle_fullscreen();
             if (!dismissing && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && ImGui::Shortcut(ImGuiKey_Escape, ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverActive)) window.request_close();
-            escape_owned = parameter_edit.id || (composer_open && prompt_editor.escape_owned) || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
-            if (!ImGui::GetIO().WantTextInput && !prompt_editor.focus_input && ImGui::Shortcut(ImGuiKey_Tab, ImGuiInputFlags_RouteGlobal)) composer_open = !composer_open;
+            escape_owned = parameter_edit.id || (tags_open && following_latest && prompt_editor.escape_owned) || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+            if (!ImGui::GetIO().WantTextInput && !(tags_open && following_latest && prompt_editor.focus_input)
+                && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)
+                && ImGui::Shortcut(ImGuiKey_Tab, ImGuiInputFlags_RouteGlobal)) tags_open = !tags_open;
             const auto& io = ImGui::GetIO();
             if (io.MouseDelta.x || io.MouseDelta.y || io.MouseWheel || io.InputQueueCharacters.Size || ImGui::IsAnyItemActive()) animate_until = glfwGetTime() + 0.16;
         }
