@@ -1,0 +1,126 @@
+name: Windows Build
+
+on:
+  workflow_dispatch:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CUDNN_VERSION: "9.24.0.43"
+  CUDNN_SHA256: "88f72bd1ce384197cedbc68496c6052d7ff0bd9fd0b3c74470402cf737507e06"
+
+jobs:
+  build:
+    name: ${{ matrix.name }}, MSVC, CUDA
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 180
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Headless
+            ui: "OFF"
+          - name: Editor
+            ui: "ON"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install CUDA 13.3
+        shell: pwsh
+        run: |
+          winget install --id Nvidia.CUDA --version 13.3 --exact --silent --source winget --accept-source-agreements --accept-package-agreements --disable-interactivity
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $cudaRoot = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3"
+          "CUDA_PATH=$cudaRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "CUDACXX=$cudaRoot\bin\nvcc.exe" | Out-File -FilePath $env:GITHUB_ENV -Append
+          (Join-Path $cudaRoot "bin") | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Install cuDNN 9.24
+        shell: pwsh
+        run: |
+          $cudnnArchiveName = "cudnn-windows-x86_64-${env:CUDNN_VERSION}_cuda13-archive"
+          $cudnnArchive = Join-Path $env:RUNNER_TEMP "$cudnnArchiveName.zip"
+          $cudnnDirectory = Join-Path $env:RUNNER_TEMP "cudnn"
+          Invoke-WebRequest "https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/windows-x86_64/$cudnnArchiveName.zip" -OutFile $cudnnArchive
+          if ((Get-FileHash -LiteralPath $cudnnArchive -Algorithm SHA256).Hash -ne $env:CUDNN_SHA256) { throw "cuDNN archive checksum mismatch" }
+          Expand-Archive -LiteralPath $cudnnArchive -DestinationPath $cudnnDirectory
+          $cudnnRoot = Join-Path $cudnnDirectory $cudnnArchiveName
+          "CUDNN_ROOT=$cudnnRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
+          (Join-Path $cudnnRoot "bin\x64") | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Resolve Vulkan SDK
+        if: matrix.ui == 'ON'
+        id: vulkan
+        shell: pwsh
+        run: |
+          $version = (Invoke-RestMethod -Uri "https://vulkan.lunarg.com/sdk/latest/windows.txt").Trim()
+          $root = "C:\VulkanSDK\$version"
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "root=$root" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Restore Vulkan SDK
+        if: matrix.ui == 'ON'
+        id: vulkan-cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.vulkan.outputs.root }}
+          key: vulkan-sdk-${{ runner.os }}-${{ runner.arch }}-${{ steps.vulkan.outputs.version }}
+
+      - name: Install Vulkan SDK
+        if: matrix.ui == 'ON' && steps.vulkan-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $version = "${{ steps.vulkan.outputs.version }}"
+          $root = "${{ steps.vulkan.outputs.root }}"
+          $installer = Join-Path $env:RUNNER_TEMP "vulkan-sdk.exe"
+          $download = "https://sdk.lunarg.com/sdk/download/$version/windows/vulkan_sdk.exe"
+          $metadata = Invoke-RestMethod -Uri "https://sdk.lunarg.com/sdk/sha/$version/windows/vulkan_sdk.exe.json"
+
+          Invoke-WebRequest -Uri $download -OutFile $installer
+          $actualHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $metadata.sha.ToLowerInvariant()) { throw "Vulkan SDK checksum mismatch" }
+
+          $process = Start-Process -FilePath $installer -ArgumentList "--root", $root, "--accept-licenses", "--default-answer", "--confirm-command", "install", "copy_only=1" -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { exit $process.ExitCode }
+
+      - name: Export Vulkan SDK environment
+        if: matrix.ui == 'ON'
+        shell: pwsh
+        run: |
+          $root = "${{ steps.vulkan.outputs.root }}"
+          "VULKAN_SDK=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          (Join-Path $root "Bin") | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Enter Visual Studio developer environment
+        shell: pwsh
+        run: |
+          $installation = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $developerCommand = Join-Path $installation "Common7\Tools\VsDevCmd.bat"
+          cmd /d /s /c "`"$developerCommand`" -arch=x64 -host_arch=x64 && set" | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)$') { "$($Matches[1])=$($Matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
+          }
+
+      - name: Configure
+        shell: pwsh
+        run: >-
+          cmake -S . -B cmake-build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl
+          "-DGENESIA_CUDNN_INCLUDE_DIRECTORY=$env:CUDNN_ROOT/include"
+          "-DGENESIA_CUDNN_LIBRARY=$env:CUDNN_ROOT/lib/x64/cudnn.lib"
+          "-DGENESIA_CUDNN_DLL=$env:CUDNN_ROOT/bin/x64/cudnn64_9.dll"
+          -DGENESIA_BUILD_UI=${{ matrix.ui }}
+
+      - name: Build
+        run: cmake --build cmake-build-release --target genesia --parallel

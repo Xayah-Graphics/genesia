@@ -204,7 +204,8 @@ endif ()
 # Runtime Resources
 # ============================================================================
 configure_file(assets/tags/danbooru.csv assets/tags/danbooru.csv COPYONLY)
-target_compile_definitions(genesia_core PRIVATE GENESIA_TAG_CATALOG="${PROJECT_BINARY_DIR}/assets/tags/danbooru.csv")
+set(GENESIA_TAG_CATALOG "${PROJECT_BINARY_DIR}/assets/tags/danbooru.csv" CACHE FILEPATH "Runtime Danbooru tag catalog")
+target_compile_definitions(genesia_core PRIVATE GENESIA_TAG_CATALOG="${GENESIA_TAG_CATALOG}")
 
 if (WIN32)
     add_custom_command(
