@@ -364,20 +364,6 @@ namespace genesia::editor {
                     }
                     ImGui::EndDragDropTarget();
                 }
-                bool open_weight{};
-                if (ImGui::BeginPopupContextItem("Actions")) {
-                    if (ImGui::MenuItem("Edit tag", nullptr, false, !removed)) {
-                        editing     = i;
-                        input       = prompt::serialize(catalog, std::span{group.tags}.subspan(i, 1));
-                        cursor      = input.size();
-                        focus_input = true;
-                        ++revision;
-                    }
-                    if (ImGui::MenuItem("Weight...", nullptr, false, !removed)) open_weight = true;
-                    if (ImGui::MenuItem(removed ? "Restore" : "Remove")) remove = i;
-                    ImGui::EndPopup();
-                }
-                if (open_weight) ImGui::OpenPopup("Weight");
                 if (ImGui::BeginPopup("Weight")) {
                     float value = group.tags[i].weight;
                     if (ImGui::InputFloat("Weight", &value, 0.05F, 0.1F, "%.2f", ImGuiInputTextFlags_EnterReturnsTrue) && std::isfinite(value)) {
