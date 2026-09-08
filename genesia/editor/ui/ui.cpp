@@ -363,10 +363,6 @@ namespace genesia::editor {
                 reveal_selected = true;
             }
         }
-        if (initial_gallery && gallery.ready) {
-            initial_gallery = false;
-            if (!active && !displayed_task && !requested_image && !gallery.files.empty()) following_latest = select_image(gallery.files.back());
-        }
     }
 
     void UserInterface::show_image(const std::uint64_t texture, const int width, const int height, const bool transition, const bool reset) {
@@ -394,7 +390,6 @@ namespace genesia::editor {
         prompt_editor.suspend();
         following_latest = false;
         image_tags       = true;
-        initial_gallery  = false;
         reveal_selected  = true;
         if (image_file && *image_file == file && !requested_image) return true;
         requested_image  = file;
@@ -572,7 +567,6 @@ namespace genesia::editor {
         }
         session.enqueue(std::move(parameters), seed, std::move(submitted), std::move(prompt_catalog), std::move(source));
         following_latest = true;
-        initial_gallery  = false;
         gallery.cancel();
         requested_image.reset();
         image_tags    = repaint;

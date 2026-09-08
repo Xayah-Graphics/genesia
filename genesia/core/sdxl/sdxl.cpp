@@ -9,8 +9,7 @@ module genesia.sdxl;
 import std;
 
 namespace genesia::sdxl {
-    ImageInput::ImageInput(const ::cuda::stream_ref stream, const std::span<const std::uint8_t> source, const int width, const int height)
-        : width{width}, height{height}, pixels{stream, ::cuda::device_default_memory_pool(stream.device()), source.size(), ::cuda::no_init}, latent{stream, ::cuda::device_default_memory_pool(stream.device())} {
+    ImageInput::ImageInput(const ::cuda::stream_ref stream, const std::span<const std::uint8_t> source, const int width, const int height) : width{width}, height{height}, pixels{stream, ::cuda::device_default_memory_pool(stream.device()), source.size(), ::cuda::no_init}, latent{stream, ::cuda::device_default_memory_pool(stream.device())} {
         ::cuda::copy_bytes(stream, ::cuda::std::span<const std::uint8_t>{source.data(), source.size()}, pixels);
         stream.sync();
     }
@@ -31,7 +30,7 @@ namespace genesia::sdxl {
             encoder = std::make_unique<VAEEncoder>(source);
         }
         const auto stream = runtime.stream;
-        const auto pool = ::cuda::device_default_memory_pool(stream.device());
+        const auto pool   = ::cuda::device_default_memory_pool(stream.device());
         const VAEWorkspaceLayout layout{image.height, image.width};
         ::cuda::device_buffer<std::byte> workspace{stream, pool, layout.bytes, ::cuda::no_init};
         ::cuda::device_buffer<__nv_bfloat16> current{stream, pool, std::size_t(image.width) * image.height * 128, ::cuda::no_init};
@@ -55,7 +54,7 @@ namespace genesia::sdxl {
         if (source && parameters.denoise == 0) {
             std::size_t free, total;
             neural::check(cudaMemGetInfo(&free, &total));
-            resident_bytes = total - free;
+            resident_bytes  = total - free;
             prepare_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
             return;
         }

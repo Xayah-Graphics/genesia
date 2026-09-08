@@ -75,10 +75,10 @@ namespace genesia::sdxl::kernels {
         const int i = blockIdx.x * blockDim.x + threadIdx.x;
         if (i > steps) return;
         const int position = total - steps + i;
-        const int time = 999 - int(static_cast<long long>(position) * 1000 / total);
-        const float sigma = i == steps ? 0.0F : training[time];
-        const float next = i + 1 >= steps ? 0.0F : training[999 - int(static_cast<long long>(position + 1) * 1000 / total)];
-        output[i]         = {sigma, next - sigma, rsqrtf(fmaf(sigma, sigma, 1.0F))};
+        const int time     = 999 - int(static_cast<long long>(position) * 1000 / total);
+        const float sigma  = i == steps ? 0.0F : training[time];
+        const float next   = i + 1 >= steps ? 0.0F : training[999 - int(static_cast<long long>(position + 1) * 1000 / total)];
+        output[i]          = {sigma, next - sigma, rsqrtf(fmaf(sigma, sigma, 1.0F))};
         if (i < steps) times[i] = float(time);
     }
 
@@ -100,7 +100,7 @@ namespace genesia::sdxl::kernels {
         sincosf(float(counter.w) * 0x1p-32F * 6.283185307179586F, &sine1, &cosine1);
         const float radius0 = sqrtf(-2.0F * logf((float(counter.x) + 1.0F) * 0x1p-32F));
         const float radius1 = sqrtf(-2.0F * logf((float(counter.z) + 1.0F) * 0x1p-32F));
-        const float scale = full_noise ? sqrtf(fmaf(schedule[0].sigma, schedule[0].sigma, 1.0F)) : schedule[0].sigma;
+        const float scale   = full_noise ? sqrtf(fmaf(schedule[0].sigma, schedule[0].sigma, 1.0F)) : schedule[0].sigma;
         float4 values{radius0 * sine0 * scale, radius0 * cosine0 * scale, radius1 * sine1 * scale, radius1 * cosine1 * scale};
         if (source) {
             const float4 original = reinterpret_cast<const float4*>(source)[i];
@@ -167,7 +167,7 @@ namespace genesia::sdxl::kernels {
         if (i >= (height + 1) * (width + 1) * channels) return;
         const int x = i / channels % (width + 1);
         const int y = i / channels / (width + 1);
-        output[i] = x < width && y < height ? input[(y * width + x) * channels + i % channels] : __nv_bfloat16(0.0F);
+        output[i]   = x < width && y < height ? input[(y * width + x) * channels + i % channels] : __nv_bfloat16(0.0F);
     }
 
     __global__ void latent_encode_kernel(float* output, const __nv_bfloat16* moments, const int count) {
