@@ -21,4 +21,5 @@ export namespace genesia {
         explicit ImageWriter(std::filesystem::path directory);
         std::filesystem::path save(const sdxl::Output& output, const Record& record);
     };
+    std::optional<Record> read_record(const std::filesystem::path& path, std::shared_ptr<const prompt::Catalog> catalog);
 } // namespace genesia

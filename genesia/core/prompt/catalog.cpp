@@ -86,6 +86,20 @@ namespace genesia::prompt {
             if (tags[key.tag].category == -1 && std::ranges::binary_search(alias_names, key.name, {}, &CatalogKey::name)) throw std::invalid_argument{std::format("Custom tag conflicts with a Danbooru alias: {}", key.name)};
     }
 
+    Catalog::Catalog(std::shared_ptr<const Catalog> source, const std::span<const ArchivedTag> saved) : parent{std::move(source)}, tags{parent->tags}, names{parent->names}, alias_names{parent->alias_names} {
+        for (const auto& tag : saved) {
+            const auto found = std::ranges::find(names, tag.name, &CatalogKey::name);
+            const auto name  = std::string_view{archived.emplace_back(tag.name)};
+            const auto text  = std::string_view{archived.emplace_back(tag.text)};
+            if (found != names.end()) tags[found->tag] = {name, text, 0, -1};
+            else {
+                names.push_back({name, static_cast<std::uint32_t>(tags.size())});
+                tags.push_back({name, text, 0, -1});
+            }
+        }
+        std::ranges::sort(names, {}, &CatalogKey::name);
+    }
+
     std::expected<std::uint32_t, std::string> Catalog::resolve(const std::string_view name) const {
         const auto key   = normalize(name);
         const auto found = std::ranges::lower_bound(names, key, {}, &CatalogKey::name);

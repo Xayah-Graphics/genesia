@@ -12,13 +12,19 @@ export namespace genesia::prompt {
         std::string_view name;
         std::uint32_t tag;
     };
+    struct ArchivedTag final {
+        std::string name, text;
+    };
     struct Catalog final {
         std::string storage;
+        std::shared_ptr<const Catalog> parent;
+        std::deque<std::string> archived;
         std::vector<CatalogTag> tags;
         std::vector<CatalogKey> names;
         std::vector<CatalogKey> alias_names;
 
         Catalog();
+        Catalog(std::shared_ptr<const Catalog> parent, std::span<const ArchivedTag> tags);
         Catalog(const Catalog&)            = delete;
         Catalog& operator=(const Catalog&) = delete;
         std::expected<std::uint32_t, std::string> resolve(std::string_view name) const;

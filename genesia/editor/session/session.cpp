@@ -10,6 +10,7 @@ import genesia.sdxl;
 import genesia.sdxl.preview;
 import genesia.neural.inference_runtime;
 import genesia.editor.platform.interop;
+import genesia.editor.runtime.images;
 import std;
 
 namespace genesia::editor {
@@ -19,7 +20,7 @@ namespace genesia::editor {
         return ::cuda::stream{::cuda::devices[0], high ? greatest : least};
     }
 
-    Session::Session(std::shared_ptr<const prompt::Catalog> catalog, Interop& bridge, Interop& preview_bridge) : catalog{std::move(catalog)}, images{defaults::output}, interop{bridge}, preview_interop{preview_bridge}, stream{priority_stream(true)}, control{stream, ::cuda::pinned_default_memory_pool(), 1, ::cuda::no_init} {
+    Session::Session(Interop& bridge, Interop& preview_bridge) : images{defaults::output}, interop{bridge}, preview_interop{preview_bridge}, stream{priority_stream(true)}, control{stream, ::cuda::pinned_default_memory_pool(), 1, ::cuda::no_init} {
         std::construct_at(control.data());
         preview_stream = priority_stream(false);
         neural::check(cudaEventCreateWithFlags(std::out_ptr(preview_finished), cudaEventDisableTiming));
@@ -54,10 +55,10 @@ namespace genesia::editor {
         stream.sync();
     }
 
-    void Session::enqueue(sdxl::Parameters parameters, const std::uint64_t seed, prompt::Pair prompt, std::optional<RepaintSource> source) {
+    void Session::enqueue(sdxl::Parameters parameters, const std::uint64_t seed, prompt::Pair prompt, std::shared_ptr<const prompt::Catalog> catalog, std::optional<RepaintSource> source) {
         {
             const std::lock_guard lock{mutex};
-            queue.push_back({next_id++, std::move(parameters), seed, std::move(prompt), std::move(source)});
+            queue.push_back({next_id++, std::move(parameters), seed, std::move(prompt), std::move(catalog), std::move(source)});
         }
         condition.notify_all();
     }
@@ -72,14 +73,6 @@ namespace genesia::editor {
         {
             const std::lock_guard lock{mutex};
             paused = false;
-        }
-        condition.notify_all();
-    }
-
-    void Session::load(const std::uint64_t id, std::filesystem::path path) {
-        {
-            const std::lock_guard lock{mutex};
-            files.push_back({id, nullptr, {}, std::move(path)});
         }
         condition.notify_all();
     }
@@ -102,7 +95,7 @@ namespace genesia::editor {
             std::println("LOAD {:.3f}s", std::chrono::duration<double>(std::chrono::steady_clock::now() - load_started).count());
             std::cout.flush();
             std::unique_ptr<sdxl::ImageInput> source_image;
-            std::optional<std::uint64_t> encoded_image, prepared_image;
+            std::optional<std::pair<std::uint64_t, std::uint64_t>> encoded_image, prepared_image;
             std::unique_ptr<sdxl::Inference> inference;
             struct PendingWrites final {
                 Session& session;
@@ -132,7 +125,7 @@ namespace genesia::editor {
                     ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].stage}.store(static_cast<std::uint32_t>(sdxl::Stage::preparing));
                 }
                 glfwPostEmptyEvent();
-                const auto source_id = request.source ? std::optional{request.source->id} : std::nullopt;
+                const auto source_id = request.source ? std::optional{std::pair{request.source->id, request.source->modified}} : std::nullopt;
                 if (!inference || inference->parameters != request.parameters || source_id != prepared_image) {
                     {
                         std::unique_lock lock{mutex};
@@ -142,8 +135,8 @@ namespace genesia::editor {
                     if (request.source) {
                         if (source_id != encoded_image) {
                             const auto pixels = read_image(request.source->path);
-                            source_image = std::make_unique<sdxl::ImageInput>(stream, pixels.pixels, pixels.width, pixels.height);
-                            encoded_image = source_id;
+                            source_image      = std::make_unique<sdxl::ImageInput>(stream, pixels.pixels, pixels.width, pixels.height);
+                            encoded_image     = source_id;
                         }
                         if (request.parameters.denoise > 0 && source_image->latent.empty()) {
                             const auto started = std::chrono::steady_clock::now();
@@ -190,13 +183,12 @@ namespace genesia::editor {
                     condition.notify_all();
                     if (!output.cancelled) {
                         const auto ready = interop.publish(output.device_pixels, output.width, output.height, output.stream, slot);
-                        Record record{request.parameters, request.seed, {}, std::filesystem::path{defaults::checkpoint}.filename(), request.prompt, catalog, request.source ? request.source->path.filename() : std::filesystem::path{}};
-                        auto preview = thumbnail({output.pixels.data(), output.pixels.size()}, output.width, output.height);
+                        Record record{request.parameters, request.seed, {}, std::filesystem::path{defaults::checkpoint}.filename(), request.prompt, request.catalog, request.source ? request.source->path.filename() : std::filesystem::path{}};
                         {
                             const std::lock_guard lock{mutex};
-                            events.push_back({EventKind::generated, request.id, record, std::move(preview), slot, ready});
+                            events.push_back({EventKind::generated, request.id, record, slot, ready});
                             saving[slot] = true;
-                            files.push_back({request.id, &output, record, {}, slot});
+                            files.push_back({request.id, &output, record, slot});
                         }
                         glfwPostEmptyEvent();
                         condition.notify_all();
@@ -357,21 +349,15 @@ namespace genesia::editor {
                 files.pop_front();
             }
             try {
-                if (task.output) {
-                    auto path = images.save(*task.output, task.record);
-                    const std::lock_guard lock{mutex};
-                    saving[task.slot] = false;
-                    events.push_back({EventKind::saved, task.id, {.path = std::move(path)}});
-                } else {
-                    auto image = read_image(task.path);
-                    const std::lock_guard lock{mutex};
-                    events.push_back({EventKind::loaded, task.id, {}, std::move(image)});
-                }
+                task.record.path = std::filesystem::absolute(images.save(*task.output, task.record));
+                const std::lock_guard lock{mutex};
+                saving[task.slot] = false;
+                events.push_back({EventKind::saved, task.id, std::move(task.record)});
             } catch (const std::exception& failure) {
                 const std::lock_guard lock{mutex};
-                error  = failure.what();
-                paused = true;
-                if (task.output) saving[task.slot] = false;
+                error             = failure.what();
+                paused            = true;
+                saving[task.slot] = false;
             }
             condition.notify_all();
             glfwPostEmptyEvent();

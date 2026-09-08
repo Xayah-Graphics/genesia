@@ -13,6 +13,7 @@ import genesia.editor.platform.interop;
 import genesia.editor.ui.renderer;
 import genesia.editor.ui.tag_editor;
 import genesia.editor.session;
+import genesia.editor.gallery;
 import std;
 
 export namespace genesia::editor {
@@ -31,17 +32,19 @@ export namespace genesia::editor {
             void constrain(ImVec2 available, ImVec2 image);
         };
         struct RepaintDraft final {
+            Record original;
+            std::uint64_t modified;
             prompt::Pair prompt;
             PromptEditor editor;
 
-            explicit RepaintDraft(const prompt::Pair& original);
+            RepaintDraft(const Record& original, std::uint64_t modified);
         };
-        struct History final {
-            std::uint64_t id;
-            Record record;
+        struct Thumbnail final {
+            Gallery::File file;
             std::uint64_t texture{};
-            bool saved{};
-            std::unique_ptr<RepaintDraft> repaint;
+            int width{}, height{};
+            std::uint64_t touched{};
+            std::string error;
         };
         struct ParameterEdit final {
             ImGuiID id{};
@@ -65,34 +68,46 @@ export namespace genesia::editor {
         Renderer& renderer;
         Interop& interop;
         Session& session;
+        Gallery gallery;
         sdxl::Parameters draft;
         prompt::Pair prompt;
         TagSearch tag_search;
         PromptEditor prompt_editor;
-        std::vector<History> history;
+        std::map<std::uint64_t, Thumbnail> thumbnails;
+        std::map<std::uint64_t, std::unique_ptr<RepaintDraft>> repaints;
+        std::optional<Record> image_record;
+        std::optional<Gallery::File> image_file;
+        std::uint64_t thumbnail_clock{};
+        std::size_t thumbnail_bytes{};
+        bool initial_gallery{true};
+        bool reveal_selected{};
+        float gallery_scroll{};
         std::uint64_t seed{defaults::seeds.front()};
         bool random_seed{defaults::random_seed};
         bool tags_open{};
-        bool history_open{};
+        bool gallery_open{};
         ParameterEdit parameter_edit;
         bool following_latest{true};
         bool image_tags{};
         float denoise{defaults::denoise};
         float tags_amount{};
-        float history_amount{};
+        float gallery_amount{};
         ImageView view;
         bool image_live{};
         float progress_alpha{};
         std::string progress_label;
         std::string progress_time;
         std::uint64_t observed_task{std::numeric_limits<std::uint64_t>::max()};
+        std::optional<std::uint64_t> displayed_task, completed_task, saved_task;
+        std::filesystem::path latest_path;
         std::uint32_t preview_step{};
         std::uint64_t transition_texture{};
         int transition_width{}, transition_height{};
         double transition_started{};
         std::uint64_t image_texture{};
-        std::uint64_t selected{std::numeric_limits<std::uint64_t>::max()};
-        std::optional<std::uint64_t> requested_image;
+        std::uint64_t selected{};
+        std::optional<Gallery::File> requested_image;
+        std::uint64_t requested_ticket{};
         int image_width{}, image_height{};
         double animate_until{};
         double refresh_at{std::numeric_limits<double>::infinity()};
@@ -101,7 +116,9 @@ export namespace genesia::editor {
 
         UserInterface(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, WindowPlatform& platform, Renderer& display, Interop& bridge, Session& generation);
         void receive();
-        void show_image(std::uint64_t texture, int width, int height, std::uint64_t id, bool transition);
+        void show_image(std::uint64_t texture, int width, int height, bool transition, bool reset);
+        bool select_image(const Gallery::File& file);
+        void navigate_image(int direction);
         bool prepare_prompt();
         void commit_parameters();
         bool save_prompt();
@@ -115,7 +132,7 @@ export namespace genesia::editor {
         void top_strip(float scale, ImVec2 size);
         void tag_column(float scale, ImVec2 size, const ControlLayout& layout);
         void bottom_controls(float scale, ImVec2 size, const ControlLayout& layout);
-        void history_strip(float scale, ImVec2 size);
+        void gallery_strip(float scale, ImVec2 size);
         void draw();
     };
 } // namespace genesia::editor

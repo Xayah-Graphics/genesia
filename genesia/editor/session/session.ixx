@@ -8,27 +8,27 @@ import genesia.generation.output;
 import genesia.sdxl;
 import genesia.sdxl.preview;
 import genesia.editor.platform.interop;
-import genesia.editor.runtime.images;
 import std;
 
 export namespace genesia::editor {
     struct RepaintSource final {
         std::uint64_t id;
         std::filesystem::path path;
+        std::uint64_t modified;
     };
     struct Request final {
         std::uint64_t id{};
         sdxl::Parameters parameters;
         std::uint64_t seed{};
         prompt::Pair prompt;
+        std::shared_ptr<const prompt::Catalog> catalog;
         std::optional<RepaintSource> source;
     };
-    enum class EventKind { generated, saved, loaded };
+    enum class EventKind { generated, saved };
     struct Event final {
         EventKind kind;
         std::uint64_t id;
         Record record;
-        Image image;
         std::size_t slot{};
         std::uint64_t ready{};
     };
@@ -41,7 +41,6 @@ export namespace genesia::editor {
         std::uint64_t ready;
     };
     struct Session final {
-        const std::shared_ptr<const prompt::Catalog> catalog;
         ImageWriter images;
         Interop& interop;
         Interop& preview_interop;
@@ -62,12 +61,11 @@ export namespace genesia::editor {
         bool preview_visible{true};
         std::string error;
 
-        Session(std::shared_ptr<const prompt::Catalog> catalog, Interop& interop, Interop& preview_interop);
+        Session(Interop& interop, Interop& preview_interop);
         ~Session();
-        void enqueue(sdxl::Parameters parameters, std::uint64_t seed, prompt::Pair prompt, std::optional<RepaintSource> source = {});
+        void enqueue(sdxl::Parameters parameters, std::uint64_t seed, prompt::Pair prompt, std::shared_ptr<const prompt::Catalog> catalog, std::optional<RepaintSource> source = {});
         void stop();
         void resume();
-        void load(std::uint64_t id, std::filesystem::path path);
         void shutdown();
 
     private:
@@ -75,7 +73,6 @@ export namespace genesia::editor {
             std::uint64_t id;
             const sdxl::Output* output{};
             Record record;
-            std::filesystem::path path;
             std::size_t slot{};
         };
         std::condition_variable condition;

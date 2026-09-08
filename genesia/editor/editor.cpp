@@ -28,7 +28,7 @@ namespace genesia::editor {
         void run();
     };
 
-    Application::Application(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog) : session{catalog, interop, preview_interop}, ui{std::move(preset), std::move(catalog), window, renderer, interop, session} {}
+    Application::Application(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog) : session{interop, preview_interop}, ui{std::move(preset), std::move(catalog), window, renderer, interop, session} {}
 
     void Application::run() {
         std::uint32_t previous_stage{}, previous_step{};
@@ -43,13 +43,13 @@ namespace genesia::editor {
                 const std::lock_guard lock{session.mutex};
                 busy    = session.active.has_value();
                 done    = session.worker_done;
-                pending = !session.events.empty() || !session.previews.empty();
+                pending = !session.events.empty() || !session.previews.empty() || ui.gallery.pending.load();
             }
             if (closing && done && !pending) break;
             const auto stage     = ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{session.control.data()[0].stage}.load();
             const auto step      = ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{session.control.data()[0].completed}.load();
             const double now     = glfwGetTime();
-            const bool animating = now < ui.animate_until || (renderer.visible && ui.view.started >= 0) || std::abs(ui.tags_amount - float(ui.tags_open)) > 0.01F || std::abs(ui.history_amount - float(ui.history_open)) > 0.01F;
+            const bool animating = now < ui.animate_until || (renderer.visible && ui.view.started >= 0) || std::abs(ui.tags_amount - float(ui.tags_open)) > 0.01F || std::abs(ui.gallery_amount - float(ui.gallery_open)) > 0.01F;
             if (!std::exchange(window.redraw, false) && !pending && !animating && now < ui.refresh_at && stage == previous_stage && step == previous_step && busy == previous_busy) {
                 glfwWaitEventsTimeout(std::min(busy ? 0.1 : 1.0, std::max(0.0, ui.refresh_at - now)));
                 continue;

@@ -21,12 +21,12 @@ import std;
 
 namespace genesia::editor {
     namespace {
-        constexpr ImGuiWindowFlags overlay  = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar;
-        constexpr float top_strip_height    = 48;
-        constexpr float control_height      = 40;
-        constexpr float bottom_margin       = 24;
-        constexpr float tag_column_width    = 800;
-        constexpr float history_strip_width = 96;
+        constexpr ImGuiWindowFlags overlay   = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar;
+        constexpr float top_strip_height     = 48;
+        constexpr float control_height       = 40;
+        constexpr float bottom_margin        = 24;
+        constexpr float tag_column_width     = 800;
+        constexpr float gallery_strip_height = 104;
 
         void control_shade(const ImVec2 minimum, const ImVec2 maximum, const float scale) {
             auto* draw          = ImGui::GetWindowDrawList();
@@ -155,12 +155,12 @@ namespace genesia::editor {
         center.y               = std::clamp(center.y, vertical, 1 - vertical);
     }
 
-    UserInterface::RepaintDraft::RepaintDraft(const prompt::Pair& original) : prompt{original} {
+    UserInterface::RepaintDraft::RepaintDraft(const Record& source, const std::uint64_t modified) : original{source}, modified{modified}, prompt{source.prompt} {
         editor.tracking = true;
         editor.reset(prompt);
     }
 
-    UserInterface::UserInterface(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, WindowPlatform& platform, Renderer& display, Interop& bridge, Session& generation) : catalog{std::move(catalog)}, preset{std::move(preset)}, window{platform}, renderer{display}, interop{bridge}, session{generation}, prompt{this->preset.prompt}, tag_search{*this->catalog} {
+    UserInterface::UserInterface(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, WindowPlatform& platform, Renderer& display, Interop& bridge, Session& generation) : catalog{std::move(catalog)}, preset{std::move(preset)}, window{platform}, renderer{display}, interop{bridge}, session{generation}, gallery{defaults::output, this->catalog}, prompt{this->preset.prompt}, tag_search{*this->catalog} {
         prompt_editor.reset(prompt);
         ImGui::StyleColorsDark();
         auto& style          = ImGui::GetStyle();
@@ -194,6 +194,107 @@ namespace genesia::editor {
 
     void UserInterface::receive() {
         if (transition_texture && glfwGetTime() - transition_started >= 0.12) renderer.retire(std::exchange(transition_texture, 0));
+        const float pitch            = 86 * renderer.dpi;
+        const auto anchor_index      = static_cast<std::size_t>(gallery_scroll / pitch);
+        const auto anchor            = anchor_index < gallery.files.size() ? std::optional{gallery.files[anchor_index].id} : std::nullopt;
+        const auto previous_position = gallery.positions.find(selected);
+        const auto selected_index    = previous_position == gallery.positions.end() ? 0 : previous_position->second;
+        const auto revision          = gallery.revision;
+        auto received                = gallery.receive();
+        if (revision != gallery.revision) {
+            if (anchor) {
+                const auto found = std::ranges::find(gallery.files, *anchor, &Gallery::File::id);
+                if (found != gallery.files.end()) gallery_scroll += (static_cast<float>(found - gallery.files.begin()) - anchor_index) * pitch;
+            }
+            for (auto it = thumbnails.begin(); it != thumbnails.end();) {
+                const auto position = gallery.positions.find(it->first);
+                const auto* file    = position == gallery.positions.end() ? nullptr : &gallery.files[position->second];
+                if (!file || file->modified != it->second.file.modified || file->bytes != it->second.file.bytes) {
+                    if (it->second.texture) {
+                        renderer.retire(it->second.texture);
+                        thumbnail_bytes -= std::size_t(it->second.width) * it->second.height * 4;
+                    }
+                    it = thumbnails.erase(it);
+                } else {
+                    it->second.file = *file;
+                    ++it;
+                }
+            }
+            std::erase_if(repaints, [&](const auto& item) {
+                const auto position = gallery.positions.find(item.first);
+                return position == gallery.positions.end() || gallery.files[position->second].modified != item.second->modified;
+            });
+            if (requested_image) {
+                const auto position = gallery.positions.find(requested_image->id);
+                if (position == gallery.positions.end()) {
+                    gallery.cancel();
+                    requested_image.reset();
+                } else if (*requested_image != gallery.files[position->second]) {
+                    requested_image  = gallery.files[position->second];
+                    requested_ticket = gallery.select(*requested_image);
+                }
+            }
+            if (image_file && !requested_image) {
+                const auto file = std::ranges::find(gallery.files, selected, &Gallery::File::id);
+                if (file == gallery.files.end()) {
+                    image_file.reset();
+                    image_record.reset();
+                    if (image_texture) renderer.retire(std::exchange(image_texture, 0));
+                    if (transition_texture) renderer.retire(std::exchange(transition_texture, 0));
+                    selected = 0;
+                    if (!gallery.files.empty()) select_image(gallery.files[std::min(selected_index, gallery.files.size() - 1)]);
+                } else if (file->modified != image_file->modified || file->bytes != image_file->bytes) {
+                    repaints.erase(selected);
+                    requested_image  = *file;
+                    requested_ticket = gallery.select(*file);
+                } else {
+                    image_file = *file;
+                    if (image_record) image_record->path = file->path;
+                }
+            }
+        }
+        for (auto& result : received) {
+            const auto position = gallery.positions.find(result.file.id);
+            if (position == gallery.positions.end()) continue;
+            const auto* file = &gallery.files[position->second];
+            if (*file != result.file) continue;
+            if (result.ticket) {
+                if (!requested_image || requested_ticket != result.ticket) continue;
+                requested_image.reset();
+                if (!result.error.empty()) {
+                    const auto name = result.file.path.filename().u8string();
+                    gallery.error   = std::string{name.begin(), name.end()} + ": " + result.error;
+                    continue;
+                }
+                show_image(renderer.upload(*result.image), result.image->width, result.image->height, true, selected != file->id);
+                selected     = file->id;
+                image_file   = *file;
+                image_record = std::move(result.record);
+                displayed_task.reset();
+                image_live      = false;
+                reveal_selected = true;
+            } else {
+                auto& cached = thumbnails[file->id];
+                if (cached.texture) continue;
+                cached.file    = *file;
+                cached.error   = std::move(result.error);
+                cached.touched = ++thumbnail_clock;
+                if (result.image && cached.error.empty()) {
+                    cached.texture = renderer.upload(*result.image);
+                    cached.width   = result.image->width;
+                    cached.height  = result.image->height;
+                    thumbnail_bytes += std::size_t(cached.width) * cached.height * 4;
+                }
+            }
+        }
+        while (thumbnail_bytes > 16 * 1024 * 1024 || thumbnails.size() > 256) {
+            const auto oldest = std::ranges::min_element(thumbnails, {}, [](const auto& pair) { return pair.second.touched; });
+            if (oldest->second.texture) {
+                renderer.retire(oldest->second.texture);
+                thumbnail_bytes -= std::size_t(oldest->second.width) * oldest->second.height * 4;
+            }
+            thumbnails.erase(oldest);
+        }
         std::deque<Event> events;
         std::deque<PreviewFrame> previews;
         std::optional<Request> active;
@@ -211,50 +312,64 @@ namespace genesia::editor {
             const auto& frame      = previews[i];
             auto& source           = session.preview_interop.slots[frame.slot];
             const bool final_ready = std::ranges::any_of(events, [&](const Event& event) { return event.kind == EventKind::generated && event.id == frame.id; });
-            if (i + 1 != previews.size() || !following_latest || !preview_enabled || !renderer.visible || frame.id != observed_task || frame.step <= preview_step || final_ready || (!history.empty() && frame.id <= history.back().id)) {
+            if (i + 1 != previews.size() || !following_latest || !preview_enabled || !renderer.visible || frame.id != observed_task || frame.step <= preview_step || final_ready || (completed_task && frame.id <= *completed_task)) {
                 renderer.discard(*source.timeline, frame.ready);
                 continue;
             }
             const auto texture = renderer.texture({std::uint32_t(frame.width), std::uint32_t(frame.height)});
             renderer.copy(texture, source.buffer, *source.timeline, frame.ready);
-            show_image(texture, frame.width, frame.height, frame.id, !image_live || selected != frame.id);
+            show_image(texture, frame.width, frame.height, !image_live || displayed_task != frame.id, displayed_task != frame.id);
+            gallery.cancel();
             requested_image.reset();
-            selected     = frame.id;
-            image_live   = true;
-            preview_step = frame.step;
+            image_file.reset();
+            image_record.reset();
+            selected       = 0;
+            displayed_task = frame.id;
+            image_live     = true;
+            preview_step   = frame.step;
         }
         for (auto& event : events) {
             if (event.kind == EventKind::generated) {
-                auto& source = interop.slots[event.slot];
-                history.push_back({event.id, event.record, renderer.upload(event.image)});
+                completed_task = event.id;
+                auto& source   = interop.slots[event.slot];
                 if (following_latest) {
                     const auto texture = renderer.texture({std::uint32_t(event.record.parameters.width), std::uint32_t(event.record.parameters.height)});
                     renderer.copy(texture, source.buffer, *source.timeline, event.ready);
-                    show_image(texture, event.record.parameters.width, event.record.parameters.height, event.id, true);
+                    show_image(texture, event.record.parameters.width, event.record.parameters.height, true, displayed_task != event.id);
+                    gallery.cancel();
                     requested_image.reset();
-                    image_live = false;
-                    selected   = event.id;
+                    image_file.reset();
+                    image_record   = std::move(event.record);
+                    displayed_task = event.id;
+                    selected       = 0;
+                    image_live     = false;
                     if (!ImGui::GetIO().WantTextInput) image_tags = true;
                 } else renderer.discard(*source.timeline, event.ready);
                 animate_until = glfwGetTime() + 0.2;
-            } else if (event.kind == EventKind::saved) {
-                auto& item       = *std::ranges::find(history, event.id, &History::id);
-                item.record.path = std::move(event.record.path);
-                item.saved       = true;
-                if (following_latest && !active && event.id == history.back().id && (image_live || selected != event.id)) {
-                    requested_image = event.id;
-                    session.load(event.id, item.record.path);
+            } else {
+                if (!saved_task || event.id > *saved_task) {
+                    saved_task  = event.id;
+                    latest_path = event.record.path;
                 }
-            } else if (requested_image && event.id == *requested_image) {
-                show_image(renderer.upload(event.image), event.image.width, event.image.height, event.id, false);
-                selected   = event.id;
-                image_live = false;
-                requested_image.reset();
+                if (displayed_task == event.id && !image_live) image_record = std::move(event.record);
+                gallery.refresh();
             }
+        }
+        if (displayed_task && image_record && !image_record->path.empty() && !image_file) {
+            const auto file = std::ranges::find(gallery.files, image_record->path, &Gallery::File::path);
+            if (file != gallery.files.end()) {
+                selected        = file->id;
+                image_file      = *file;
+                reveal_selected = true;
+            }
+        }
+        if (initial_gallery && gallery.ready) {
+            initial_gallery = false;
+            if (!active && !displayed_task && !requested_image && !gallery.files.empty()) following_latest = select_image(gallery.files.back());
         }
     }
 
-    void UserInterface::show_image(const std::uint64_t texture, const int width, const int height, const std::uint64_t id, const bool transition) {
+    void UserInterface::show_image(const std::uint64_t texture, const int width, const int height, const bool transition, const bool reset) {
         if (transition_texture) renderer.retire(std::exchange(transition_texture, 0));
         if (transition) {
             transition_texture = image_texture;
@@ -263,10 +378,35 @@ namespace genesia::editor {
             transition_started = glfwGetTime();
             animate_until      = transition_started + 0.12;
         } else if (image_texture) renderer.retire(image_texture);
-        if (selected != id || image_width != width || image_height != height) view = {};
+        if (reset || image_width != width || image_height != height) view = {};
         image_texture = texture;
         image_width   = width;
         image_height  = height;
+    }
+
+    bool UserInterface::select_image(const Gallery::File& file) {
+        commit_parameters();
+        if (image_record && image_file && !requested_image) {
+            auto& edits = image_prompt();
+            if (!edits.editor.commit(edits.prompt, *edits.original.catalog)) return false;
+            edits.editor.suspend();
+        }
+        prompt_editor.suspend();
+        following_latest = false;
+        image_tags       = true;
+        initial_gallery  = false;
+        reveal_selected  = true;
+        if (image_file && *image_file == file && !requested_image) return true;
+        requested_image  = file;
+        requested_ticket = gallery.select(file);
+        return true;
+    }
+
+    void UserInterface::navigate_image(const int direction) {
+        const auto current  = gallery.positions.find(requested_image ? requested_image->id : selected);
+        const auto position = static_cast<std::ptrdiff_t>(current == gallery.positions.end() ? gallery.files.size() - 1 : current->second);
+        const auto next     = std::clamp<std::ptrdiff_t>(position + direction, 0, gallery.files.size() - 1);
+        if (next != position) select_image(gallery.files[next]);
     }
 
     bool UserInterface::prepare_prompt() {
@@ -392,40 +532,50 @@ namespace genesia::editor {
     }
 
     UserInterface::RepaintDraft& UserInterface::image_prompt() {
-        auto& item = *std::ranges::find(history, selected, &History::id);
-        if (!item.repaint) item.repaint = std::make_unique<RepaintDraft>(item.record.prompt);
-        return *item.repaint;
+        auto& edits = repaints[selected];
+        if (!edits) edits = std::make_unique<RepaintDraft>(*image_record, image_file->modified);
+        return *edits;
     }
 
     void UserInterface::submit(const bool repaint) {
         commit_parameters();
-        auto parameters = draft;
+        auto parameters     = draft;
+        auto prompt_catalog = catalog;
         prompt::Pair submitted;
         std::optional<RepaintSource> source;
         if (repaint) {
-            auto& edits = image_prompt();
-            if (!edits.editor.commit(edits.prompt, *catalog)) { image_tags = tags_open = true; return; }
-            submitted = edits.editor.materialize(edits.prompt);
-            const auto& item = *std::ranges::find(history, selected, &History::id);
-            parameters.width = item.record.parameters.width;
-            parameters.height = item.record.parameters.height;
+            auto& edits    = image_prompt();
+            prompt_catalog = edits.original.catalog;
+            if (!edits.editor.commit(edits.prompt, *prompt_catalog)) {
+                image_tags = tags_open = true;
+                return;
+            }
+            submitted          = edits.editor.materialize(edits.prompt);
+            parameters.width   = image_width;
+            parameters.height  = image_height;
             parameters.denoise = denoise;
-            source = RepaintSource{item.id, item.record.path};
+            source             = RepaintSource{image_file->id, image_file->path, image_file->modified};
         } else {
-            if (!prepare_prompt()) { image_tags = false; tags_open = true; return; }
-            submitted = prompt;
+            if (!prepare_prompt()) {
+                image_tags = false;
+                tags_open  = true;
+                return;
+            }
+            submitted          = prompt;
             parameters.denoise = 1;
         }
-        parameters.positive = prompt::compose(*catalog, submitted.positive);
-        parameters.negative = prompt::compose(*catalog, submitted.negative);
+        parameters.positive = prompt::compose(*prompt_catalog, submitted.positive);
+        parameters.negative = prompt::compose(*prompt_catalog, submitted.negative);
         if (random_seed) {
             std::random_device random;
             seed = (std::uint64_t(random()) << 32) | random();
         }
-        session.enqueue(std::move(parameters), seed, std::move(submitted), std::move(source));
+        session.enqueue(std::move(parameters), seed, std::move(submitted), std::move(prompt_catalog), std::move(source));
         following_latest = true;
+        initial_gallery  = false;
+        gallery.cancel();
         requested_image.reset();
-        image_tags = repaint;
+        image_tags    = repaint;
         animate_until = glfwGetTime() + 0.2;
     }
 
@@ -435,7 +585,7 @@ namespace genesia::editor {
         const float dimensions_width = !image_tags ? 112 * scale + (layout.different ? ImGui::CalcTextSize("Next").x + 12 * scale : 0) : image_texture ? ImGui::CalcTextSize(std::format("{} \xC3\x97 {}", image_width, image_height).c_str()).x : 0;
         if (layout.different) layout.image_label_width = ImGui::CalcTextSize(std::format("{} {} \xC3\x97 {} \xE2\x86\x92", image_live ? "Preview" : "Image", image_width, image_height).c_str()).x + 12 * scale;
         layout.right_width    = layout.image_label_width + dimensions_width + (image_texture ? 116 * scale : 0);
-        const float available = size.x - (2 * bottom_margin + history_amount * history_strip_width) * scale;
+        const float available = size.x - 2 * bottom_margin * scale;
         layout.image_above    = layout.right_width > available;
         if (layout.image_above) layout.right_width -= layout.image_label_width;
         return layout;
@@ -448,7 +598,7 @@ namespace genesia::editor {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
         ImGui::Begin("##Canvas", nullptr, overlay | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollWithMouse);
         const auto& io    = ImGui::GetIO();
-        const float left  = history_amount * history_strip_width * scale;
+        const float left  = 0;
         const float right = size.x - tags_amount * tag_column_width * scale;
         const ImVec2 origin{(left + right) / 2, size.y / 2};
         const ImVec2 available{(right - left) * io.DisplayFramebufferScale.x, size.y * io.DisplayFramebufferScale.y};
@@ -526,6 +676,10 @@ namespace genesia::editor {
             draw->AddText({origin.x - hint.x / 2, origin.y + 20 * scale}, IM_COL32(119, 121, 137, 255), subtitle);
             draw->AddCircle({origin.x, origin.y - 88 * scale}, 14 * scale, IM_COL32(145, 142, 225, 180), 32, 1.5F * scale);
             draw->AddCircleFilled({origin.x + 14 * scale, origin.y - 100 * scale}, 3 * scale, IM_COL32(184, 182, 250, 255));
+        }
+        if (ImGui::IsWindowFocused() && !ImGui::IsAnyItemActive() && !ImGui::GetIO().WantTextInput && !gallery.files.empty()) {
+            const int direction = int(ImGui::IsKeyPressed(ImGuiKey_RightArrow)) - int(ImGui::IsKeyPressed(ImGuiKey_LeftArrow));
+            if (direction) navigate_image(direction);
         }
         ImGui::End();
         ImGui::PopStyleVar(2);
@@ -647,18 +801,24 @@ namespace genesia::editor {
             }
             draw->PopClipRect();
         }
-        if (image_texture) control_shade({12 * scale, 4 * scale}, {132 * scale, 44 * scale}, scale);
+        if (image_texture) control_shade({12 * scale, 4 * scale}, {ImGui::CalcTextSize("GENESIA").x + 36 * scale, 44 * scale}, scale);
         ImGui::SetCursorPos({12 * scale, 4 * scale});
-        if (text_button("##History", "", scale, 36 * scale, history_open)) history_open = !history_open;
-        const auto history_origin = ImGui::GetItemRectMin();
-        const ImVec2 center{history_origin.x + 18 * scale, history_origin.y + 20 * scale};
-        const auto ink = ImGui::GetColorU32(history_open || ImGui::IsItemHovered() ? ImVec4{0.80F, 0.78F, 0.94F, 1} : ImVec4{0.57F, 0.58F, 0.64F, 1});
-        draw->AddRect({center.x - 6 * scale, center.y - 6 * scale}, {center.x + 6 * scale, center.y + 6 * scale}, ink, scale, 0, scale);
-        draw->AddLine({center.x - 2 * scale, center.y - 6 * scale}, {center.x - 2 * scale, center.y + 6 * scale}, ink, scale);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Session history");
-        ImGui::SameLine(0, 0);
         if (text_button("##Application", "GENESIA", scale)) ImGui::OpenPopup("Application");
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Application menu\nF11 to toggle fullscreen\nEsc to exit");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Application menu\nG to toggle gallery\nF11 to toggle fullscreen\nEsc to exit");
+        if (!following_latest) {
+            ImGui::SameLine(0, 4 * scale);
+            if (text_button("##Latest", "Latest", scale)) {
+                const auto latest = std::ranges::find(gallery.files, latest_path, &Gallery::File::path);
+                if (latest != gallery.files.end()) following_latest = select_image(*latest);
+                else if (!gallery.files.empty()) following_latest = select_image(gallery.files.back());
+                else following_latest = true;
+            }
+        }
+        if (!gallery.error.empty()) {
+            ImGui::SameLine(0, 4 * scale);
+            if (text_button("##GalleryError", "!", scale)) gallery.error.clear();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\nClick to dismiss", gallery.error.c_str());
+        }
         const float left_end = ImGui::GetItemRectMax().x + 4 * scale;
         if (ImGui::BeginPopup("Application")) {
             ImGui::MenuItem("Live preview", nullptr, &preview_enabled);
@@ -696,7 +856,7 @@ namespace genesia::editor {
                 draw->AddCircleFilled({origin.x + label_width + 8 * scale, origin.y + control_height * scale / 2}, 1.25F * scale, ImGui::GetColorU32(ImVec4{0.57F, 0.58F, 0.64F, alpha}));
                 draw->AddText({origin.x + status_width - time_text.x, y}, ImGui::GetColorU32(ImVec4{0.67F, 0.68F, 0.74F, alpha}), progress_time.c_str());
             }
-            const bool preview_visible = image_live && selected == active_id;
+            const bool preview_visible = image_live && displayed_task == active_id;
             const bool hidden_time     = !show_time && !queue_paused && !progress_time.empty();
             if (ImGui::IsItemHovered() && (hidden_time || preview_visible)) {
                 ImGui::BeginTooltip();
@@ -737,8 +897,7 @@ namespace genesia::editor {
             }
             x = ImGui::GetItemRectMax().x + 4 * scale;
         }
-        const auto shown = std::ranges::find(history, selected, &History::id);
-        const bool repaint_ready = image_texture && !image_live && !requested_image && shown != history.end() && shown->saved;
+        const bool repaint_ready = image_texture && !image_live && !requested_image && image_file && image_record;
         ImGui::SetCursorScreenPos({x, minimum.y});
         ImGui::PushFont(nullptr, 18);
         ImGui::BeginDisabled(unavailable || !repaint_ready);
@@ -747,7 +906,7 @@ namespace genesia::editor {
         const auto repaint_maximum = ImGui::GetItemRectMax();
         const bool repaint_hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
         if (repaint_hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) ImGui::OpenPopup("Repaint settings");
-        if (repaint_hovered && !ImGui::IsPopupOpen("Repaint settings")) ImGui::SetTooltip("Repaint this image with its edited tags\nRight-click: denoise strength");
+        if (repaint_hovered && !ImGui::IsPopupOpen("Repaint settings")) ImGui::SetTooltip(repaint_ready ? "Repaint this image with its edited tags\nRight-click: denoise strength" : "Select a saved image with Genesia prompt metadata.");
         ImGui::PopFont();
         ImGui::SetNextWindowPos({repaint_maximum.x, (top_strip_height + 6) * scale}, ImGuiCond_Always, {1, 0});
         ImGui::SetNextWindowSize({280 * scale, 0});
@@ -787,7 +946,7 @@ namespace genesia::editor {
 
     void UserInterface::tag_column(const float scale, const ImVec2 size, const ControlLayout& layout) {
         if (!tags_open || image_tags) prompt_editor.suspend();
-        const bool has_image = image_texture && !image_live && !requested_image;
+        const bool has_image = image_texture && !image_live && !requested_image && image_file && image_record;
         if (has_image && (!tags_open || !image_tags)) image_prompt().editor.suspend();
         if (tags_amount < 0.03F) return;
         const float top    = (top_strip_height + 24) * scale;
@@ -800,14 +959,14 @@ namespace genesia::editor {
         ImGui::PushStyleColor(ImGuiCol_Button, {0, 0, 0, 0});
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(image_tags ? ImGuiCol_TextDisabled : ImGuiCol_Text));
         if (ImGui::SmallButton("Draft") && image_tags) {
-            if (!has_image || image_prompt().editor.commit(image_prompt().prompt, *catalog)) image_tags = false;
+            if (!has_image || image_prompt().editor.commit(image_prompt().prompt, *image_prompt().original.catalog)) image_tags = false;
         }
         ImGui::PopStyleColor();
-        if (has_image) {
+        if (image_texture) {
             ImGui::SameLine(0, 16 * scale);
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(image_tags ? ImGuiCol_Text : ImGuiCol_TextDisabled));
-            const auto label = std::format("Image {:03}", selected + 1);
-            if (ImGui::SmallButton(label.c_str()) && !image_tags && prepare_prompt()) image_tags = true;
+            const char* label = "Image";
+            if (ImGui::SmallButton(label) && !image_tags && prepare_prompt()) image_tags = true;
             ImGui::PopStyleColor();
         }
         ImGui::PopStyleColor();
@@ -851,28 +1010,27 @@ namespace genesia::editor {
                 ImGui::EndPopup();
             }
         } else {
-            ImGui::TextDisabled("Repaint edits");
+            ImGui::TextDisabled(has_image ? "Repaint edits" : "Image details");
             if (has_image && ImGui::BeginPopupContextItem("Repaint edits")) {
                 if (ImGui::MenuItem("Reset changes")) {
-                    auto& item = *std::ranges::find(history, selected, &History::id);
                     ImGui::ClearActiveID();
-                    item.repaint = std::make_unique<RepaintDraft>(item.record.prompt);
+                    repaints[selected] = std::make_unique<RepaintDraft>(*image_record, image_file->modified);
                 }
                 ImGui::EndPopup();
             }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Temporary edits for Repaint. The original image is unchanged.\nRight-click: reset changes");
+            if (has_image && ImGui::IsItemHovered()) ImGui::SetTooltip("Temporary edits for Repaint. The original image is unchanged.\nRight-click: reset changes");
         }
         ImGui::PopFont();
         ImGui::Dummy({0, 12 * scale});
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
         ImGui::BeginChild(image_tags ? "##ImageTags" : "##DraftTags", {0, 0}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
-        if (!image_tags) prompt_editor.draw(prompt, tag_search, scale);
+        if (!image_tags) prompt_editor.draw(prompt, tag_search, *catalog, scale);
         else if (has_image) {
             auto& edits = image_prompt();
             ImGui::PushID(static_cast<int>(selected));
-            edits.editor.draw(edits.prompt, tag_search, scale);
+            edits.editor.draw(edits.prompt, tag_search, *edits.original.catalog, scale);
             ImGui::PopID();
-        } else ImGui::TextDisabled(image_live ? "Preview is not a Repaint source." : "Loading image...");
+        } else ImGui::TextDisabled(image_live ? "Preview is not a Repaint source." : requested_image ? "Loading image..." : image_file ? "No generation metadata." : image_texture ? "Saving image..." : "No image selected.");
         ImGui::EndChild();
         ImGui::PopStyleVar();
         ImGui::End();
@@ -949,7 +1107,7 @@ namespace genesia::editor {
             ImGui::SetCursorScreenPos({right - 104 * scale, y});
             const ImVec2 image{float(image_width), float(image_height)};
             const auto& io     = ImGui::GetIO();
-            const float width  = size.x - (history_amount * history_strip_width + tags_amount * tag_column_width) * scale;
+            const float width  = size.x - tags_amount * tag_column_width * scale;
             const float fitted = std::min(width * io.DisplayFramebufferScale.x / image.x, size.y * io.DisplayFramebufferScale.y / image.y);
             if (text_button("##View", std::format("{}{:.0f}%", view.fit ? "Fit \xC2\xB7 " : "", view.zoom * 100).c_str(), scale, 104 * scale)) {
                 const double now = glfwGetTime();
@@ -968,53 +1126,99 @@ namespace genesia::editor {
         ImGui::End();
     }
 
-    void UserInterface::history_strip(const float scale, const ImVec2 size) {
-        if (history_amount < 0.03F) return;
-        ImGui::SetNextWindowPos({8 * scale, (top_strip_height + 24) * scale});
-        ImGui::SetNextWindowSize({(history_strip_width - 16) * scale, size.y - (top_strip_height + 48) * scale});
+    void UserInterface::gallery_strip(const float scale, const ImVec2 size) {
+        if (gallery_amount < 0.03F) {
+            gallery.thumbnails({});
+            return;
+        }
+        const float height         = gallery_strip_height * scale;
+        const float cell           = 80 * scale;
+        const float pitch          = 86 * scale;
+        const float padding        = 12 * scale;
+        const float content        = gallery.files.empty() ? 0 : gallery.files.size() * pitch - 6 * scale;
+        const float maximum_scroll = std::max(0.0F, content + 2 * padding - size.x);
+        gallery_scroll             = std::clamp(gallery_scroll, 0.0F, maximum_scroll);
+        const auto chosen_id       = requested_image ? requested_image->id : selected;
+        if (reveal_selected && gallery_open) {
+            const auto chosen = std::ranges::find(gallery.files, chosen_id, &Gallery::File::id);
+            if (chosen != gallery.files.end()) gallery_scroll = std::clamp((chosen - gallery.files.begin()) * pitch + cell / 2 + padding - size.x / 2, 0.0F, maximum_scroll);
+            reveal_selected = false;
+        }
+        ImGui::SetNextWindowPos({0, size.y - height * gallery_amount});
+        ImGui::SetNextWindowSize({size.x, height});
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
-        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, history_amount);
-        ImGui::Begin("##HistoryStrip", nullptr, overlay | ImGuiWindowFlags_NoBackground | (history_open ? ImGuiWindowFlags_None : ImGuiWindowFlags_NoInputs));
-        if (history.empty()) ImGui::TextWrapped("No images yet.");
-        ImGui::BeginChild("##Thumbnails", {0, 0}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
-        for (auto& item : std::views::reverse(history)) {
-            ImGui::PushID(static_cast<int>(item.id));
-            const float width = ImGui::GetContentRegionAvail().x;
-            const float fit   = std::min((width - 16 * scale) / item.record.parameters.width, 96 * scale / item.record.parameters.height);
-            const float w     = fit * item.record.parameters.width;
-            const float h     = fit * item.record.parameters.height;
-            const auto p      = ImGui::GetCursorScreenPos();
-            if (ImGui::InvisibleButton("Image", {width, h + 28 * scale}, ImGuiButtonFlags_EnableNav) && item.saved) {
-                commit_parameters();
-                prompt_editor.suspend();
-                following_latest = false;
-                image_tags = true;
-                requested_image.reset();
-                if (selected != item.id || image_live) {
-                    requested_image = item.id;
-                    session.load(item.id, item.record.path);
-                } else if (transition_texture) renderer.retire(std::exchange(transition_texture, 0));
-            }
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0);
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, gallery_amount);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, {0.072F, 0.075F, 0.087F, 1});
+        ImGui::Begin("##Gallery", nullptr, overlay | ImGuiWindowFlags_NoScrollWithMouse | (gallery_open ? ImGuiWindowFlags_None : ImGuiWindowFlags_NoInputs));
+        if (ImGui::IsWindowHovered() && (ImGui::GetIO().MouseWheel || ImGui::GetIO().MouseWheelH)) {
+            ImGui::SetKeyOwner(ImGuiKey_MouseWheelY, ImGui::GetID("##GalleryWheel"));
+            ImGui::SetKeyOwner(ImGuiKey_MouseWheelX, ImGui::GetID("##GalleryWheel"));
+            gallery_scroll = std::clamp(gallery_scroll - (ImGui::GetIO().MouseWheel + ImGui::GetIO().MouseWheelH) * 2 * pitch, 0.0F, maximum_scroll);
+        }
+        auto* draw        = ImGui::GetWindowDrawList();
+        const auto origin = ImGui::GetWindowPos();
+        const float start = content + 2 * padding < size.x ? (size.x - content) / 2 : padding - gallery_scroll;
+        const auto first  = std::min(gallery.files.size(), static_cast<std::size_t>(gallery_scroll / pitch));
+        const auto last   = std::min(gallery.files.size(), first + static_cast<std::size_t>(std::ceil(size.x / pitch)) + 1);
+        std::vector<Gallery::File> wanted;
+        for (std::size_t i = first; i < last; ++i) {
+            const auto& file = gallery.files[i];
+            wanted.push_back(file);
+            const auto cached = thumbnails.find(file.id);
+            const bool chosen = file.id == chosen_id;
+            const ImVec2 minimum{origin.x + start + i * pitch, origin.y + padding};
+            const ImVec2 maximum{minimum.x + cell, minimum.y + cell};
+            ImGui::SetCursorScreenPos(minimum);
+            ImGui::PushID(reinterpret_cast<const char*>(&file.id), reinterpret_cast<const char*>(&file.id) + sizeof(file.id));
+            if (ImGui::InvisibleButton("##Image", {cell, cell})) select_image(file);
             const bool hovered = ImGui::IsItemHovered();
-            const bool chosen  = !following_latest && item.id == requested_image.value_or(selected);
-            auto* draw         = ImGui::GetWindowDrawList();
-            const ImVec2 minimum{p.x + (width - w) / 2, p.y};
-            draw->AddImage(item.texture, minimum, {minimum.x + w, minimum.y + h}, {0, 0}, {1, 1}, ImGui::GetColorU32(ImVec4{1, 1, 1, chosen || hovered ? 1.0F : 0.75F}));
-            if (chosen) draw->AddLine({p.x + 2 * scale, p.y + 4 * scale}, {p.x + 2 * scale, p.y + h - 4 * scale}, ImGui::GetColorU32(ImVec4{0.65F, 0.60F, 0.88F, 0.9F}), 2 * scale);
-            ImGui::PushFont(nullptr, 12);
-            const auto label = std::format("{:03}", item.id + 1);
-            draw->AddText({p.x + (width - ImGui::CalcTextSize(label.c_str()).x) / 2, p.y + h + 6 * scale}, ImGui::GetColorU32(ImGuiCol_TextDisabled), label.c_str());
-            ImGui::PopFont();
-            if (hovered) ImGui::SetTooltip("%d x %d\nSeed: %llu%s", item.record.parameters.width, item.record.parameters.height, static_cast<unsigned long long>(item.record.seed), item.saved ? "\nTab: show tags" : "\nSaving...");
+            if (cached != thumbnails.end()) {
+                auto& image   = cached->second;
+                image.touched = ++thumbnail_clock;
+                if (image.texture) {
+                    const float fit = std::min((cell - 6 * scale) / image.width, (cell - 6 * scale) / image.height);
+                    const ImVec2 dimensions{image.width * fit, image.height * fit};
+                    const ImVec2 p{minimum.x + (cell - dimensions.x) / 2, minimum.y + (cell - dimensions.y) / 2};
+                    draw->AddImage(image.texture, p, {p.x + dimensions.x, p.y + dimensions.y}, {0, 0}, {1, 1}, ImGui::GetColorU32(ImVec4{1, 1, 1, chosen || hovered ? 1.0F : 0.82F}));
+                } else if (!image.error.empty()) draw->AddText({minimum.x + cell / 2 - 3 * scale, minimum.y + cell / 2 - ImGui::GetFontSize() / 2}, ImGui::GetColorU32(ImVec4{0.87F, 0.58F, 0.57F, 1}), "!");
+            } else draw->AddRectFilled({minimum.x + 3 * scale, minimum.y + 3 * scale}, {maximum.x - 3 * scale, maximum.y - 3 * scale}, ImGui::GetColorU32(ImVec4{0.11F, 0.115F, 0.13F, 1}), 4 * scale);
+            if (chosen || hovered) draw->AddRect(minimum, maximum, ImGui::GetColorU32(chosen ? ImVec4{0.65F, 0.60F, 0.88F, 0.95F} : ImVec4{0.60F, 0.60F, 0.66F, 0.35F}), 6 * scale, 0, scale);
+            if (hovered) {
+                ImGui::BeginTooltip();
+                const auto name = file.path.filename().u8string();
+                ImGui::TextUnformatted(reinterpret_cast<const char*>(name.c_str()));
+                if (file.id == selected && !image_live) {
+                    ImGui::TextDisabled("%d x %d", image_width, image_height);
+                    if (image_record) ImGui::TextDisabled("Seed: %llu  |  Steps: %d  |  CFG: %.1f", static_cast<unsigned long long>(image_record->seed), image_record->parameters.steps, image_record->parameters.cfg);
+                }
+                if (cached != thumbnails.end() && !cached->second.error.empty()) ImGui::TextWrapped("%s", cached->second.error.c_str());
+                else ImGui::TextDisabled("Click: view image   |   Tab: tags");
+                ImGui::EndTooltip();
+            }
             if (ImGui::BeginPopupContextItem()) {
-                if (ImGui::MenuItem("Open image folder", nullptr, false, item.saved)) ShellExecuteW(window.native_window, L"open", std::filesystem::absolute(item.record.path.parent_path()).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                if (ImGui::MenuItem("Open image folder")) ShellExecuteW(window.native_window, L"open", file.path.parent_path().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
                 ImGui::EndPopup();
             }
             ImGui::PopID();
         }
-        ImGui::EndChild();
+        for (std::size_t offset = 1; offset <= 4; ++offset) {
+            if (first >= offset) wanted.push_back(gallery.files[first - offset]);
+            if (last + offset - 1 < gallery.files.size()) wanted.push_back(gallery.files[last + offset - 1]);
+        }
+        gallery.thumbnails(gallery_open ? std::move(wanted) : std::vector<Gallery::File>{});
+        if (gallery.files.empty()) {
+            const char* text  = gallery.ready ? "No images in the output folder." : "Reading output folder...";
+            const auto extent = ImGui::CalcTextSize(text);
+            draw->AddText({origin.x + (size.x - extent.x) / 2, origin.y + (height - extent.y) / 2}, ImGui::GetColorU32(ImGuiCol_TextDisabled), text);
+        }
+        if (ImGui::IsWindowFocused() && !ImGui::IsAnyItemActive() && !ImGui::GetIO().WantTextInput && !gallery.files.empty()) {
+            const int direction = int(ImGui::IsKeyPressed(ImGuiKey_RightArrow)) - int(ImGui::IsKeyPressed(ImGuiKey_LeftArrow));
+            if (direction) navigate_image(direction);
+        }
         ImGui::End();
-        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor();
+        ImGui::PopStyleVar(3);
     }
 
     void UserInterface::draw() {
@@ -1025,9 +1229,9 @@ namespace genesia::editor {
         const auto size           = ImGui::GetIO().DisplaySize;
         const float interpolation = std::min(1.0F, ImGui::GetIO().DeltaTime / 0.045F);
         tags_amount               = std::lerp(tags_amount, tags_open ? 1.0F : 0.0F, interpolation);
-        history_amount            = std::lerp(history_amount, history_open ? 1.0F : 0.0F, interpolation);
+        gallery_amount            = std::lerp(gallery_amount, gallery_open ? 1.0F : 0.0F, interpolation);
         if (std::abs(tags_amount - float(tags_open)) < 0.01F) tags_amount = float(tags_open);
-        if (std::abs(history_amount - float(history_open)) < 0.01F) history_amount = float(history_open);
+        if (std::abs(gallery_amount - float(gallery_open)) < 0.01F) gallery_amount = float(gallery_open);
         std::string error;
         {
             const std::lock_guard lock{session.mutex};
@@ -1035,17 +1239,18 @@ namespace genesia::editor {
             session.preview_visible = renderer.visible && following_latest;
             error                   = session.error;
         }
-        const auto controls   = control_layout(scale, size);
+        const ImVec2 viewport{size.x, size.y - gallery_amount * gallery_strip_height * scale};
+        const auto controls     = control_layout(scale, viewport);
         const auto editor_state = [&] {
-            const PromptEditor* editor = !image_tags ? &prompt_editor : image_texture && !image_live && !requested_image ? &image_prompt().editor : nullptr;
+            const PromptEditor* editor = !image_tags ? &prompt_editor : image_texture && !image_live && !requested_image && image_file && image_record ? &image_prompt().editor : nullptr;
             return std::pair{editor && editor->escape_owned, editor && editor->focus_input};
         };
         const bool dismissing = escape_owned || parameter_edit.id || (tags_open && editor_state().first) || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
         if (renderer.visible) {
-            canvas(scale, size);
-            tag_column(scale, size, controls);
-            bottom_controls(scale, size, controls);
-            history_strip(scale, size);
+            canvas(scale, viewport);
+            tag_column(scale, viewport, controls);
+            bottom_controls(scale, viewport, controls);
+            gallery_strip(scale, size);
             top_strip(scale, size);
             preset_dialogs(scale);
             if (!error.empty() && error != shown_error) {
@@ -1064,7 +1269,10 @@ namespace genesia::editor {
             if (ImGui::Shortcut(ImGuiKey_F11, ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverActive)) window.toggle_fullscreen();
             if (!dismissing && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && ImGui::Shortcut(ImGuiKey_Escape, ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverActive)) window.request_close();
             escape_owned = parameter_edit.id || (tags_open && editor_state().first) || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
-            if (!ImGui::GetIO().WantTextInput && !(tags_open && editor_state().second) && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && ImGui::Shortcut(ImGuiKey_Tab, ImGuiInputFlags_RouteGlobal)) tags_open = !tags_open;
+            if (!ImGui::GetIO().WantTextInput && !(tags_open && editor_state().second) && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
+                if (ImGui::Shortcut(ImGuiKey_Tab, ImGuiInputFlags_RouteGlobal)) tags_open = !tags_open;
+                if (!ImGui::IsAnyItemActive() && ImGui::Shortcut(ImGuiKey_G, ImGuiInputFlags_RouteGlobal)) gallery_open = !gallery_open;
+            }
             const auto& io = ImGui::GetIO();
             if (io.MouseDelta.x || io.MouseDelta.y || io.MouseWheel || io.InputQueueCharacters.Size || ImGui::IsAnyItemActive()) animate_until = glfwGetTime() + 0.16;
         }

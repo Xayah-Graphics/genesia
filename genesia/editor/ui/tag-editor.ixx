@@ -78,7 +78,7 @@ export namespace genesia::editor {
         void replace(prompt::Group& group, std::vector<prompt::Tag> tags);
         void erase(prompt::Group& group, std::size_t index);
         bool commit(prompt::Group& group, const prompt::Catalog& catalog, std::optional<std::uint32_t> candidate = {});
-        void draw(const char* payload_type, std::size_t group_index, prompt::Group& group, const TagSearch& search, const TagLayout& layout, float scale, std::optional<TagMove>& move);
+        void draw(const char* payload_type, std::size_t group_index, prompt::Group& group, const TagSearch& search, const prompt::Catalog& catalog, const TagLayout& layout, float scale, std::optional<TagMove>& move);
         static int input_callback(ImGuiInputTextCallbackData* data);
     };
     struct PromptEditor final {
@@ -103,7 +103,7 @@ export namespace genesia::editor {
         prompt::Pair materialize(const prompt::Pair& prompt) const;
         void remember(Snapshot before, const prompt::Pair& after);
         bool commit(prompt::Pair& prompt, const prompt::Catalog& catalog);
-        void draw_groups(prompt::Side& side, std::size_t side_index, const TagSearch& search, float scale);
-        void draw(prompt::Pair& prompt, const TagSearch& search, float scale);
+        void draw_groups(prompt::Side& side, std::size_t side_index, const TagSearch& search, const prompt::Catalog& catalog, float scale);
+        void draw(prompt::Pair& prompt, const TagSearch& search, const prompt::Catalog& catalog, float scale);
     };
 } // namespace genesia::editor

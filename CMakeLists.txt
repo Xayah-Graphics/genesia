@@ -155,6 +155,7 @@ if (GENESIA_BUILD_UI)
             genesia/editor/platform/interop.cpp
             genesia/editor/platform/interop.cu
             genesia/editor/session/session.cpp
+            genesia/editor/gallery/gallery.cpp
             genesia/editor/ui/ui.cpp
             genesia/editor/ui/tag-editor.cpp
             genesia/editor/editor.cpp
@@ -170,6 +171,7 @@ if (GENESIA_BUILD_UI)
             genesia/editor/ui/renderer.ixx
             genesia/editor/platform/interop.ixx
             genesia/editor/session/session.ixx
+            genesia/editor/gallery/gallery.ixx
             genesia/editor/ui/ui.ixx
             genesia/editor/ui/tag-editor.ixx
     )
