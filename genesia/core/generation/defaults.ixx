@@ -8,8 +8,7 @@ export namespace genesia::defaults {
     inline constexpr float cfg        = 4.5F;
     inline constexpr float denoise    = 0.75F;
     inline constexpr bool random_seed = true;
-    inline constexpr std::array<std::uint64_t, 1> seeds{16494404764960740964ULL};
-    inline constexpr int warmup              = 0;
+    inline constexpr std::uint64_t seed      = 16494404764960740964ULL;
     inline constexpr bool preview_enabled    = true;
     inline constexpr int preview_interval_ms = 1000;
 #if defined(_WIN32)

@@ -7,6 +7,7 @@ export namespace genesia::prompt {
         std::string name;
         Pair prompt;
     };
+    Pair read_prompt(const std::filesystem::path& path, const Catalog& catalog);
     Preset read_preset(std::string_view name, const Catalog& catalog);
     void write_preset(const Preset& preset, const Catalog& catalog, bool replace = true);
     std::vector<std::string> list_presets();

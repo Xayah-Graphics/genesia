@@ -32,20 +32,18 @@
           "blue_sailor_collar",
           "long_sleeves",
           "pleated_skirt",
-          "blue_beret",
-          "skinny",
-          "black_thighhighs",
-          "slim_legs"
+          "blue_beret"
         ]
       },
       {
         "enabled": true,
         "tags": [
           "1girl",
-          "indoors",
           "solo",
           "portrait",
-          "looking_at_viewer"
+          "looking_at_viewer",
+          "simple_background",
+          "upper_body"
         ]
       }
     ]

@@ -6,12 +6,12 @@ import genesia.generation.defaults;
 import std;
 
 namespace genesia::prompt {
-    Preset read_preset(const std::string_view name, const Catalog& catalog) {
-        std::ifstream file{std::filesystem::path{defaults::assets} / "prompts" / (std::string{name} + ".json")};
+    Pair read_prompt(const std::filesystem::path& path, const Catalog& catalog) {
+        std::ifstream file{path};
         file.exceptions(std::ios::badbit | std::ios::failbit);
         const auto json = nlohmann::json::parse(file);
-        Preset result{std::string{name}, {}};
-        for (const auto& [key, side] : {std::pair{"positive", &result.prompt.positive}, std::pair{"negative", &result.prompt.negative}}) {
+        Pair result;
+        for (const auto& [key, side] : {std::pair{"positive", &result.positive}, std::pair{"negative", &result.negative}}) {
             const auto& input = json.at(key);
             side->fixed       = input.at("fixed");
             for (const auto& source : input.at("groups")) {
@@ -26,6 +26,10 @@ namespace genesia::prompt {
             }
         }
         return result;
+    }
+
+    Preset read_preset(const std::string_view name, const Catalog& catalog) {
+        return {std::string{name}, read_prompt(std::filesystem::path{defaults::assets} / "prompts" / (std::string{name} + ".json"), catalog)};
     }
 
     void write_preset(const Preset& preset, const Catalog& catalog, const bool replace) {

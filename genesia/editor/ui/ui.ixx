@@ -81,7 +81,7 @@ export namespace genesia::editor {
         std::size_t thumbnail_bytes{};
         bool reveal_selected{};
         float gallery_scroll{};
-        std::uint64_t seed{defaults::seeds.front()};
+        std::uint64_t seed{defaults::seed};
         bool random_seed{defaults::random_seed};
         bool tags_open{};
         bool gallery_open{};

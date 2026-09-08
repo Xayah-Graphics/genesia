@@ -5,5 +5,5 @@ export import genesia.prompt.preset;
 import std;
 
 export namespace genesia::headless {
-    void run(const prompt::Preset& preset, const std::shared_ptr<const prompt::Catalog>& catalog);
+    void run(const prompt::Preset& preset, const std::shared_ptr<const prompt::Catalog>& catalog, int count, std::optional<std::uint64_t> first_seed);
 }

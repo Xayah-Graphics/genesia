@@ -105,8 +105,7 @@ namespace genesia {
             std::filesystem::remove(temporary);
             throw;
         }
-        std::println("SAVE {} {:.3f}s", path.string(), std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
-        std::cout.flush();
+        std::println(std::cerr, "SAVE {} {:.3f}s", path.string(), std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
         return path;
     }
 
