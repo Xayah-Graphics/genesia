@@ -49,6 +49,10 @@ namespace genesia {
         const auto started = std::chrono::steady_clock::now();
         const auto model   = record.model.u8string();
         nlohmann::json metadata{{"version", 1}, {"model", std::string{model.begin(), model.end()}}, {"seed", record.seed}, {"steps", record.parameters.steps}, {"cfg", record.parameters.cfg}, {"sampler", "euler"}, {"scheduler", "simple"}};
+        if (!record.source.empty()) {
+            const auto source = record.source.u8string();
+            metadata["repaint"] = {{"source", std::string{source.begin(), source.end()}}, {"denoise", record.parameters.denoise}};
+        }
         for (const auto& [name, side, text] : {std::tuple{"positive", &record.prompt.positive, &record.parameters.positive}, std::tuple{"negative", &record.prompt.negative, &record.parameters.negative}}) {
             auto& saved     = metadata["prompt"][name];
             saved["text"]   = *text;

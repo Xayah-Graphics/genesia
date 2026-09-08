@@ -127,9 +127,10 @@ target_link_libraries(
         PUBLIC
         CCCL::libcudacxx
         CUDA::toolkit
-        genesia::cudnn-frontend
+        cuDNN::cuDNN
         CUDA::cublasLt
         PRIVATE
+        genesia::cudnn-frontend
         CUDA::cudart
         CUDA::cuda_driver
         CUDA::nvrtc

@@ -12,11 +12,16 @@ import genesia.editor.runtime.images;
 import std;
 
 export namespace genesia::editor {
+    struct RepaintSource final {
+        std::uint64_t id;
+        std::filesystem::path path;
+    };
     struct Request final {
         std::uint64_t id{};
         sdxl::Parameters parameters;
         std::uint64_t seed{};
         prompt::Pair prompt;
+        std::optional<RepaintSource> source;
     };
     enum class EventKind { generated, saved, loaded };
     struct Event final {
@@ -59,7 +64,7 @@ export namespace genesia::editor {
 
         Session(std::shared_ptr<const prompt::Catalog> catalog, Interop& interop, Interop& preview_interop);
         ~Session();
-        void enqueue(sdxl::Parameters parameters, std::uint64_t seed, prompt::Pair prompt);
+        void enqueue(sdxl::Parameters parameters, std::uint64_t seed, prompt::Pair prompt, std::optional<RepaintSource> source = {});
         void stop();
         void resume();
         void load(std::uint64_t id, std::filesystem::path path);

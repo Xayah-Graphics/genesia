@@ -54,10 +54,10 @@ namespace genesia::editor {
         stream.sync();
     }
 
-    void Session::enqueue(sdxl::Parameters parameters, const std::uint64_t seed, prompt::Pair prompt) {
+    void Session::enqueue(sdxl::Parameters parameters, const std::uint64_t seed, prompt::Pair prompt, std::optional<RepaintSource> source) {
         {
             const std::lock_guard lock{mutex};
-            queue.push_back({next_id++, std::move(parameters), seed, std::move(prompt)});
+            queue.push_back({next_id++, std::move(parameters), seed, std::move(prompt), std::move(source)});
         }
         condition.notify_all();
     }
@@ -101,6 +101,8 @@ namespace genesia::editor {
             model                   = std::make_unique<sdxl::Model>(stream, defaults::checkpoint, defaults::cache);
             std::println("LOAD {:.3f}s", std::chrono::duration<double>(std::chrono::steady_clock::now() - load_started).count());
             std::cout.flush();
+            std::unique_ptr<sdxl::ImageInput> source_image;
+            std::optional<std::uint64_t> encoded_image, prepared_image;
             std::unique_ptr<sdxl::Inference> inference;
             struct PendingWrites final {
                 Session& session;
@@ -127,14 +129,29 @@ namespace genesia::editor {
                     active  = request;
                     started = std::chrono::steady_clock::now();
                     ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].cancel}.store(0);
+                    ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].stage}.store(static_cast<std::uint32_t>(sdxl::Stage::preparing));
                 }
                 glfwPostEmptyEvent();
-                if (!inference || inference->parameters != request.parameters) {
+                const auto source_id = request.source ? std::optional{request.source->id} : std::nullopt;
+                if (!inference || inference->parameters != request.parameters || source_id != prepared_image) {
                     {
                         std::unique_lock lock{mutex};
                         condition.wait(lock, [this] { return !saving[0] && !saving[1]; });
                     }
                     inference.reset();
+                    if (request.source) {
+                        if (source_id != encoded_image) {
+                            const auto pixels = read_image(request.source->path);
+                            source_image = std::make_unique<sdxl::ImageInput>(stream, pixels.pixels, pixels.width, pixels.height);
+                            encoded_image = source_id;
+                        }
+                        if (request.parameters.denoise > 0 && source_image->latent.empty()) {
+                            const auto started = std::chrono::steady_clock::now();
+                            model->encode(*source_image);
+                            std::println("ENCODE {:.3f}s", std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
+                        }
+                    }
+                    prepared_image = source_id;
                     if (!snapshots || snapshots->width != request.parameters.width || snapshots->height != request.parameters.height) {
                         auto next = std::make_shared<sdxl::Snapshots>(stream, request.parameters.width, request.parameters.height);
                         stream.sync();
@@ -142,8 +159,7 @@ namespace genesia::editor {
                         snapshots     = std::move(next);
                         preview_ready = false;
                     }
-                    ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].stage}.store(static_cast<std::uint32_t>(sdxl::Stage::preparing));
-                    inference = std::make_unique<sdxl::Inference>(*model, request.parameters, control.data()[0], snapshots.get());
+                    inference = std::make_unique<sdxl::Inference>(*model, request.parameters, control.data()[0], snapshots.get(), request.source ? source_image.get() : nullptr);
                     std::println("READY prepare={:.3f}s cache={}/{} memory={:.2f}GiB", inference->prepare_seconds, inference->cache_hits, inference->cache_misses, inference->resident_bytes / double(1ull << 30));
                     std::cout.flush();
                     interop.prepare(request.parameters.width, request.parameters.height, stream);
@@ -157,13 +173,13 @@ namespace genesia::editor {
                     }
                     {
                         std::unique_lock lock{mutex};
-                        if (!preview_ready) {
+                        if (!preview_ready && request.parameters.denoise > 0) {
                             preview_prepare = true;
                             condition.notify_all();
                             condition.wait(lock, [this] { return preview_ready || !error.empty(); });
                             if (!error.empty()) throw std::runtime_error{error};
                         }
-                        preview_sampling = true;
+                        preview_sampling = request.parameters.denoise > 0;
                     }
                     condition.notify_all();
                     const auto& output = inference->generate(request.seed);
@@ -174,7 +190,7 @@ namespace genesia::editor {
                     condition.notify_all();
                     if (!output.cancelled) {
                         const auto ready = interop.publish(output.device_pixels, output.width, output.height, output.stream, slot);
-                        Record record{request.parameters, request.seed, {}, std::filesystem::path{defaults::checkpoint}.filename(), request.prompt, catalog};
+                        Record record{request.parameters, request.seed, {}, std::filesystem::path{defaults::checkpoint}.filename(), request.prompt, catalog, request.source ? request.source->path.filename() : std::filesystem::path{}};
                         auto preview = thumbnail({output.pixels.data(), output.pixels.size()}, output.width, output.height);
                         {
                             const std::lock_guard lock{mutex};

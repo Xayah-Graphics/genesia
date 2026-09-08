@@ -6,6 +6,7 @@ export namespace genesia::defaults {
     inline constexpr int height       = 1536;
     inline constexpr int steps        = 50;
     inline constexpr float cfg        = 4.5F;
+    inline constexpr float denoise    = 0.50F;
     inline constexpr bool random_seed = true;
     inline constexpr std::array<std::uint64_t, 1> seeds{16494404764960740964ULL};
     inline constexpr int warmup              = 0;

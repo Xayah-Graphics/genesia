@@ -1,20 +1,24 @@
 # syntax=docker/dockerfile:1
 # hadolint global ignore=DL3007
 
-FROM archlinux:latest AS build
+FROM archlinux:latest AS cuda
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
 RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
-    pacman -Syu --noconfirm --needed \
-        base-devel \
-        cmake \
-        cuda \
-        cudnn \
-        git \
-        ninja
+    pacman -Syu --noconfirm --needed cuda cudnn gcc-libs
 
 ENV PATH="/opt/cuda/bin:${PATH}"
+
+
+FROM cuda AS build
+
+RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
+    pacman -S --noconfirm --needed \
+        base-devel \
+        cmake \
+        git \
+        ninja
 
 WORKDIR /src
 COPY --link . .
@@ -30,11 +34,9 @@ RUN cmake -S . -B cmake-build-release -G Ninja \
     && cmake --build cmake-build-release --target genesia --parallel
 
 
-FROM archlinux:latest AS runtime
+FROM cuda AS runtime
 
-RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
-    pacman -Syu --noconfirm --needed cuda cudnn gcc-libs \
-    && groupadd --gid 10001 genesia \
+RUN groupadd --gid 10001 genesia \
     && useradd --uid 10001 --gid 10001 --home-dir /workspace --shell /usr/bin/nologin genesia \
     && install --directory --owner=10001 --group=10001 /opt/genesia/bin /workspace
 

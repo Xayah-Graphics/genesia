@@ -30,11 +30,18 @@ export namespace genesia::editor {
             void update(ImVec2 available, ImVec2 image, double now);
             void constrain(ImVec2 available, ImVec2 image);
         };
+        struct RepaintDraft final {
+            prompt::Pair prompt;
+            PromptEditor editor;
+
+            explicit RepaintDraft(const prompt::Pair& original);
+        };
         struct History final {
             std::uint64_t id;
             Record record;
             std::uint64_t texture{};
             bool saved{};
+            std::unique_ptr<RepaintDraft> repaint;
         };
         struct ParameterEdit final {
             ImGuiID id{};
@@ -69,6 +76,8 @@ export namespace genesia::editor {
         bool history_open{};
         ParameterEdit parameter_edit;
         bool following_latest{true};
+        bool image_tags{};
+        float denoise{defaults::denoise};
         float tags_amount{};
         float history_amount{};
         ImageView view;
@@ -98,8 +107,8 @@ export namespace genesia::editor {
         bool save_prompt();
         void switch_preset();
         void preset_dialogs(float scale);
-        void submit();
-        void return_to_create();
+        RepaintDraft& image_prompt();
+        void submit(bool repaint = false);
         ControlLayout control_layout(float scale, ImVec2 size) const;
         void canvas(float scale, ImVec2 size);
         void generation_settings(float scale, ImVec2 size);

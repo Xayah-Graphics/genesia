@@ -124,10 +124,10 @@ namespace genesia::editor {
         return result;
     }
 
-    TagLayout::TagLayout(const prompt::Group& group, const prompt::Catalog& catalog, const float width, const float scale, const TagEditor* editor) : width{width} {
-        input_expanded          = editor && (editor->editing || editor->input_active || editor->focus_input || !editor->input.empty());
-        const auto editing      = editor ? editor->editing : std::nullopt;
-        const std::size_t count = group.tags.size() + std::size_t(editor && !editing);
+    TagLayout::TagLayout(const prompt::Group& group, const prompt::Catalog& catalog, const float width, const float scale, const TagEditor& editor) : width{width} {
+        input_expanded          = editor.editing || editor.input_active || editor.focus_input || !editor.input.empty();
+        const auto editing      = editor.editing;
+        const std::size_t count = group.tags.size() + std::size_t(!editing);
         items.reserve(count);
         float x{}, y{};
         for (std::size_t i = 0; i < count; ++i) {
@@ -136,12 +136,13 @@ namespace genesia::editor {
             const auto text          = input ? std::string_view{} : catalog.tags[tag.id].text;
             std::string weight       = !input && tag.weight != 1 ? std::format("{:g}\xC3\x97", tag.weight) : "";
             const float weight_width = weight.empty() ? 0 : ImGui::CalcTextSize(weight.c_str()).x + weight_gap * scale;
-            const float item_width   = std::min(width, input ? (input_expanded ? 220 : tag_height) * scale : ImGui::CalcTextSize(text.data(), text.data() + text.size()).x + weight_width + 2 * tag_padding * scale);
+            const bool added = !input && editor.change && !editor.change->tags[i].original;
+            const float item_width   = std::min(width, input ? (input_expanded ? 220 : tag_height) * scale : ImGui::CalcTextSize(text.data(), text.data() + text.size()).x + weight_width + (2 * tag_padding + (added ? 10 : 0)) * scale);
             if (x && x + item_width > width) {
                 x = 0;
                 y += (tag_height + tag_gap) * scale;
             }
-            items.push_back({text, std::move(weight), {x, y}, item_width, weight_width, input});
+            items.push_back({text, std::move(weight), {x, y}, item_width, weight_width, input, added});
             x += item_width + tag_gap * scale;
         }
         height = y + tag_height * scale;
@@ -153,6 +154,16 @@ namespace genesia::editor {
         selection.clear();
         anchor = 0;
         if (input_active) focus_input = true;
+    }
+
+    void TagEditor::erase(prompt::Group& group, const std::size_t index) {
+        if (change && change->tags[index].original) change->tags[index].removed = !change->tags[index].removed;
+        else {
+            if (change) change->tags.erase(change->tags.begin() + index);
+            group.tags.erase(group.tags.begin() + index);
+        }
+        selection.clear();
+        anchor = 0;
     }
 
     bool TagEditor::commit(prompt::Group& group, const prompt::Catalog& catalog, const std::optional<std::uint32_t> candidate) {
@@ -180,6 +191,15 @@ namespace genesia::editor {
         const auto position = editing.value_or(next.size());
         if (editing) next.erase(next.begin() + position);
         next.insert(next.begin() + position, parsed->begin(), parsed->end());
+        if (change) {
+            TagChange original;
+            if (editing) {
+                original = change->tags[position];
+                change->tags.erase(change->tags.begin() + position);
+            }
+            change->tags.insert(change->tags.begin() + position, parsed->size(), TagChange{});
+            change->tags[position] = original;
+        }
         replace(group, std::move(next));
         input.clear();
         editing.reset();
@@ -281,18 +301,32 @@ namespace genesia::editor {
                 const bool pointer_over = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
                 tag_hovered |= pointer_over;
                 const bool selected = selection.contains(i);
+                const auto* change = this->change ? &this->change->tags[i] : nullptr;
+                const bool removed = change && change->removed;
+                const bool modified = change && change->original && (*change->original != tag || change->group != group_index || change->index != i);
+                const ImVec4 ink = removed ? ImVec4{0.53F, 0.53F, 0.58F, 0.55F} : item.added ? ImVec4{0.58F, 0.80F, 0.67F, 1} : modified ? ImVec4{0.77F, 0.70F, 0.97F, 1} : ImVec4{0.76F, 0.76F, 0.81F, 1};
                 auto* draw          = ImGui::GetWindowDrawList();
                 auto* storage       = ImGui::GetStateStorage();
                 const auto key      = ImGui::GetItemID();
                 const float alpha   = std::lerp(storage->GetFloat(key), selected || hovered ? 1.0F : 0.0F, std::min(1.0F, ImGui::GetIO().DeltaTime / 0.12F));
                 storage->SetFloat(key, alpha);
                 draw->AddRectFilled(p, {p.x + item_width, p.y + tag_height * scale}, ImGui::GetColorU32(selected ? ImVec4{0.23F, 0.21F, 0.32F, alpha * 0.70F} : ImVec4{0.20F, 0.205F, 0.25F, alpha * 0.55F}), 5 * scale);
+                if ((item.added || modified) && !removed) draw->AddRect(p, {p.x + item_width, p.y + tag_height * scale}, ImGui::GetColorU32(ImVec4{ink.x, ink.y, ink.z, 0.28F}), 5 * scale);
+                if (item.added) {
+                    const ImVec2 plus{p.x + (tag_padding + 3) * scale, p.y + tag_height * scale / 2};
+                    draw->AddLine({plus.x - 2.5F * scale, plus.y}, {plus.x + 2.5F * scale, plus.y}, ImGui::GetColorU32(ink), scale);
+                    draw->AddLine({plus.x, plus.y - 2.5F * scale}, {plus.x, plus.y + 2.5F * scale}, ImGui::GetColorU32(ink), scale);
+                }
                 draw->PushClipRect(p, {p.x + item_width - weight_width - tag_padding * scale, p.y + tag_height * scale}, true);
-                draw->AddText({p.x + tag_padding * scale, p.y + (tag_height * scale - ImGui::GetFontSize()) / 2}, ImGui::GetColorU32(selected ? ImVec4{0.79F, 0.75F, 0.95F, 1} : ImVec4{0.71F + alpha * 0.15F, 0.71F + alpha * 0.15F, 0.76F + alpha * 0.15F, 1}), text.data(), text.data() + text.size());
+                draw->AddText({p.x + (tag_padding + (item.added ? 10 : 0)) * scale, p.y + (tag_height * scale - ImGui::GetFontSize()) / 2}, ImGui::GetColorU32(ink), text.data(), text.data() + text.size());
                 draw->PopClipRect();
-                if (!weight.empty()) draw->AddText({p.x + item_width - weight_width + (weight_gap - tag_padding) * scale, p.y + (tag_height * scale - ImGui::GetFontSize()) / 2}, IM_COL32(177, 168, 218, 255), weight.c_str());
-                if (pointer_over && !ImGui::GetDragDropPayload() && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) remove = i;
-                if (clicked) {
+                if (!weight.empty()) draw->AddText({p.x + item_width - weight_width + (weight_gap - tag_padding) * scale, p.y + (tag_height * scale - ImGui::GetFontSize()) / 2}, ImGui::GetColorU32(ink), weight.c_str());
+                if (removed) draw->AddLine({p.x + tag_padding * scale, p.y + tag_height * scale / 2}, {p.x + item_width - tag_padding * scale, p.y + tag_height * scale / 2}, ImGui::GetColorU32(ink), scale);
+                if (pointer_over && !ImGui::GetDragDropPayload() && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+                    ImGui::FocusWindow(ImGui::GetCurrentWindow());
+                    remove = i;
+                }
+                if (clicked && !removed) {
                     if (!weight.empty() && ImGui::GetIO().MousePos.x >= p.x + item_width - weight_width - tag_padding * scale) ImGui::OpenPopup("Weight");
                     else if (ImGui::GetIO().KeyShift) {
                         selection.clear();
@@ -305,7 +339,7 @@ namespace genesia::editor {
                         anchor = i;
                     }
                 }
-                if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                if (!removed && hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                     editing     = i;
                     input       = prompt::serialize(catalog, std::span{group.tags}.subspan(i, 1));
                     cursor      = input.size();
@@ -313,7 +347,7 @@ namespace genesia::editor {
                     error.reset();
                     ++revision;
                 }
-                if (ImGui::BeginDragDropSource()) {
+                if (!removed && ImGui::BeginDragDropSource()) {
                     const std::array location{group_index, i};
                     ImGui::SetDragDropPayload(payload_type, location.data(), sizeof(location));
                     ImGui::TextUnformatted(text.data(), text.data() + text.size());
@@ -333,15 +367,15 @@ namespace genesia::editor {
                 }
                 bool open_weight{};
                 if (ImGui::BeginPopupContextItem("Actions")) {
-                    if (ImGui::MenuItem("Edit tag")) {
+                    if (ImGui::MenuItem("Edit tag", nullptr, false, !removed)) {
                         editing     = i;
                         input       = prompt::serialize(catalog, std::span{group.tags}.subspan(i, 1));
                         cursor      = input.size();
                         focus_input = true;
                         ++revision;
                     }
-                    if (ImGui::MenuItem("Weight...")) open_weight = true;
-                    if (ImGui::MenuItem("Remove")) remove = i;
+                    if (ImGui::MenuItem("Weight...", nullptr, false, !removed)) open_weight = true;
+                    if (ImGui::MenuItem(removed ? "Restore" : "Remove")) remove = i;
                     ImGui::EndPopup();
                 }
                 if (open_weight) ImGui::OpenPopup("Weight");
@@ -354,7 +388,13 @@ namespace genesia::editor {
                     }
                     ImGui::EndPopup();
                 }
-                if (hovered) ImGui::SetTooltip("%.*s\nMiddle-click to remove. Double-click to edit. Ctrl+Up/Down adjusts weight.", static_cast<int>(catalog.tags[tag.id].name.size()), catalog.tags[tag.id].name.data());
+                if (hovered) {
+                    ImGui::BeginTooltip();
+                    ImGui::TextUnformatted(catalog.tags[tag.id].name.data(), catalog.tags[tag.id].name.data() + catalog.tags[tag.id].name.size());
+                    if (modified) ImGui::Text("Original: %s", prompt::serialize(catalog, std::span{&*change->original, 1}).c_str());
+                    ImGui::TextUnformatted(removed ? "Excluded from Repaint. Middle-click to restore." : "Middle-click to remove. Double-click to edit. Ctrl+Up/Down adjusts weight.");
+                    ImGui::EndTooltip();
+                }
                 ImGui::EndDisabled();
             }
             ImGui::PopID();
@@ -377,7 +417,8 @@ namespace genesia::editor {
             const bool copy = ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_C, routing);
             if ((cut || copy) && !selection.empty()) {
                 std::vector<prompt::Tag> copied;
-                for (const auto i : selection) copied.push_back(group.tags[i]);
+                for (const auto i : selection)
+                    if (!change || !change->tags[i].removed) copied.push_back(group.tags[i]);
                 ImGui::SetClipboardText(prompt::serialize(catalog, copied).c_str());
             }
             const bool erase     = ImGui::Shortcut(ImGuiKey_Delete, routing);
@@ -386,9 +427,9 @@ namespace genesia::editor {
                 anchor = group.tags.size() - 1;
                 selection.insert(anchor);
             } else if ((cut || erase || backspace) && !selection.empty()) {
-                auto next = group.tags;
-                for (const auto i : std::views::reverse(selection)) next.erase(next.begin() + i);
-                replace(group, std::move(next));
+                const auto selected = selection;
+                for (const auto i : std::views::reverse(selected))
+                    if (!change || !change->tags[i].removed) this->erase(group, i);
             }
             if (!input_active && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_V, routing)) {
                 input = ImGui::GetClipboardText();
@@ -400,17 +441,14 @@ namespace genesia::editor {
             const bool decrease = ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_DownArrow, routing);
             if ((increase || decrease) && !selection.empty()) {
                 auto next = group.tags;
-                for (const auto i : selection) next[i].weight = static_cast<float>(std::round((double(next[i].weight) + (increase ? 0.05 : -0.05)) * 100) / 100);
+                for (const auto i : selection)
+                    if (!change || !change->tags[i].removed) next[i].weight = static_cast<float>(std::round((double(next[i].weight) + (increase ? 0.05 : -0.05)) * 100) / 100);
                 const auto selected = selection;
                 replace(group, std::move(next));
                 selection = selected;
             }
         }
-        if (remove) {
-            auto next = group.tags;
-            next.erase(next.begin() + *remove);
-            replace(group, std::move(next));
-        }
+        if (remove) erase(group, *remove);
         ImGui::EndChild();
         ImGui::PopStyleVar(3);
         if (enter || paste || separator) {
@@ -509,8 +547,15 @@ namespace genesia::editor {
         for (std::size_t s = 0; s < sides.size(); ++s) {
             groups[s].clear();
             groups[s].resize(sides[s]->groups.size());
-            for (auto& editor : groups[s]) editor.id = ++next_id;
-            additions[s] = TagEditor{.id = ++next_id};
+            for (std::size_t g = 0; g < groups[s].size(); ++g) {
+                auto& editor = groups[s][g];
+                editor.id = ++next_id;
+                if (tracking) {
+                    editor.change.emplace(GroupChange{g, sides[s]->groups[g].enabled});
+                    for (std::size_t i = 0; i < sides[s]->groups[g].tags.size(); ++i) editor.change->tags.push_back({sides[s]->groups[g].tags[i], g, i});
+                }
+            }
+            additions[s] = TagEditor{.change = tracking ? std::optional{GroupChange{}} : std::nullopt, .id = ++next_id};
         }
         adding = {};
         if (clear_history) {
@@ -533,15 +578,37 @@ namespace genesia::editor {
         escape_owned = focus_input = false;
     }
 
-    void PromptEditor::remember(prompt::Pair before, const prompt::Pair& after) {
-        if (before == after) return;
+    PromptEditor::Snapshot PromptEditor::snapshot(const prompt::Pair& prompt) const {
+        Snapshot result{prompt};
+        for (std::size_t s = 0; s < groups.size(); ++s)
+            for (const auto& group : groups[s]) result.changes[s].push_back(group.change);
+        return result;
+    }
+
+    prompt::Pair PromptEditor::materialize(const prompt::Pair& prompt) const {
+        auto result = prompt;
+        const std::array sides{&result.positive, &result.negative};
+        for (std::size_t s = 0; s < sides.size(); ++s) {
+            for (std::size_t g = 0; g < groups[s].size(); ++g) {
+                if (!groups[s][g].change) continue;
+                auto& tags = sides[s]->groups[g].tags;
+                for (std::size_t i = tags.size(); i-- > 0;)
+                    if (groups[s][g].change->tags[i].removed) tags.erase(tags.begin() + i);
+            }
+            std::erase_if(sides[s]->groups, [](const prompt::Group& group) { return group.tags.empty(); });
+        }
+        return result;
+    }
+
+    void PromptEditor::remember(Snapshot before, const prompt::Pair& after) {
+        if (before == snapshot(after)) return;
         undo.push_back(std::move(before));
         if (undo.size() > 128) undo.erase(undo.begin());
         redo.clear();
     }
 
     bool PromptEditor::commit(prompt::Pair& prompt, const prompt::Catalog& catalog) {
-        auto before = prompt;
+        auto before = snapshot(prompt);
         const std::array sides{&prompt.positive, &prompt.negative};
         for (std::size_t s = 0; s < sides.size(); ++s) {
             for (std::size_t i = 0; i < groups[s].size(); ++i) {
@@ -562,7 +629,7 @@ namespace genesia::editor {
             if (!created.tags.empty()) {
                 sides[s]->groups.push_back(std::move(created));
                 groups[s].push_back(std::move(additions[s]));
-                additions[s] = TagEditor{.id = ++next_id};
+                additions[s] = TagEditor{.change = tracking ? std::optional{GroupChange{}} : std::nullopt, .id = ++next_id};
                 adding[s]    = false;
             }
         }
@@ -589,10 +656,11 @@ namespace genesia::editor {
             ImGui::PushID(static_cast<int>(editor.id));
             const auto origin        = ImGui::GetCursorScreenPos();
             const float error_height = editor.error ? ImGui::CalcTextSize(editor.error->message.c_str(), nullptr, false, content_width).y + 6 * scale : 0;
-            const TagLayout layout{group, search.catalog, content_width, scale, &editor};
+            const TagLayout layout{group, search.catalog, content_width, scale, editor};
             const ImRect bounds{origin, {origin.x + width, origin.y + layout.height + 24 * scale + error_height}};
             const bool hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::IsMouseHoveringRect(bounds.Min, bounds.Max);
             group_frame(bounds.Min, bounds.Max, scale, group.enabled, hovered);
+            if (editor.change && editor.change->original && (editor.change->enabled != group.enabled || *editor.change->original != i)) draw->AddRect(bounds.Min, bounds.Max, ImGui::GetColorU32(ImVec4{0.72F, 0.65F, 0.94F, 0.45F}), 12 * scale, 0, scale);
             ImGui::SetCursorScreenPos({origin.x + 12 * scale, origin.y + 12 * scale});
             if (!group.enabled) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.45F);
             if (editor.focus_input) ImGui::SetScrollHereY();
@@ -608,7 +676,10 @@ namespace genesia::editor {
                 ImGui::ButtonBehavior(bounds, key, &hit, &held, ImGuiButtonFlags_FlattenChildren | ImGuiButtonFlags_NoNavFocus);
                 if (background) {
                     ImGui::SetTooltip("Drag: reorder group\nMiddle-click: %s group", group.enabled ? "disable" : "enable");
-                    if (!ImGui::GetDragDropPayload() && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) group.enabled = !group.enabled;
+                    if (!ImGui::GetDragDropPayload() && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+                        ImGui::FocusWindow(ImGui::GetCurrentWindow());
+                        group.enabled = !group.enabled;
+                    }
                 }
             }
             if (ImGui::BeginDragDropSource()) {
@@ -643,7 +714,7 @@ namespace genesia::editor {
             ImGui::PushID(static_cast<int>(addition.id));
             const auto origin        = ImGui::GetCursorScreenPos();
             const float error_height = addition.error ? ImGui::CalcTextSize(addition.error->message.c_str(), nullptr, false, content_width).y + 6 * scale : 0;
-            const TagLayout layout{created, search.catalog, content_width, scale, &addition};
+            const TagLayout layout{created, search.catalog, content_width, scale, addition};
             const ImVec2 size{width, layout.height + 24 * scale + error_height};
             group_frame(origin, {origin.x + size.x, origin.y + size.y}, scale, true, true, true);
             ImGui::SetCursorScreenPos({origin.x + 12 * scale, origin.y + 12 * scale});
@@ -654,7 +725,7 @@ namespace genesia::editor {
             ImGui::PopID();
             if (cancel || (addition.input.empty() && !addition.input_active && !addition.focus_input && created.tags.empty())) {
                 if (cancel) ImGui::ClearActiveID();
-                addition           = TagEditor{.id = ++next_id};
+                addition           = TagEditor{.change = tracking ? std::optional{GroupChange{}} : std::nullopt, .id = ++next_id};
                 adding[side_index] = false;
             }
         } else {
@@ -693,15 +764,24 @@ namespace genesia::editor {
             const auto tag                          = side.groups[from].tags[index];
             const bool enabled                      = side.groups[from].enabled;
             auto& source                            = side.groups[from].tags;
+            std::optional<TagChange> change;
+            if (tracking) {
+                change = editors[from].change->tags[index];
+                editors[from].change->tags.erase(editors[from].change->tags.begin() + index);
+            }
             source.erase(source.begin() + index);
             editors[from].selection.clear();
             editors[from].anchor = 0;
             if (to == side.groups.size()) {
                 side.groups.push_back({{tag}, enabled});
-                editors.emplace_back().id = ++next_id;
+                auto& added = editors.emplace_back();
+                added.id = ++next_id;
+                if (tracking) added.change.emplace(GroupChange{std::nullopt, enabled, {*change}});
             } else {
                 auto& target = side.groups[to].tags;
-                target.insert(target.begin() + insertion - (from == to && index < insertion ? 1 : 0), tag);
+                const auto position = insertion - (from == to && index < insertion ? 1 : 0);
+                target.insert(target.begin() + position, tag);
+                if (tracking) editors[to].change->tags.insert(editors[to].change->tags.begin() + position, *change);
                 editors[to].selection.clear();
                 editors[to].anchor = 0;
             }
@@ -719,7 +799,7 @@ namespace genesia::editor {
         if (!created.tags.empty()) {
             side.groups.push_back(std::move(created));
             editors.push_back(std::move(addition));
-            addition           = TagEditor{.id = ++next_id};
+            addition           = TagEditor{.change = tracking ? std::optional{GroupChange{}} : std::nullopt, .id = ++next_id};
             adding[side_index] = false;
         }
         for (std::size_t i = side.groups.size(); i-- > 0;) {
@@ -732,7 +812,7 @@ namespace genesia::editor {
     }
 
     void PromptEditor::draw(prompt::Pair& prompt, const TagSearch& search, const float scale) {
-        auto before = prompt;
+        auto before = snapshot(prompt);
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {6 * scale, 6 * scale});
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {8 * scale, 5 * scale});
         ImGui::PushStyleColor(ImGuiCol_Button, {0, 0, 0, 0});
@@ -764,11 +844,14 @@ namespace genesia::editor {
             if ((backwards && !undo.empty()) || (forwards && !redo.empty())) {
                 auto& source = backwards ? undo : redo;
                 auto& target = backwards ? redo : undo;
-                target.push_back(std::move(prompt));
-                prompt = std::move(source.back());
+                target.push_back(snapshot(prompt));
+                auto restored = std::move(source.back());
                 source.pop_back();
+                prompt = std::move(restored.prompt);
                 ImGui::ClearActiveID();
                 reset(prompt, false);
+                for (std::size_t s = 0; s < groups.size(); ++s)
+                    for (std::size_t g = 0; g < groups[s].size(); ++g) groups[s][g].change = std::move(restored.changes[s][g]);
             }
         }
         valid        = std::ranges::all_of(groups | std::views::join, &TagEditor::valid) && std::ranges::all_of(additions, &TagEditor::valid);
@@ -784,40 +867,4 @@ namespace genesia::editor {
         }
     }
 
-    void view_prompt(const prompt::Pair& prompt, const prompt::Catalog& catalog, const float scale) {
-        const auto draw_side = [&](const prompt::Side& side) {
-            for (const auto& group : side.groups) {
-                const auto origin         = ImGui::GetCursorScreenPos();
-                const float width         = ImGui::GetContentRegionAvail().x;
-                const float content_width = width - 24 * scale;
-                auto* draw                = ImGui::GetWindowDrawList();
-                const TagLayout layout{group, catalog, content_width, scale};
-                const ImVec2 size{width, layout.height + 24 * scale};
-                group_frame(origin, {origin.x + size.x, origin.y + size.y}, scale, group.enabled, false);
-                if (!group.enabled) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.45F);
-                for (const auto& label : layout.items) {
-                    const ImVec2 p{origin.x + 12 * scale + label.position.x, origin.y + 12 * scale + label.position.y};
-                    draw->AddRectFilled(p, {p.x + label.width, p.y + tag_height * scale}, ImGui::GetColorU32(ImVec4{1, 1, 1, 0.035F}), 5 * scale);
-                    const float baseline = p.y + (tag_height * scale - ImGui::GetFontSize()) / 2;
-                    draw->PushClipRect(p, {p.x + label.width - label.weight_width - tag_padding * scale, p.y + tag_height * scale}, true);
-                    draw->AddText({p.x + tag_padding * scale, baseline}, ImGui::GetColorU32(ImVec4{0.76F, 0.76F, 0.81F, 1}), label.text.data(), label.text.data() + label.text.size());
-                    draw->PopClipRect();
-                    if (!label.weight.empty()) draw->AddText({p.x + label.width - label.weight_width + (weight_gap - tag_padding) * scale, baseline}, ImGui::GetColorU32(ImVec4{0.69F, 0.65F, 0.85F, 1}), label.weight.c_str());
-                    ImGui::SetCursorScreenPos(p);
-                    ImGui::Dummy({label.width, tag_height * scale});
-                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%.*s", static_cast<int>(label.text.size()), label.text.data());
-                }
-                if (!group.enabled) ImGui::PopStyleVar();
-                ImGui::SetCursorScreenPos(origin);
-                ImGui::Dummy(size);
-                ImGui::Dummy({0, 6 * scale});
-            }
-        };
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {6 * scale, 6 * scale});
-        draw_side(prompt.positive);
-        ImGui::Dummy({0, 10 * scale});
-        if (ImGui::TreeNodeEx("Negative", ImGuiTreeNodeFlags_NoTreePushOnOpen)) draw_side(prompt.negative);
-        fixed_text(prompt);
-        ImGui::PopStyleVar();
-    }
 } // namespace genesia::editor

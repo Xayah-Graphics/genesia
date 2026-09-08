@@ -45,28 +45,30 @@ namespace genesia::editor {
             draw->PopClipRect();
         }
 
-        bool text_button(const char* id, const char* label, const float scale, const float width = 0, const bool selected = false, const bool primary = false) {
-            const auto text   = ImGui::CalcTextSize(label);
-            const auto origin = ImGui::GetCursorScreenPos();
+        bool text_button(const char* id, const char* label, const float scale, const float width = 0, const bool selected = false, const ImVec4 accent = {}) {
+            const bool primary = accent.w > 0;
+            const auto text    = ImGui::CalcTextSize(label);
+            const auto origin  = ImGui::GetCursorScreenPos();
             const ImVec2 size{width ? width : text.x + 24 * scale, (primary ? top_strip_height : control_height) * scale};
             ImGui::PushStyleColor(ImGuiCol_NavCursor, {0, 0, 0, 0});
             const bool clicked = ImGui::InvisibleButton(id, size, ImGuiButtonFlags_EnableNav);
             ImGui::PopStyleColor();
-            const bool focused = ImGui::IsItemFocused() && ImGui::GetCurrentContext()->NavCursorVisible;
-            const bool hovered = ImGui::IsItemHovered() || focused;
-            auto* storage      = ImGui::GetStateStorage();
-            const auto key     = ImGui::GetItemID();
-            const float alpha  = std::lerp(storage->GetFloat(key), hovered || selected ? 1.0F : 0.0F, std::min(1.0F, ImGui::GetIO().DeltaTime / 0.12F));
+            const bool disabled = ImGui::GetItemFlags() & ImGuiItemFlags_Disabled;
+            const bool focused  = !disabled && ImGui::IsItemFocused() && ImGui::GetCurrentContext()->NavCursorVisible;
+            const bool hovered  = ImGui::IsItemHovered() || focused;
+            auto* storage       = ImGui::GetStateStorage();
+            const auto key      = ImGui::GetItemID();
+            const float alpha   = disabled ? 0 : std::lerp(storage->GetFloat(key), hovered || selected ? 1.0F : 0.0F, std::min(1.0F, ImGui::GetIO().DeltaTime / 0.12F));
             storage->SetFloat(key, alpha);
             auto* draw = ImGui::GetWindowDrawList();
             if (primary && alpha > 0) {
-                const auto clear = ImGui::GetColorU32(ImVec4{0.55F, 0.47F, 0.90F, 0});
-                const auto tint  = ImGui::GetColorU32(ImVec4{0.55F, 0.47F, 0.90F, alpha * 0.16F});
+                const auto clear = ImGui::GetColorU32(ImVec4{accent.x, accent.y, accent.z, 0});
+                const auto tint  = ImGui::GetColorU32(ImVec4{accent.x, accent.y, accent.z, alpha * 0.16F});
                 draw->AddRectFilledMultiColor(origin, {origin.x + size.x, origin.y + size.y}, clear, tint, tint, clear);
             }
             const ImVec2 position{origin.x + (size.x - text.x) / 2, origin.y + (size.y - text.y) / 2};
             draw->AddText({position.x, position.y + scale}, ImGui::GetColorU32(ImVec4{0, 0, 0, 0.7F}), label);
-            const ImVec4 ink = primary ? ImVec4{0.70F + 0.12F * alpha, 0.65F + 0.12F * alpha, 0.97F, 1} : ImVec4{0.57F + 0.31F * alpha, 0.58F + 0.30F * alpha, 0.64F + 0.29F * alpha, 1};
+            const ImVec4 ink = disabled ? ImVec4{0.62F, 0.62F, 0.62F, 1} : primary ? ImLerp(accent, ImVec4{1, 1, 1, 1}, alpha * 0.35F) : ImVec4{0.57F + 0.31F * alpha, 0.58F + 0.30F * alpha, 0.64F + 0.29F * alpha, 1};
             draw->AddText(position, ImGui::GetColorU32(ink), label);
             if (focused) draw->AddLine({position.x, position.y + text.y + 3 * scale}, {position.x + text.x, position.y + text.y + 3 * scale}, ImGui::GetColorU32(ink), scale);
             return clicked;
@@ -153,6 +155,11 @@ namespace genesia::editor {
         center.y               = std::clamp(center.y, vertical, 1 - vertical);
     }
 
+    UserInterface::RepaintDraft::RepaintDraft(const prompt::Pair& original) : prompt{original} {
+        editor.tracking = true;
+        editor.reset(prompt);
+    }
+
     UserInterface::UserInterface(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, WindowPlatform& platform, Renderer& display, Interop& bridge, Session& generation) : catalog{std::move(catalog)}, preset{std::move(preset)}, window{platform}, renderer{display}, interop{bridge}, session{generation}, prompt{this->preset.prompt}, tag_search{*this->catalog} {
         prompt_editor.reset(prompt);
         ImGui::StyleColorsDark();
@@ -227,6 +234,7 @@ namespace genesia::editor {
                     requested_image.reset();
                     image_live = false;
                     selected   = event.id;
+                    if (!ImGui::GetIO().WantTextInput) image_tags = true;
                 } else renderer.discard(*source.timeline, event.ready);
                 animate_until = glfwGetTime() + 0.2;
             } else if (event.kind == EventKind::saved) {
@@ -383,36 +391,48 @@ namespace genesia::editor {
         }
     }
 
-    void UserInterface::submit() {
-        commit_parameters();
-        if (!prepare_prompt()) return;
-        if (random_seed) {
-            std::random_device source;
-            seed = (std::uint64_t(source()) << 32) | source();
-        }
-        session.enqueue(draft, seed, prompt);
-        animate_until = glfwGetTime() + 0.2;
+    UserInterface::RepaintDraft& UserInterface::image_prompt() {
+        auto& item = *std::ranges::find(history, selected, &History::id);
+        if (!item.repaint) item.repaint = std::make_unique<RepaintDraft>(item.record.prompt);
+        return *item.repaint;
     }
 
-    void UserInterface::return_to_create() {
+    void UserInterface::submit(const bool repaint) {
+        commit_parameters();
+        auto parameters = draft;
+        prompt::Pair submitted;
+        std::optional<RepaintSource> source;
+        if (repaint) {
+            auto& edits = image_prompt();
+            if (!edits.editor.commit(edits.prompt, *catalog)) { image_tags = tags_open = true; return; }
+            submitted = edits.editor.materialize(edits.prompt);
+            const auto& item = *std::ranges::find(history, selected, &History::id);
+            parameters.width = item.record.parameters.width;
+            parameters.height = item.record.parameters.height;
+            parameters.denoise = denoise;
+            source = RepaintSource{item.id, item.record.path};
+        } else {
+            if (!prepare_prompt()) { image_tags = false; tags_open = true; return; }
+            submitted = prompt;
+            parameters.denoise = 1;
+        }
+        parameters.positive = prompt::compose(*catalog, submitted.positive);
+        parameters.negative = prompt::compose(*catalog, submitted.negative);
+        if (random_seed) {
+            std::random_device random;
+            seed = (std::uint64_t(random()) << 32) | random();
+        }
+        session.enqueue(std::move(parameters), seed, std::move(submitted), std::move(source));
         following_latest = true;
         requested_image.reset();
-        preview_step = 0;
-        bool active;
-        {
-            const std::lock_guard lock{session.mutex};
-            active = session.active.has_value();
-        }
-        if (!active && !history.empty() && history.back().saved && (image_live || selected != history.back().id)) {
-            requested_image = history.back().id;
-            session.load(*requested_image, history.back().record.path);
-        }
+        image_tags = repaint;
+        animate_until = glfwGetTime() + 0.2;
     }
 
     UserInterface::ControlLayout UserInterface::control_layout(const float scale, const ImVec2 size) const {
         ControlLayout layout{};
-        layout.different             = following_latest && image_texture && (image_width != draft.width || image_height != draft.height);
-        const float dimensions_width = following_latest ? 112 * scale + (layout.different ? ImGui::CalcTextSize("Next").x + 12 * scale : 0) : image_texture ? ImGui::CalcTextSize(std::format("{} \xC3\x97 {}", image_width, image_height).c_str()).x : 0;
+        layout.different             = !image_tags && image_texture && (image_width != draft.width || image_height != draft.height);
+        const float dimensions_width = !image_tags ? 112 * scale + (layout.different ? ImGui::CalcTextSize("Next").x + 12 * scale : 0) : image_texture ? ImGui::CalcTextSize(std::format("{} \xC3\x97 {}", image_width, image_height).c_str()).x : 0;
         if (layout.different) layout.image_label_width = ImGui::CalcTextSize(std::format("{} {} \xC3\x97 {} \xE2\x86\x92", image_live ? "Preview" : "Image", image_width, image_height).c_str()).x + 12 * scale;
         layout.right_width    = layout.image_label_width + dimensions_width + (image_texture ? 116 * scale : 0);
         const float available = size.x - (2 * bottom_margin + history_amount * history_strip_width) * scale;
@@ -643,15 +663,15 @@ namespace genesia::editor {
         if (ImGui::BeginPopup("Application")) {
             ImGui::MenuItem("Live preview", nullptr, &preview_enabled);
             ImGui::Separator();
-            if (ImGui::MenuItem("Save prompt", "Ctrl+S", false, following_latest)) save_prompt();
+            if (ImGui::MenuItem("Save prompt", "Ctrl+S", false, !image_tags)) save_prompt();
             if (ImGui::MenuItem("Open output folder")) ShellExecuteW(window.native_window, L"open", std::filesystem::absolute(defaults::output).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
             ImGui::EndPopup();
         }
         const bool queue_visible      = queued != 0 || paused || ImGui::IsPopupOpen("Queue");
         const std::string queue_label = queue_visible ? std::format("Queue  {}", queued) : "";
         const char* stop_label        = active ? "Stop" : paused && !failed ? "Resume" : "";
-        const float primary_width     = (following_latest ? 150 : 184) * scale;
-        float controls_width          = primary_width;
+        const float primary_width     = 150 * scale;
+        float controls_width          = 2 * primary_width + 4 * scale;
         for (const char* label : {queue_label.c_str(), stop_label})
             if (*label) controls_width += ImGui::CalcTextSize(label).x + 28 * scale;
         const bool queue_paused  = paused && !active && !failed;
@@ -717,41 +737,58 @@ namespace genesia::editor {
             }
             x = ImGui::GetItemRectMax().x + 4 * scale;
         }
-        // The owner button remains a single-click action while its settings are open.
+        const auto shown = std::ranges::find(history, selected, &History::id);
+        const bool repaint_ready = image_texture && !image_live && !requested_image && shown != history.end() && shown->saved;
+        ImGui::SetCursorScreenPos({x, minimum.y});
+        ImGui::PushFont(nullptr, 18);
+        ImGui::BeginDisabled(unavailable || !repaint_ready);
+        if (text_button("##Repaint", "Repaint", scale, primary_width, false, {0.53F, 0.80F, 0.72F, 1})) submit(true);
+        ImGui::EndDisabled();
+        const auto repaint_maximum = ImGui::GetItemRectMax();
+        const bool repaint_hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+        if (repaint_hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) ImGui::OpenPopup("Repaint settings");
+        if (repaint_hovered && !ImGui::IsPopupOpen("Repaint settings")) ImGui::SetTooltip("Repaint this image with its edited tags\nRight-click: denoise strength");
+        ImGui::PopFont();
+        ImGui::SetNextWindowPos({repaint_maximum.x, (top_strip_height + 6) * scale}, ImGuiCond_Always, {1, 0});
+        ImGui::SetNextWindowSize({280 * scale, 0});
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {16 * scale, 12 * scale});
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, {0.075F, 0.078F, 0.09F, 0.94F});
+        if (ImGui::BeginPopup("Repaint settings", ImGuiWindowFlags_NoMove)) {
+            ImGui::TextDisabled("Denoise");
+            ImGui::SetNextItemWidth(-1);
+            ImGui::SliderFloat("##Denoise", &denoise, 0, 1, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
+        ImGui::PopStyleColor();
+        ImGui::PopStyleVar();
+        x = repaint_maximum.x + 4 * scale;
         if (ImGui::IsPopupOpen("Generation settings") && ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::IsMouseHoveringRect({x, minimum.y}, maximum) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             commit_parameters();
             ImGui::ClosePopupsOverWindow(ImGui::GetCurrentWindow(), false);
         }
         ImGui::SetCursorScreenPos({x, minimum.y});
         ImGui::PushFont(nullptr, 18);
-        if (following_latest) {
-            ImGui::BeginDisabled(unavailable || !prompt_editor.valid);
-            if (text_button("##Generate", "Generate", scale, primary_width, false, true)) submit();
-            ImGui::EndDisabled();
-            const bool hovered            = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
-            const bool settings_requested = (hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) || (ImGui::IsItemFocused() && ImGui::Shortcut(ImGuiMod_Shift | ImGuiKey_F10));
-            if (settings_requested) {
-                commit_parameters();
-                ImGui::OpenPopup("Generation settings");
-            }
-            ImGui::PopFont();
-            if (hovered && !ImGui::IsPopupOpen("Generation settings")) {
-                if (!prompt_editor.valid) ImGui::SetTooltip("Finish the tag input before generating.\nTab: show tags\nRight-click: generation settings");
-                else ImGui::SetTooltip("%s\nCtrl+Shift+\x60\nRight-click: generation settings", active ? "Add image to queue" : "Generate image");
-            }
-            generation_settings(scale, size);
-        } else {
-            if (text_button("##Create", "Back to create", scale, primary_width, false, true)) return_to_create();
-            ImGui::PopFont();
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Return to your draft\nTab: show image tags");
+        ImGui::BeginDisabled(unavailable || !prompt_editor.valid);
+        if (text_button("##Generate", "Generate", scale, primary_width, false, {0.70F, 0.65F, 0.97F, 1})) submit();
+        ImGui::EndDisabled();
+        const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+        if ((hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) || (ImGui::IsItemFocused() && ImGui::Shortcut(ImGuiMod_Shift | ImGuiKey_F10))) {
+            commit_parameters();
+            ImGui::OpenPopup("Generation settings");
         }
+        ImGui::PopFont();
+        if (hovered && !ImGui::IsPopupOpen("Generation settings")) ImGui::SetTooltip("Generate from Draft\nCtrl+Shift+`\nRight-click: generation settings");
+        generation_settings(scale, size);
         window.drag_region = {};
         if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) window.drag_region = {left_end, 0, group_left - 4 * scale, maximum.y};
         ImGui::End();
     }
 
     void UserInterface::tag_column(const float scale, const ImVec2 size, const ControlLayout& layout) {
-        if (!tags_open || !following_latest) prompt_editor.suspend();
+        if (!tags_open || image_tags) prompt_editor.suspend();
+        const bool has_image = image_texture && !image_live && !requested_image;
+        if (has_image && (!tags_open || !image_tags)) image_prompt().editor.suspend();
         if (tags_amount < 0.03F) return;
         const float top    = (top_strip_height + 24) * scale;
         const float bottom = (bottom_margin + control_height + 16 + (layout.image_above ? control_height + 8 : 0)) * scale;
@@ -760,11 +797,22 @@ namespace genesia::editor {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {16 * scale, 0});
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, tags_amount);
         ImGui::Begin("##TagColumn", nullptr, overlay | ImGuiWindowFlags_NoBackground | (tags_open ? ImGuiWindowFlags_None : ImGuiWindowFlags_NoInputs));
-        if (following_latest) ImGui::TextUnformatted("Next image");
-        else if (image_texture && !image_live) ImGui::Text("Image %03llu", static_cast<unsigned long long>(selected + 1));
-        else ImGui::TextUnformatted("Image");
+        ImGui::PushStyleColor(ImGuiCol_Button, {0, 0, 0, 0});
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(image_tags ? ImGuiCol_TextDisabled : ImGuiCol_Text));
+        if (ImGui::SmallButton("Draft") && image_tags) {
+            if (!has_image || image_prompt().editor.commit(image_prompt().prompt, *catalog)) image_tags = false;
+        }
+        ImGui::PopStyleColor();
+        if (has_image) {
+            ImGui::SameLine(0, 16 * scale);
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(image_tags ? ImGuiCol_Text : ImGuiCol_TextDisabled));
+            const auto label = std::format("Image {:03}", selected + 1);
+            if (ImGui::SmallButton(label.c_str()) && !image_tags && prepare_prompt()) image_tags = true;
+            ImGui::PopStyleColor();
+        }
+        ImGui::PopStyleColor();
         ImGui::PushFont(nullptr, 12);
-        if (following_latest) {
+        if (!image_tags) {
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {0, 0});
             ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, {0, 0.5F});
             ImGui::PushStyleColor(ImGuiCol_Button, {0, 0, 0, 0});
@@ -802,18 +850,29 @@ namespace genesia::editor {
                 if (ImGui::MenuItem("Save as...")) save_as_requested = true;
                 ImGui::EndPopup();
             }
-        } else ImGui::TextDisabled("Read only");
+        } else {
+            ImGui::TextDisabled("Repaint edits");
+            if (has_image && ImGui::BeginPopupContextItem("Repaint edits")) {
+                if (ImGui::MenuItem("Reset changes")) {
+                    auto& item = *std::ranges::find(history, selected, &History::id);
+                    ImGui::ClearActiveID();
+                    item.repaint = std::make_unique<RepaintDraft>(item.record.prompt);
+                }
+                ImGui::EndPopup();
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Temporary edits for Repaint. The original image is unchanged.\nRight-click: reset changes");
+        }
         ImGui::PopFont();
         ImGui::Dummy({0, 12 * scale});
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
-        ImGui::BeginChild(following_latest ? "##DraftTags" : "##ImageTags", {0, 0}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
-        if (following_latest) prompt_editor.draw(prompt, tag_search, scale);
-        else if (image_texture && !image_live) {
-            const auto& item = *std::ranges::find(history, selected, &History::id);
+        ImGui::BeginChild(image_tags ? "##ImageTags" : "##DraftTags", {0, 0}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
+        if (!image_tags) prompt_editor.draw(prompt, tag_search, scale);
+        else if (has_image) {
+            auto& edits = image_prompt();
             ImGui::PushID(static_cast<int>(selected));
-            view_prompt(item.record.prompt, *item.record.catalog, scale);
+            edits.editor.draw(edits.prompt, tag_search, scale);
             ImGui::PopID();
-        } else ImGui::TextDisabled("Loading image...");
+        } else ImGui::TextDisabled(image_live ? "Preview is not a Repaint source." : "Loading image...");
         ImGui::EndChild();
         ImGui::PopStyleVar();
         ImGui::End();
@@ -841,7 +900,7 @@ namespace genesia::editor {
             draw->PopClipRect();
             if (!layout.image_above) dimensions_x += layout.image_label_width;
         }
-        if (following_latest) {
+        if (!image_tags) {
             const ImVec2 dimensions_origin{dimensions_x, y};
             if (layout.different) {
                 draw->AddText({dimensions_x + 4 * scale, y + (control_height * scale - ImGui::GetFontSize()) / 2}, ImGui::GetColorU32(ImGuiCol_TextDisabled), "Next");
@@ -929,6 +988,7 @@ namespace genesia::editor {
                 commit_parameters();
                 prompt_editor.suspend();
                 following_latest = false;
+                image_tags = true;
                 requested_image.reset();
                 if (selected != item.id || image_live) {
                     requested_image = item.id;
@@ -976,7 +1036,11 @@ namespace genesia::editor {
             error                   = session.error;
         }
         const auto controls   = control_layout(scale, size);
-        const bool dismissing = escape_owned || parameter_edit.id || (tags_open && following_latest && prompt_editor.escape_owned) || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        const auto editor_state = [&] {
+            const PromptEditor* editor = !image_tags ? &prompt_editor : image_texture && !image_live && !requested_image ? &image_prompt().editor : nullptr;
+            return std::pair{editor && editor->escape_owned, editor && editor->focus_input};
+        };
+        const bool dismissing = escape_owned || parameter_edit.id || (tags_open && editor_state().first) || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
         if (renderer.visible) {
             canvas(scale, size);
             tag_column(scale, size, controls);
@@ -995,12 +1059,12 @@ namespace genesia::editor {
                 if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
                 ImGui::EndPopup();
             }
-            if (following_latest && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_GraveAccent, ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverActive)) submit();
-            if (following_latest && !ImGui::GetTopMostPopupModal() && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S, ImGuiInputFlags_RouteGlobal)) save_prompt();
+            if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_GraveAccent, ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverActive)) submit();
+            if (!image_tags && !ImGui::GetTopMostPopupModal() && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S, ImGuiInputFlags_RouteGlobal)) save_prompt();
             if (ImGui::Shortcut(ImGuiKey_F11, ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverActive)) window.toggle_fullscreen();
             if (!dismissing && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && ImGui::Shortcut(ImGuiKey_Escape, ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverActive)) window.request_close();
-            escape_owned = parameter_edit.id || (tags_open && following_latest && prompt_editor.escape_owned) || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
-            if (!ImGui::GetIO().WantTextInput && !(tags_open && following_latest && prompt_editor.focus_input) && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && ImGui::Shortcut(ImGuiKey_Tab, ImGuiInputFlags_RouteGlobal)) tags_open = !tags_open;
+            escape_owned = parameter_edit.id || (tags_open && editor_state().first) || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+            if (!ImGui::GetIO().WantTextInput && !(tags_open && editor_state().second) && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && ImGui::Shortcut(ImGuiKey_Tab, ImGuiInputFlags_RouteGlobal)) tags_open = !tags_open;
             const auto& io = ImGui::GetIO();
             if (io.MouseDelta.x || io.MouseDelta.y || io.MouseWheel || io.InputQueueCharacters.Size || ImGui::IsAnyItemActive()) animate_until = glfwGetTime() + 0.16;
         }

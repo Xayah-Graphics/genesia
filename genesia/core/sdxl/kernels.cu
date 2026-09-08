@@ -71,16 +71,18 @@ namespace genesia::sdxl::kernels {
             if (threadIdx.x * 4 + j < 1000) training[threadIdx.x * 4 + j] = sqrtf(expm1f(-values[j]));
     }
 
-    __global__ void schedule_kernel(SamplingStep* output, float* times, const float* training, const int steps) {
+    __global__ void schedule_kernel(SamplingStep* output, float* times, const float* training, const int steps, const int total) {
         const int i = blockIdx.x * blockDim.x + threadIdx.x;
         if (i > steps) return;
-        const float sigma = i == steps ? 0.0F : training[999 - i * 1000 / steps];
-        const float next  = i + 1 >= steps ? 0.0F : training[999 - (i + 1) * 1000 / steps];
+        const int position = total - steps + i;
+        const int time = 999 - int(static_cast<long long>(position) * 1000 / total);
+        const float sigma = i == steps ? 0.0F : training[time];
+        const float next = i + 1 >= steps ? 0.0F : training[999 - int(static_cast<long long>(position + 1) * 1000 / total)];
         output[i]         = {sigma, next - sigma, rsqrtf(fmaf(sigma, sigma, 1.0F))};
-        if (i < steps) times[i] = float(999 - i * 1000 / steps);
+        if (i < steps) times[i] = float(time);
     }
 
-    __global__ void initialize_kernel(float* state, __half* input, int* step, const std::uint64_t* seed, const SamplingStep* schedule, const int count) {
+    __global__ void initialize_kernel(float* state, __half* input, int* step, const std::uint64_t* seed, const SamplingStep* schedule, const int count, const float* source, const bool full_noise) {
         const int i = blockIdx.x * blockDim.x + threadIdx.x;
         if (i >= count / 4) return;
         uint4 counter{static_cast<unsigned>(i), 0, 0, 0};
@@ -98,8 +100,15 @@ namespace genesia::sdxl::kernels {
         sincosf(float(counter.w) * 0x1p-32F * 6.283185307179586F, &sine1, &cosine1);
         const float radius0 = sqrtf(-2.0F * logf((float(counter.x) + 1.0F) * 0x1p-32F));
         const float radius1 = sqrtf(-2.0F * logf((float(counter.z) + 1.0F) * 0x1p-32F));
-        const float scale   = sqrtf(fmaf(schedule[0].sigma, schedule[0].sigma, 1.0F));
-        const float4 values{radius0 * sine0 * scale, radius0 * cosine0 * scale, radius1 * sine1 * scale, radius1 * cosine1 * scale};
+        const float scale = full_noise ? sqrtf(fmaf(schedule[0].sigma, schedule[0].sigma, 1.0F)) : schedule[0].sigma;
+        float4 values{radius0 * sine0 * scale, radius0 * cosine0 * scale, radius1 * sine1 * scale, radius1 * cosine1 * scale};
+        if (source) {
+            const float4 original = reinterpret_cast<const float4*>(source)[i];
+            values.x += original.x;
+            values.y += original.y;
+            values.z += original.z;
+            values.w += original.w;
+        }
         reinterpret_cast<float4*>(state)[i] = values;
         const float data[4]{values.x, values.y, values.z, values.w};
 #pragma unroll
@@ -148,6 +157,24 @@ namespace genesia::sdxl::kernels {
         if (stopped || completed == count) ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control->stage}.store(static_cast<std::uint32_t>(stopped ? Stage::cancelled : Stage::decoding), ::cuda::memory_order_release);
     }
 
+    __global__ void image_encode_kernel(__nv_bfloat16* output, const std::uint8_t* input, const int count) {
+        const int i = blockIdx.x * blockDim.x + threadIdx.x;
+        if (i < count) output[i] = __nv_bfloat16(float(input[i]) * (2.0F / 255.0F) - 1.0F);
+    }
+
+    __global__ void encoder_pad_kernel(__nv_bfloat16* output, const __nv_bfloat16* input, const int height, const int width, const int channels) {
+        const int i = blockIdx.x * blockDim.x + threadIdx.x;
+        if (i >= (height + 1) * (width + 1) * channels) return;
+        const int x = i / channels % (width + 1);
+        const int y = i / channels / (width + 1);
+        output[i] = x < width && y < height ? input[(y * width + x) * channels + i % channels] : __nv_bfloat16(0.0F);
+    }
+
+    __global__ void latent_encode_kernel(float* output, const __nv_bfloat16* moments, const int count) {
+        const int i = blockIdx.x * blockDim.x + threadIdx.x;
+        if (i < count) output[i] = float(moments[i / 4 * 8 + i % 4]) * 0.13025F;
+    }
+
     __global__ void latent_decode_kernel(__nv_bfloat16* output, const float* input, const int count) {
         const int i = blockIdx.x * blockDim.x + threadIdx.x;
         if (i < count) output[i] = __nv_bfloat16(input[i] / 0.13025F);
@@ -184,11 +211,11 @@ namespace genesia::sdxl::kernels {
     void training_sigmas(const ::cuda::stream_ref stream, float* output) {
         ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims(1), ::cuda::block_dims(256))), training_kernel, output);
     }
-    void prepare_schedule(const ::cuda::stream_ref stream, SamplingStep* output, float* times, const float* training, const int steps) {
-        ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((steps + 256) / 256), ::cuda::block_dims(256))), schedule_kernel, output, times, training, steps);
+    void prepare_schedule(const ::cuda::stream_ref stream, SamplingStep* output, float* times, const float* training, const int steps, const float denoise) {
+        ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((steps + 256) / 256), ::cuda::block_dims(256))), schedule_kernel, output, times, training, steps, static_cast<int>(steps / double(denoise)));
     }
-    void initialize(const ::cuda::stream_ref stream, float* state, void* input, int* step, const std::uint64_t* seed, const SamplingStep* schedule, const int count) {
-        ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((count / 4 + 255) / 256), ::cuda::block_dims(256))), initialize_kernel, state, static_cast<__half*>(input), step, seed, schedule, count);
+    void initialize(const ::cuda::stream_ref stream, float* state, void* input, int* step, const std::uint64_t* seed, const SamplingStep* schedule, const int count, const float* source, const bool full_noise) {
+        ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((count / 4 + 255) / 256), ::cuda::block_dims(256))), initialize_kernel, state, static_cast<__half*>(input), step, seed, schedule, count, source, full_noise);
     }
     void snapshot_begin(const ::cuda::stream_ref stream, int* selected, SnapshotSlot* slots) {
         ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims(1), ::cuda::block_dims(1))), snapshot_begin_kernel, selected, slots);
@@ -205,6 +232,15 @@ namespace genesia::sdxl::kernels {
     }
     void advance(const ::cuda::stream_ref stream, int* step, const int count, const cudaGraphConditionalHandle loop, const cudaGraphConditionalHandle decode, Control* control) {
         ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims(1), ::cuda::block_dims(1))), advance_kernel, step, count, loop, decode, control);
+    }
+    void image_encode(const ::cuda::stream_ref stream, void* output, const std::uint8_t* pixels, const int count) {
+        ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((count + 255) / 256), ::cuda::block_dims(256))), image_encode_kernel, static_cast<__nv_bfloat16*>(output), pixels, count);
+    }
+    void encoder_pad(const ::cuda::stream_ref stream, void* output, const void* input, const int height, const int width, const int channels) {
+        ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims(((height + 1) * (width + 1) * channels + 255) / 256), ::cuda::block_dims(256))), encoder_pad_kernel, static_cast<__nv_bfloat16*>(output), static_cast<const __nv_bfloat16*>(input), height, width, channels);
+    }
+    void latent_encode(const ::cuda::stream_ref stream, float* output, const void* moments, const int count) {
+        ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((count + 255) / 256), ::cuda::block_dims(256))), latent_encode_kernel, output, static_cast<const __nv_bfloat16*>(moments), count);
     }
     void latent_decode(const ::cuda::stream_ref stream, void* output, const float* latent, const int count) {
         ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((count + 255) / 256), ::cuda::block_dims(256))), latent_decode_kernel, static_cast<__nv_bfloat16*>(output), latent, count);

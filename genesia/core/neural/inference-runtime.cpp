@@ -12,6 +12,25 @@ module genesia.neural.inference_runtime;
 import std;
 
 namespace genesia::neural {
+    struct InferenceRuntime::ConvPlan final {
+        std::array<int, 10> key;
+        cudnn_frontend::graph::Graph graph;
+
+        explicit ConvPlan(const std::array<int, 10>& key);
+    };
+
+    struct InferenceRuntime::AttentionPlan final {
+        std::array<int, 10> key;
+        cudnn_frontend::graph::Graph graph;
+        ::cuda::device_buffer<std::int32_t> query_lengths;
+
+        AttentionPlan(::cuda::stream_ref stream, const std::array<int, 10>& shape);
+    };
+
+    void check(cudnn_frontend::error_t status) {
+        if (status.is_bad()) throw std::runtime_error{status.get_message()};
+    }
+
     nlohmann::json read_plan(const std::filesystem::path& path) {
         std::ifstream file{path, std::ios::binary};
         file.exceptions(std::ios::failbit | std::ios::badbit);
@@ -50,7 +69,7 @@ namespace genesia::neural {
         check(cublasLtMatrixLayoutCreate(std::out_ptr(output), result_dtype, n, m, n));
     }
 
-    ConvPlan::ConvPlan(const std::array<int, 10>& shape) : key{shape} {
+    InferenceRuntime::ConvPlan::ConvPlan(const std::array<int, 10>& shape) : key{shape} {
         const auto [n, h, w, input_width, output_width, kernel, stride, padding, scalar, residual] = shape;
         const auto dtype                                                                           = scalar == 1 ? cudnn_frontend::DataType_t::HALF : cudnn_frontend::DataType_t::BFLOAT16;
         graph.set_io_data_type(dtype).set_intermediate_data_type(cudnn_frontend::DataType_t::FLOAT).set_compute_data_type(cudnn_frontend::DataType_t::FLOAT);
@@ -319,8 +338,5 @@ namespace genesia::neural {
     }
     void check(const cudnnStatus_t status) {
         if (status != CUDNN_STATUS_SUCCESS) throw std::runtime_error{cudnnGetErrorString(status)};
-    }
-    void check(cudnn_frontend::error_t status) {
-        if (status.is_bad()) throw std::runtime_error{status.get_message()};
     }
 } // namespace genesia::neural

@@ -1,7 +1,7 @@
 module;
 
 #include <cublasLt.h>
-#include <cudnn_frontend.h>
+#include <cudnn.h>
 #include <genesia/cuda.h>
 
 export module genesia.neural.inference_runtime;
@@ -69,19 +69,15 @@ export namespace genesia::neural {
         MatmulPlan& operator=(const MatmulPlan&) = delete;
     };
 
-    struct ConvPlan final {
-        std::array<int, 10> key;
-        cudnn_frontend::graph::Graph graph;
-
-        explicit ConvPlan(const std::array<int, 10>& key);
-    };
-
     struct InferenceRuntime final {
         ::cuda::stream_ref stream;
         std::size_t cache_hits{};
         std::size_t cache_misses{};
 
     private:
+        struct ConvPlan;
+        struct AttentionPlan;
+
         std::unique_ptr<std::remove_pointer_t<cublasLtHandle_t>, decltype(&cublasLtDestroy)> blas{nullptr, cublasLtDestroy};
         std::unique_ptr<std::remove_pointer_t<cudnnHandle_t>, decltype(&cudnnDestroy)> dnn{nullptr, cudnnDestroy};
         ::cuda::device_buffer<std::byte> workspace;
@@ -94,12 +90,6 @@ export namespace genesia::neural {
         std::size_t intermediate_bytes{};
         std::list<MatmulPlan> matmuls;
         std::list<ConvPlan> convolutions;
-        struct AttentionPlan final {
-            std::array<int, 10> key;
-            cudnn_frontend::graph::Graph graph;
-            ::cuda::device_buffer<std::int32_t> query_lengths;
-            AttentionPlan(::cuda::stream_ref stream, const std::array<int, 10>& shape);
-        };
         std::list<AttentionPlan> attentions;
 
     public:
@@ -124,5 +114,4 @@ export namespace genesia::neural {
     void check(cudaError_t status);
     void check(cublasStatus_t status);
     void check(cudnnStatus_t status);
-    void check(cudnn_frontend::error_t status);
 } // namespace genesia::neural

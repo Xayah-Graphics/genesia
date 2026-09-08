@@ -12,6 +12,7 @@ export namespace genesia {
         std::filesystem::path model;
         prompt::Pair prompt;
         std::shared_ptr<const prompt::Catalog> catalog;
+        std::filesystem::path source;
     };
     struct ImageWriter final {
         std::filesystem::path directory;

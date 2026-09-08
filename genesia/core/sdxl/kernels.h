@@ -20,12 +20,15 @@ namespace genesia::sdxl::kernels {
     void conditions(const ::cuda::stream_ref stream, void* output, const void* pooled, const void* geometry);
     void time_condition(const ::cuda::stream_ref stream, void* output, const void* times, const void* labels, const int steps);
     void training_sigmas(const ::cuda::stream_ref stream, float* output);
-    void prepare_schedule(const ::cuda::stream_ref stream, SamplingStep* output, float* times, const float* training, const int steps);
-    void initialize(const ::cuda::stream_ref stream, float* state, void* input, int* step, const std::uint64_t* seed, const SamplingStep* schedule, const int count);
+    void prepare_schedule(::cuda::stream_ref stream, SamplingStep* output, float* times, const float* training, int steps, float denoise = 1);
+    void initialize(::cuda::stream_ref stream, float* state, void* input, int* step, const std::uint64_t* seed, const SamplingStep* schedule, int count, const float* source = nullptr, bool full_noise = true);
     void snapshot_begin(::cuda::stream_ref stream, int* selected, SnapshotSlot* slots);
     void snapshot_publish(::cuda::stream_ref stream, const int* selected, SnapshotSlot* slots, const int* step);
     void euler(const ::cuda::stream_ref stream, float* state, void* input, const void* epsilon, const SamplingStep* schedule, const int* step, const float cfg, const int count, float* snapshots = nullptr, const int* selected = nullptr);
     void advance(::cuda::stream_ref stream, int* step, int count, cudaGraphConditionalHandle loop, cudaGraphConditionalHandle decode, Control* control);
+    void image_encode(::cuda::stream_ref stream, void* output, const std::uint8_t* pixels, int count);
+    void encoder_pad(::cuda::stream_ref stream, void* output, const void* input, int height, int width, int channels);
+    void latent_encode(::cuda::stream_ref stream, float* output, const void* moments, int count);
     void latent_decode(const ::cuda::stream_ref stream, void* output, const float* latent, const int count);
     void pixels(const ::cuda::stream_ref stream, std::uint8_t* output, const void* input, const int count);
 } // namespace genesia::sdxl::kernels
