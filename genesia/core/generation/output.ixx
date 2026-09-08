@@ -13,11 +13,6 @@ export namespace genesia {
         prompt::Pair prompt;
         std::shared_ptr<const prompt::Catalog> catalog;
     };
-    struct Image final {
-        int width{};
-        int height{};
-        std::vector<std::uint8_t> pixels;
-    };
     struct ImageWriter final {
         std::filesystem::path directory;
         std::uint64_t next_index{1};
@@ -25,6 +20,4 @@ export namespace genesia {
         explicit ImageWriter(std::filesystem::path directory);
         std::filesystem::path save(const sdxl::Output& output, const Record& record);
     };
-    Image read_image(const std::filesystem::path& path);
-    Image thumbnail(const sdxl::Output& output);
-}
+} // namespace genesia

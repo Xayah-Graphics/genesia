@@ -1,12 +1,18 @@
+module;
+#include <nlohmann/json.hpp>
+
 module genesia.prompt.catalog;
+import genesia.generation.defaults;
 import std;
 
 namespace genesia::prompt {
-    Catalog::Catalog(const std::span<const CustomTag> custom) {
-        std::ifstream file{GENESIA_TAG_CATALOG, std::ios::binary};
+    Catalog::Catalog() {
+        std::ifstream file{std::filesystem::path{defaults::assets} / "tags/danbooru.csv", std::ios::binary};
         file.exceptions(std::ios::badbit | std::ios::failbit);
         const std::string csv{std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{}};
-        struct Slice { std::uint32_t offset, size; };
+        struct Slice {
+            std::uint32_t offset, size;
+        };
         struct Row {
             Slice name, text;
             std::uint32_t aliases, alias_count, count;
@@ -31,7 +37,10 @@ namespace genesia::prompt {
                     const char c = csv[cursor++];
                     if (quoted && c == '"') {
                         if (cursor < csv.size() && csv[cursor] == '"') ++cursor;
-                        else { quoted = false; continue; }
+                        else {
+                            quoted = false;
+                            continue;
+                        }
                     } else if (!quoted && (c == ',' || c == '\n' || c == '\r')) {
                         if (c == '\r' && cursor < csv.size() && csv[cursor] == '\n') ++cursor;
                         break;
@@ -52,10 +61,14 @@ namespace genesia::prompt {
             }
             rows.push_back(row);
         }
-        for (const auto& tag : custom) {
-            const auto name = normalize(tag.name);
-            if (name.empty() || name.find_first_of(",\r\n") != std::string::npos || std::ranges::any_of(tag.name + tag.text, [](const unsigned char c) { return c >= 128; })) throw std::invalid_argument{"Custom tags require an ASCII name and text; names cannot contain separators"};
-            rows.push_back({append(name), append(tag.text), static_cast<std::uint32_t>(alias_offsets.size()), 0, 0, -1});
+        std::ifstream custom_file{std::filesystem::path{defaults::assets} / "tags/custom.json"};
+        custom_file.exceptions(std::ios::badbit | std::ios::failbit);
+        const auto custom = nlohmann::json::parse(custom_file);
+        for (const auto& [key, value] : custom.items()) {
+            const auto text = value.get<std::string>();
+            const auto name = normalize(key);
+            if (name.empty() || name.find_first_of(",\r\n") != std::string::npos || std::ranges::any_of(key + text, [](const unsigned char c) { return c >= 128; })) throw std::invalid_argument{"Custom tags require an ASCII name and text; names cannot contain separators"};
+            rows.push_back({append(name), append(text), static_cast<std::uint32_t>(alias_offsets.size()), 0, 0, -1});
         }
         const std::string_view arena{storage};
         tags.reserve(rows.size());
@@ -74,7 +87,7 @@ namespace genesia::prompt {
     }
 
     std::expected<std::uint32_t, std::string> Catalog::resolve(const std::string_view name) const {
-        const auto key = normalize(name);
+        const auto key   = normalize(name);
         const auto found = std::ranges::lower_bound(names, key, {}, &CatalogKey::name);
         if (found != names.end() && found->name == key) return found->tag;
         const auto matches = std::ranges::equal_range(alias_names, key, {}, &CatalogKey::name);
@@ -97,4 +110,4 @@ namespace genesia::prompt {
         }
         return result;
     }
-}
+} // namespace genesia::prompt

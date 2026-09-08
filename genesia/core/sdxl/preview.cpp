@@ -18,22 +18,27 @@ namespace genesia::sdxl {
         ::cuda::fill_bytes(stream, latent, 0u);
         forward();
         operator_workspace = runtime.finish_preparation();
+        std::unique_ptr<std::remove_pointer_t<cudaGraph_t>, decltype(&cudaGraphDestroy)> graph{nullptr, cudaGraphDestroy};
         neural::check(cudaStreamBeginCapture(stream.get(), cudaStreamCaptureModeThreadLocal));
-        forward();
-        cudaGraph_t graph{};
-        neural::check(cudaStreamEndCapture(stream.get(), &graph));
-        neural::check(cudaGraphInstantiate(&executable, graph, 0));
-        neural::check(cudaGraphDestroy(graph));
+        try {
+            forward();
+            neural::check(cudaStreamEndCapture(stream.get(), std::out_ptr(graph)));
+        } catch (...) {
+            cudaStreamCaptureStatus status{cudaStreamCaptureStatusNone};
+            cudaStreamIsCapturing(stream.get(), &status);
+            if (status != cudaStreamCaptureStatusNone) cudaStreamEndCapture(stream.get(), std::out_ptr(graph));
+            throw;
+        }
+        neural::check(cudaGraphInstantiate(std::out_ptr(executable), graph.get(), 0));
     }
 
     Preview::~Preview() {
         runtime.stream.sync();
-        cudaGraphExecDestroy(executable);
     }
 
     void Preview::decode(const float* source) {
         ::cuda::copy_bytes(runtime.stream, ::cuda::std::span<const float>{source, latent.size()}, latent);
-        neural::check(cudaGraphLaunch(executable, runtime.stream.get()));
+        neural::check(cudaGraphLaunch(executable.get(), runtime.stream.get()));
     }
 
     void Preview::forward() {

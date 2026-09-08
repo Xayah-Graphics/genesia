@@ -7,6 +7,7 @@ module;
 export module genesia.sdxl;
 
 import std;
+import genesia.generation.defaults;
 import genesia.neural.inference_runtime;
 import genesia.sdxl.tokenizer;
 import genesia.sdxl.weights;
@@ -20,10 +21,10 @@ export namespace genesia::sdxl {
     struct Parameters final {
         std::string positive;
         std::string negative;
-        int width{1024};
-        int height{1536};
-        int steps{50};
-        float cfg{4.5F};
+        int width{defaults::width};
+        int height{defaults::height};
+        int steps{defaults::steps};
+        float cfg{defaults::cfg};
         bool operator==(const Parameters&) const = default;
     };
 
@@ -32,16 +33,21 @@ export namespace genesia::sdxl {
 
     private:
         friend struct Inference;
+        struct Network final {
+            Clip clip_l;
+            Clip clip_g;
+            UNet unet;
+            VAE vae;
+
+            explicit Network(Checkpoint&& checkpoint);
+        };
         neural::InferenceRuntime runtime;
         Weights weights;
-        Checkpoint checkpoint;
+        Network network;
         Tokenizer tokenizer;
-        Clip clip_l;
-        Clip clip_g;
-        UNet unet;
 
     public:
-        const VAE vae;
+        const VAE& vae;
 
     private:
         ::cuda::device_buffer<float> training;
@@ -66,9 +72,6 @@ export namespace genesia::sdxl {
         std::size_t resident_bytes{};
         std::size_t cache_hits{};
         std::size_t cache_misses{};
-        double text_seconds{};
-        double precompute_seconds{};
-        double tuning_seconds{};
 
         Inference(Model& model, Parameters parameters, Control& control, Snapshots* snapshots = nullptr);
         ~Inference();
@@ -98,13 +101,13 @@ export namespace genesia::sdxl {
         ::cuda::device_buffer<std::uint8_t> image;
         std::array<Output, 2> outputs;
         std::size_t output_index{};
-        cudaGraph_t graph{};
-        cudaGraphExec_t executable{};
+        std::unique_ptr<std::remove_pointer_t<cudaEvent_t>, decltype(&cudaEventDestroy)> initialized{nullptr, cudaEventDestroy};
+        std::unique_ptr<std::remove_pointer_t<cudaEvent_t>, decltype(&cudaEventDestroy)> sampled{nullptr, cudaEventDestroy};
+        std::unique_ptr<std::remove_pointer_t<cudaEvent_t>, decltype(&cudaEventDestroy)> decoded_event{nullptr, cudaEventDestroy};
+        std::unique_ptr<std::remove_pointer_t<cudaGraph_t>, decltype(&cudaGraphDestroy)> graph{nullptr, cudaGraphDestroy};
+        std::unique_ptr<std::remove_pointer_t<cudaGraphExec_t>, decltype(&cudaGraphExecDestroy)> executable{nullptr, cudaGraphExecDestroy};
         cudaGraphConditionalHandle loop{};
         cudaGraphConditionalHandle decode_condition{};
-        cudaEvent_t initialized{};
-        cudaEvent_t sampled{};
-        cudaEvent_t decoded_event{};
 
         void denoise();
         void decode();

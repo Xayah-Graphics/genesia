@@ -12,7 +12,7 @@ export namespace genesia::editor::runtime {
     struct Device final {
         explicit Device(Instance& instance);
         ~Device();
-        Device(const Device&) = delete;
+        Device(const Device&)            = delete;
         Device& operator=(const Device&) = delete;
 
         vk::raii::PhysicalDevice physical{nullptr};
@@ -22,4 +22,4 @@ export namespace genesia::editor::runtime {
         vk::PhysicalDeviceMemoryProperties memory;
         vk::PhysicalDeviceDescriptorHeapPropertiesEXT heap_properties;
     };
-}
+} // namespace genesia::editor::runtime

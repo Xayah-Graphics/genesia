@@ -34,4 +34,4 @@ export namespace genesia::prompt {
     std::expected<std::vector<Tag>, Error> parse(const Catalog& catalog, std::string_view text);
     std::string serialize(const Catalog& catalog, std::span<const Tag> tags, bool conditioning = false);
     std::string compose(const Catalog& catalog, const Side& side);
-}
+} // namespace genesia::prompt

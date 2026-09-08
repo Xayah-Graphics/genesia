@@ -89,10 +89,10 @@ target_sources(
         genesia/core/sdxl/vae.cpp
         genesia/core/sdxl/sdxl.cpp
         genesia/core/headless.cpp
-        genesia/core/generation/configuration.cpp
         genesia/core/generation/output.cpp
         genesia/core/prompt/catalog.cpp
         genesia/core/prompt/prompt.cpp
+        genesia/core/prompt/preset.cpp
         PUBLIC
         FILE_SET cxx_modules TYPE CXX_MODULES FILES
         genesia/core/neural/inference-runtime.ixx
@@ -105,10 +105,11 @@ target_sources(
         genesia/core/sdxl/vae.ixx
         genesia/core/sdxl/sdxl.ixx
         genesia/core/headless.ixx
-        genesia/core/generation/configuration.ixx
+        genesia/core/generation/defaults.ixx
         genesia/core/generation/output.ixx
         genesia/core/prompt/catalog.ixx
         genesia/core/prompt/prompt.ixx
+        genesia/core/prompt/preset.ixx
 )
 target_include_directories(genesia_core PUBLIC "${GENESIA_CLION_CUDA_INCLUDE_DIRECTORY}")
 target_compile_options(genesia_core PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:-lineinfo>")
@@ -147,6 +148,7 @@ if (GENESIA_BUILD_UI)
             PRIVATE
             genesia/editor/runtime/device.cpp
             genesia/editor/runtime/resources.cpp
+            genesia/editor/runtime/images.cpp
             genesia/editor/platform/window.cpp
             genesia/editor/ui/renderer.cpp
             genesia/editor/platform/interop.cpp
@@ -162,6 +164,7 @@ if (GENESIA_BUILD_UI)
             FILE_SET editor_modules TYPE CXX_MODULES FILES
             genesia/editor/runtime/device.ixx
             genesia/editor/runtime/resources.ixx
+            genesia/editor/runtime/images.ixx
             genesia/editor/platform/window.ixx
             genesia/editor/ui/renderer.ixx
             genesia/editor/platform/interop.ixx
@@ -182,6 +185,7 @@ if (GENESIA_BUILD_UI)
             genesia_core
             genesia::vulkan
             genesia::imgui
+            genesia::stb
             CUDA::cudart
             dwmapi
             shell32
@@ -203,9 +207,8 @@ endif ()
 # ============================================================================
 # Runtime Resources
 # ============================================================================
-configure_file(assets/tags/danbooru.csv assets/tags/danbooru.csv COPYONLY)
-set(GENESIA_TAG_CATALOG "${PROJECT_BINARY_DIR}/assets/tags/danbooru.csv" CACHE FILEPATH "Runtime Danbooru tag catalog")
-target_compile_definitions(genesia_core PRIVATE GENESIA_TAG_CATALOG="${GENESIA_TAG_CATALOG}")
+set(GENESIA_ASSET_DIRECTORY "${PROJECT_SOURCE_DIR}/assets" CACHE PATH "Runtime assets and editable prompt presets")
+target_compile_definitions(genesia_core PUBLIC GENESIA_ASSET_DIRECTORY="${GENESIA_ASSET_DIRECTORY}")
 
 if (WIN32)
     add_custom_command(

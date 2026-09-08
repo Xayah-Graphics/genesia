@@ -52,7 +52,7 @@ namespace genesia::sdxl {
             runtime.linear(sequence, attention, block.projection, sequence);
             runtime.layer_norm(normalized, sequence, block.norm2);
             runtime.linear(expanded, normalized, block.expand);
-            neural::kernels::activation(runtime.stream, expanded.data, expanded.data, expanded.elements(), 1, large ? 2 : 1);
+            neural::kernels::activation(runtime.stream, expanded.data, expanded.data, expanded.elements(), large ? 2 : 1);
             runtime.linear(sequence, expanded, block.contract, sequence);
         }
     }
@@ -88,7 +88,7 @@ namespace genesia::sdxl {
         runtime.layer_norm(single, residual, last.norm2);
         const neural::TensorView hidden = scratch.hidden.reshape(1, 1, 1, width * 4, neural::Scalar::f16);
         runtime.linear(hidden, single, last.expand);
-        neural::kernels::activation(runtime.stream, hidden.data, hidden.data, hidden.elements(), 1, 2);
+        neural::kernels::activation(runtime.stream, hidden.data, hidden.data, hidden.elements(), 2);
         runtime.linear(residual, hidden, last.contract, residual);
         runtime.layer_norm(single, residual, final_norm);
         runtime.linear(pooled, single, projection);

@@ -11,7 +11,9 @@ export namespace genesia::editor {
         int rank;
     };
     struct TagSearch final {
-        struct Posting { std::uint32_t gram, begin, count; };
+        struct Posting {
+            std::uint32_t gram, begin, count;
+        };
         const prompt::Catalog& catalog;
         std::vector<prompt::CatalogKey> keys;
         std::vector<Posting> index;
@@ -22,6 +24,21 @@ export namespace genesia::editor {
     };
     struct TagMove final {
         std::size_t from_group, from_tag, to_group, to_tag;
+    };
+    struct TagEditor;
+    struct TagLayout final {
+        struct Item final {
+            std::string_view text;
+            std::string weight;
+            ImVec2 position;
+            float width, weight_width;
+            bool input;
+        };
+        std::vector<Item> items;
+        float width, height;
+        bool input_expanded{};
+
+        TagLayout(const prompt::Group& group, const prompt::Catalog& catalog, float width, float scale, const TagEditor* editor = nullptr);
     };
     struct TagEditor final {
         std::uint32_t id{};
@@ -46,8 +63,7 @@ export namespace genesia::editor {
 
         void replace(prompt::Group& group, std::vector<prompt::Tag> tags);
         bool commit(prompt::Group& group, const prompt::Catalog& catalog, std::optional<std::uint32_t> candidate = {});
-        float measure(const prompt::Group& group, const prompt::Catalog& catalog, float width, float scale) const;
-        void draw(const char* payload_type, std::size_t group_index, prompt::Group& group, const TagSearch& search, float width, float scale, std::optional<TagMove>& move);
+        void draw(const char* payload_type, std::size_t group_index, prompt::Group& group, const TagSearch& search, const TagLayout& layout, float scale, std::optional<TagMove>& move);
         static int input_callback(ImGuiInputTextCallbackData* data);
     };
     struct PromptEditor final {
@@ -68,4 +84,4 @@ export namespace genesia::editor {
         void draw(prompt::Pair& prompt, const TagSearch& search, float scale);
     };
     void view_prompt(const prompt::Pair& prompt, const prompt::Catalog& catalog, float scale);
-}
+} // namespace genesia::editor

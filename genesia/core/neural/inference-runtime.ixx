@@ -57,15 +57,14 @@ export namespace genesia::neural {
 
     struct MatmulPlan final {
         MatmulShape shape;
-        cublasLtMatmulDesc_t operation{};
-        cublasLtMatrixLayout_t a{};
-        cublasLtMatrixLayout_t b{};
-        cublasLtMatrixLayout_t output{};
+        std::unique_ptr<std::remove_pointer_t<cublasLtMatmulDesc_t>, decltype(&cublasLtMatmulDescDestroy)> operation{nullptr, cublasLtMatmulDescDestroy};
+        std::unique_ptr<std::remove_pointer_t<cublasLtMatrixLayout_t>, decltype(&cublasLtMatrixLayoutDestroy)> a{nullptr, cublasLtMatrixLayoutDestroy};
+        std::unique_ptr<std::remove_pointer_t<cublasLtMatrixLayout_t>, decltype(&cublasLtMatrixLayoutDestroy)> b{nullptr, cublasLtMatrixLayoutDestroy};
+        std::unique_ptr<std::remove_pointer_t<cublasLtMatrixLayout_t>, decltype(&cublasLtMatrixLayoutDestroy)> output{nullptr, cublasLtMatrixLayoutDestroy};
         cublasLtMatmulAlgo_t algorithm{};
         std::size_t workspace_bytes{};
 
         explicit MatmulPlan(const MatmulShape& shape);
-        ~MatmulPlan();
         MatmulPlan(const MatmulPlan&)            = delete;
         MatmulPlan& operator=(const MatmulPlan&) = delete;
     };
@@ -81,11 +80,10 @@ export namespace genesia::neural {
         ::cuda::stream_ref stream;
         std::size_t cache_hits{};
         std::size_t cache_misses{};
-        double tuning_seconds{};
 
     private:
-        cublasLtHandle_t blas{};
-        cudnnHandle_t dnn{};
+        std::unique_ptr<std::remove_pointer_t<cublasLtHandle_t>, decltype(&cublasLtDestroy)> blas{nullptr, cublasLtDestroy};
+        std::unique_ptr<std::remove_pointer_t<cudnnHandle_t>, decltype(&cudnnDestroy)> dnn{nullptr, cudnnDestroy};
         ::cuda::device_buffer<std::byte> workspace;
         ::cuda::device_buffer<std::byte> intermediate;
         std::filesystem::path cache_directory;

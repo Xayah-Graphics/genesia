@@ -59,7 +59,9 @@ file(
 #include <cuda_runtime_api.h>
 
 namespace cuda {
-    struct device_ref final {};
+    struct device_ref final {
+        [[nodiscard]] int get() const;
+    };
 
     struct devices_view final {
         [[nodiscard]] device_ref operator[](::std::size_t index) const;
@@ -84,7 +86,8 @@ namespace cuda {
     };
 
     struct stream final : stream_ref {
-        explicit stream(device_ref device);
+        explicit stream(device_ref device, int priority = 0);
+        explicit stream(no_init_t);
     };
 
     template<class Type>
@@ -132,7 +135,7 @@ namespace cuda {
     void fill_bytes(Arguments&&... arguments);
 
     enum thread_scope { thread_scope_system };
-    enum memory_order { memory_order_release, memory_order_seq_cst };
+    enum memory_order { memory_order_acquire, memory_order_release, memory_order_seq_cst };
 
     template<class Type, thread_scope Scope = thread_scope_system>
     struct atomic_ref final {

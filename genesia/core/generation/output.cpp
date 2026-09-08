@@ -1,13 +1,9 @@
 module;
 #include <genesia/cuda.h>
+
 #include <nlohmann/json.hpp>
-#define STB_IMAGE_IMPLEMENTATION
-#define STBI_ONLY_PNG
-#include <stb_image.h>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
-#define STB_IMAGE_RESIZE_IMPLEMENTATION
-#include <stb_image_resize2.h>
 module genesia.generation.output;
 
 import std;
@@ -35,7 +31,7 @@ namespace genesia {
             file.write(data.data(), data.size());
             file.write(reinterpret_cast<const char*>(&crc), sizeof(crc));
         }
-    }
+    } // namespace
 
     ImageWriter::ImageWriter(std::filesystem::path root) : directory{std::move(root)} {
         std::filesystem::create_directories(directory);
@@ -51,21 +47,18 @@ namespace genesia {
 
     std::filesystem::path ImageWriter::save(const sdxl::Output& output, const Record& record) {
         const auto started = std::chrono::steady_clock::now();
-        const auto model = record.model.u8string();
-        nlohmann::json metadata{
-            {"version", 1}, {"model", std::string{model.begin(), model.end()}}, {"seed", record.seed},
-            {"steps", record.parameters.steps}, {"cfg", record.parameters.cfg}, {"sampler", "euler"}, {"scheduler", "simple"}};
-        for (const auto& [name, side, text] : {std::tuple{"positive", &record.prompt.positive, &record.parameters.positive},
-                                              std::tuple{"negative", &record.prompt.negative, &record.parameters.negative}}) {
-            auto& saved = metadata["prompt"][name];
-            saved["text"] = *text;
-            saved["fixed"] = side->fixed;
+        const auto model   = record.model.u8string();
+        nlohmann::json metadata{{"version", 1}, {"model", std::string{model.begin(), model.end()}}, {"seed", record.seed}, {"steps", record.parameters.steps}, {"cfg", record.parameters.cfg}, {"sampler", "euler"}, {"scheduler", "simple"}};
+        for (const auto& [name, side, text] : {std::tuple{"positive", &record.prompt.positive, &record.parameters.positive}, std::tuple{"negative", &record.prompt.negative, &record.parameters.negative}}) {
+            auto& saved     = metadata["prompt"][name];
+            saved["text"]   = *text;
+            saved["fixed"]  = side->fixed;
             saved["groups"] = nlohmann::json::array();
             for (const auto& group : side->groups) {
                 nlohmann::json tags = nlohmann::json::array();
                 for (const auto tag : group.tags) {
                     const auto& entry = record.catalog->tags[tag.id];
-                    auto& saved_tag = tags.emplace_back(nlohmann::json{{"name", entry.name}, {"weight", tag.weight}});
+                    auto& saved_tag   = tags.emplace_back(nlohmann::json{{"name", entry.name}, {"weight", tag.weight}});
                     if (entry.category == -1) saved_tag["text"] = entry.text;
                 }
                 saved["groups"].push_back({{"enabled", group.enabled}, {"tags", std::move(tags)}});
@@ -76,8 +69,7 @@ namespace genesia {
         text.append(5, '\0');
         text += metadata.dump();
         int length{};
-        const std::unique_ptr<unsigned char, decltype(&std::free)> png{
-            stbi_write_png_to_mem(output.pixels.data(), output.width * 3, output.width, output.height, 3, &length), &std::free};
+        const std::unique_ptr<unsigned char, decltype(&std::free)> png{stbi_write_png_to_mem(output.pixels.data(), output.width * 3, output.width, output.height, 3, &length), &std::free};
         if (!png) throw std::runtime_error{"PNG encoding failed"};
 
         std::filesystem::path path;
@@ -107,26 +99,4 @@ namespace genesia {
         std::cout.flush();
         return path;
     }
-
-    Image read_image(const std::filesystem::path& path) {
-        std::ifstream file{path, std::ios::binary | std::ios::ate};
-        file.exceptions(std::ios::badbit | std::ios::failbit);
-        std::vector<std::uint8_t> encoded(static_cast<std::size_t>(file.tellg()));
-        file.seekg(0);
-        file.read(reinterpret_cast<char*>(encoded.data()), encoded.size());
-        Image result;
-        int channels;
-        const std::unique_ptr<unsigned char, decltype(&stbi_image_free)> pixels{
-            stbi_load_from_memory(encoded.data(), static_cast<int>(encoded.size()), &result.width, &result.height, &channels, 3), &stbi_image_free};
-        if (!pixels) throw std::runtime_error{stbi_failure_reason()};
-        result.pixels.assign(pixels.get(), pixels.get() + std::size_t(result.width) * result.height * 3);
-        return result;
-    }
-
-    Image thumbnail(const sdxl::Output& output) {
-        Image result{192, std::max(1, output.height * 192 / output.width)};
-        result.pixels.resize(std::size_t(result.width) * result.height * 3);
-        stbir_resize_uint8_srgb(output.pixels.data(), output.width, output.height, 0, result.pixels.data(), result.width, result.height, 0, STBIR_RGB);
-        return result;
-    }
-}
+} // namespace genesia

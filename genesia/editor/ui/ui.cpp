@@ -9,7 +9,8 @@ module;
 #include <imgui_internal.h>
 #include <shellapi.h>
 module genesia.editor.ui;
-import genesia.generation.configuration;
+import genesia.generation.defaults;
+import genesia.prompt.preset;
 import genesia.generation.output;
 import genesia.sdxl;
 import genesia.editor.platform.window;
@@ -20,17 +21,17 @@ import std;
 
 namespace genesia::editor {
     namespace {
-        constexpr ImGuiWindowFlags overlay = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar;
-        constexpr float top_strip_height = 48;
-        constexpr float control_height = 40;
-        constexpr float bottom_margin = 24;
-        constexpr float tag_column_width = 800;
+        constexpr ImGuiWindowFlags overlay  = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar;
+        constexpr float top_strip_height    = 48;
+        constexpr float control_height      = 40;
+        constexpr float bottom_margin       = 24;
+        constexpr float tag_column_width    = 800;
         constexpr float history_strip_width = 96;
 
         void control_shade(const ImVec2 minimum, const ImVec2 maximum, const float scale) {
-            auto* draw = ImGui::GetWindowDrawList();
-            const float x = (minimum.x + maximum.x) / 2;
-            const float y = (minimum.y + maximum.y) / 2;
+            auto* draw          = ImGui::GetWindowDrawList();
+            const float x       = (minimum.x + maximum.x) / 2;
+            const float y       = (minimum.y + maximum.y) / 2;
             const float feather = 12 * scale;
             const ImVec2 first{minimum.x - feather, minimum.y - feather};
             const ImVec2 last{maximum.x + feather, maximum.y + feather};
@@ -45,7 +46,7 @@ namespace genesia::editor {
         }
 
         bool text_button(const char* id, const char* label, const float scale, const float width = 0, const bool selected = false, const bool primary = false) {
-            const auto text = ImGui::CalcTextSize(label);
+            const auto text   = ImGui::CalcTextSize(label);
             const auto origin = ImGui::GetCursorScreenPos();
             const ImVec2 size{width ? width : text.x + 24 * scale, (primary ? top_strip_height : control_height) * scale};
             ImGui::PushStyleColor(ImGuiCol_NavCursor, {0, 0, 0, 0});
@@ -53,14 +54,14 @@ namespace genesia::editor {
             ImGui::PopStyleColor();
             const bool focused = ImGui::IsItemFocused() && ImGui::GetCurrentContext()->NavCursorVisible;
             const bool hovered = ImGui::IsItemHovered() || focused;
-            auto* storage = ImGui::GetStateStorage();
-            const auto key = ImGui::GetItemID();
-            const float alpha = std::lerp(storage->GetFloat(key), hovered || selected ? 1.0F : 0.0F, std::min(1.0F, ImGui::GetIO().DeltaTime / 0.12F));
+            auto* storage      = ImGui::GetStateStorage();
+            const auto key     = ImGui::GetItemID();
+            const float alpha  = std::lerp(storage->GetFloat(key), hovered || selected ? 1.0F : 0.0F, std::min(1.0F, ImGui::GetIO().DeltaTime / 0.12F));
             storage->SetFloat(key, alpha);
             auto* draw = ImGui::GetWindowDrawList();
             if (primary && alpha > 0) {
                 const auto clear = ImGui::GetColorU32(ImVec4{0.55F, 0.47F, 0.90F, 0});
-                const auto tint = ImGui::GetColorU32(ImVec4{0.55F, 0.47F, 0.90F, alpha * 0.16F});
+                const auto tint  = ImGui::GetColorU32(ImVec4{0.55F, 0.47F, 0.90F, alpha * 0.16F});
                 draw->AddRectFilledMultiColor(origin, {origin.x + size.x, origin.y + size.y}, clear, tint, tint, clear);
             }
             const ImVec2 position{origin.x + (size.x - text.x) / 2, origin.y + (size.y - text.y) / 2};
@@ -74,14 +75,14 @@ namespace genesia::editor {
         void number_field(const char* id, const char* label, const ImGuiDataType type, void* value, const ImVec2 size, const void* step, const char* format, const float scale, UserInterface::ParameterEdit& edit) {
             const auto origin = ImGui::GetCursorScreenPos();
             const ImVec2 end{origin.x + size.x, origin.y + size.y};
-            const auto key = ImGui::GetID(id);
-            const bool active = ImGui::GetActiveID() == key;
+            const auto key     = ImGui::GetID(id);
+            const bool active  = ImGui::GetActiveID() == key;
             const bool hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::IsMouseHoveringRect(origin, end);
-            auto* storage = ImGui::GetStateStorage();
-            const float alpha = std::lerp(storage->GetFloat(key), active || hovered ? 1.0F : 0.0F, std::min(1.0F, ImGui::GetIO().DeltaTime / 0.12F));
+            auto* storage      = ImGui::GetStateStorage();
+            const float alpha  = std::lerp(storage->GetFloat(key), active || hovered ? 1.0F : 0.0F, std::min(1.0F, ImGui::GetIO().DeltaTime / 0.12F));
             storage->SetFloat(key, alpha);
-            auto* draw = ImGui::GetWindowDrawList();
-            const auto text = ImGui::CalcTextSize(label);
+            auto* draw        = ImGui::GetWindowDrawList();
+            const auto text   = ImGui::CalcTextSize(label);
             const float inset = *label ? size.x - 56 * scale : 0;
             if (*label) draw->AddText({origin.x + 4 * scale, origin.y + (size.y - text.y) / 2}, ImGui::GetColorU32(ImVec4{0.57F + 0.22F * alpha, 0.58F + 0.22F * alpha, 0.64F + 0.22F * alpha, 1}), label);
             const bool clicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
@@ -90,7 +91,7 @@ namespace genesia::editor {
             if (active && step) {
                 ImGui::SetKeyOwner(ImGuiKey_UpArrow, key);
                 ImGui::SetKeyOwner(ImGuiKey_DownArrow, key);
-                const bool up = ImGui::IsKeyPressed(ImGuiKey_UpArrow, ImGuiInputFlags_Repeat, key);
+                const bool up   = ImGui::IsKeyPressed(ImGuiKey_UpArrow, ImGuiInputFlags_Repeat, key);
                 const bool down = ImGui::IsKeyPressed(ImGuiKey_DownArrow, ImGuiInputFlags_Repeat, key);
                 if (up || down) {
                     auto* input = ImGui::GetInputTextState(key);
@@ -135,8 +136,8 @@ namespace genesia::editor {
         if (started >= 0) {
             const float progress = std::clamp(float((now - started) / 0.12), 0.0F, 1.0F);
             const float eased    = 1 - (1 - progress) * (1 - progress) * (1 - progress);
-            zoom = std::max(fitted, std::exp(std::lerp(std::log(initial_zoom), std::log(target_zoom), eased)));
-            center = {anchor.x - pivot.x / (image.x * zoom), anchor.y - pivot.y / (image.y * zoom)};
+            zoom                 = std::max(fitted, std::exp(std::lerp(std::log(initial_zoom), std::log(target_zoom), eased)));
+            center               = {anchor.x - pivot.x / (image.x * zoom), anchor.y - pivot.y / (image.y * zoom)};
             if (progress == 1) {
                 zoom    = target_zoom;
                 started = -1;
@@ -148,11 +149,11 @@ namespace genesia::editor {
     void UserInterface::ImageView::constrain(const ImVec2 available, const ImVec2 image) {
         const float horizontal = std::min(0.5F, available.x / (2 * image.x * zoom));
         const float vertical   = std::min(0.5F, available.y / (2 * image.y * zoom));
-        center.x = std::clamp(center.x, horizontal, 1 - horizontal);
-        center.y = std::clamp(center.y, vertical, 1 - vertical);
+        center.x               = std::clamp(center.x, horizontal, 1 - horizontal);
+        center.y               = std::clamp(center.y, vertical, 1 - vertical);
     }
 
-    UserInterface::UserInterface(Configuration settings, std::filesystem::path path, WindowPlatform& platform, Renderer& display, Interop& bridge, Session& generation) : configuration{std::move(settings)}, configuration_path{std::move(path)}, window{platform}, renderer{display}, interop{bridge}, session{generation}, draft{configuration.parameters}, prompt{configuration.prompt}, tag_search{*configuration.catalog}, seed{configuration.seeds.front()} {
+    UserInterface::UserInterface(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, WindowPlatform& platform, Renderer& display, Interop& bridge, Session& generation) : catalog{std::move(catalog)}, preset{std::move(preset)}, window{platform}, renderer{display}, interop{bridge}, session{generation}, prompt{this->preset.prompt}, tag_search{*this->catalog} {
         prompt_editor.reset(prompt);
         ImGui::StyleColorsDark();
         auto& style          = ImGui::GetStyle();
@@ -203,7 +204,7 @@ namespace genesia::editor {
             const auto& frame      = previews[i];
             auto& source           = session.preview_interop.slots[frame.slot];
             const bool final_ready = std::ranges::any_of(events, [&](const Event& event) { return event.kind == EventKind::generated && event.id == frame.id; });
-            if (i + 1 != previews.size() || !following_latest || !configuration.preview.enabled || !renderer.visible || frame.id != observed_task || frame.step <= preview_step || final_ready || (!history.empty() && frame.id <= history.back().id)) {
+            if (i + 1 != previews.size() || !following_latest || !preview_enabled || !renderer.visible || frame.id != observed_task || frame.step <= preview_step || final_ready || (!history.empty() && frame.id <= history.back().id)) {
                 renderer.discard(*source.timeline, frame.ready);
                 continue;
             }
@@ -228,18 +229,17 @@ namespace genesia::editor {
                     selected   = event.id;
                 } else renderer.discard(*source.timeline, event.ready);
                 animate_until = glfwGetTime() + 0.2;
-                display_times.push_back(std::chrono::duration<double>(std::chrono::steady_clock::now() - event.generated_at).count());
             } else if (event.kind == EventKind::saved) {
-                auto& item = *std::ranges::find(history, event.id, &History::id);
+                auto& item       = *std::ranges::find(history, event.id, &History::id);
                 item.record.path = std::move(event.record.path);
-                item.saved = true;
+                item.saved       = true;
                 if (following_latest && !active && event.id == history.back().id && (image_live || selected != event.id)) {
                     requested_image = event.id;
                     session.load(event.id, item.record.path);
                 }
             } else if (requested_image && event.id == *requested_image) {
                 show_image(renderer.upload(event.image), event.image.width, event.image.height, event.id, false);
-                selected = event.id;
+                selected   = event.id;
                 image_live = false;
                 requested_image.reset();
             }
@@ -262,9 +262,9 @@ namespace genesia::editor {
     }
 
     bool UserInterface::prepare_prompt() {
-        if (!prompt_editor.commit(prompt, *configuration.catalog)) return false;
-        draft.positive = prompt::compose(*configuration.catalog, prompt.positive);
-        draft.negative = prompt::compose(*configuration.catalog, prompt.negative);
+        if (!prompt_editor.commit(prompt, *catalog)) return false;
+        draft.positive = prompt::compose(*catalog, prompt.positive);
+        draft.negative = prompt::compose(*catalog, prompt.negative);
         return true;
     }
 
@@ -279,13 +279,108 @@ namespace genesia::editor {
         parameter_edit = {};
     }
 
-    void UserInterface::save_settings() {
-        commit_parameters();
-        if (!prepare_prompt()) return;
-        configuration.parameters = draft;
-        configuration.prompt = prompt;
-        configuration.seeds = {seed};
-        write_configuration(configuration, configuration_path);
+    bool UserInterface::save_prompt() {
+        if (!prepare_prompt()) return false;
+        try {
+            prompt::write_preset({preset.name, prompt}, *catalog);
+            preset.prompt = prompt;
+            preset_error.clear();
+            return true;
+        } catch (const std::exception& failure) {
+            preset_error = failure.what();
+            return false;
+        }
+    }
+
+    void UserInterface::switch_preset() {
+        try {
+            auto next = prompt::read_preset(pending_preset, *catalog);
+            preset    = std::move(next);
+            prompt    = preset.prompt;
+            prompt_editor.reset(prompt);
+            preset_error.clear();
+        } catch (const std::exception& failure) {
+            preset_error = failure.what();
+        }
+        pending_preset.clear();
+    }
+
+    void UserInterface::preset_dialogs(const float scale) {
+        if (!pending_preset.empty() && !ImGui::IsPopupOpen("Unsaved prompt")) {
+            if (!prepare_prompt()) pending_preset.clear();
+            else if (prompt == preset.prompt) switch_preset();
+            else ImGui::OpenPopup("Unsaved prompt");
+        }
+        ImGui::SetNextWindowSize({420 * scale, 0});
+        if (ImGui::BeginPopupModal("Unsaved prompt", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextWrapped("Save changes to %s before switching?", preset.name.c_str());
+            if (!preset_error.empty()) ImGui::TextWrapped("%s", preset_error.c_str());
+            ImGui::Spacing();
+            if (ImGui::Button("Save", {108 * scale, 0}) && save_prompt()) {
+                switch_preset();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Discard", {108 * scale, 0})) {
+                switch_preset();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel", {108 * scale, 0}) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+                pending_preset.clear();
+                preset_error.clear();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        if (std::exchange(save_as_requested, false) && prepare_prompt()) {
+            preset_error.clear();
+            new_preset_name.fill(0);
+            ImGui::OpenPopup("Save prompt as");
+        }
+        ImGui::SetNextWindowSize({420 * scale, 0});
+        if (ImGui::BeginPopupModal("Save prompt as", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextDisabled("Preset name");
+            if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+            ImGui::SetNextItemWidth(-1);
+            const bool enter = ImGui::InputText("##PresetName", new_preset_name.data(), new_preset_name.size(), ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackCharFilter, [](ImGuiInputTextCallbackData* data) {
+                const auto c = data->EventChar;
+                return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' ? 0 : 1;
+            });
+            ImGui::TextDisabled("Letters, numbers, hyphens and underscores");
+            if (!preset_error.empty()) ImGui::TextWrapped("%s", preset_error.c_str());
+            ImGui::Spacing();
+            ImGui::BeginDisabled(new_preset_name[0] == 0);
+            if ((ImGui::Button("Save", {108 * scale, 0}) || enter) && new_preset_name[0]) {
+                try {
+                    prompt::Preset next{new_preset_name.data(), prompt};
+                    prompt::write_preset(next, *catalog, false);
+                    preset = std::move(next);
+                    preset_error.clear();
+                    ImGui::CloseCurrentPopup();
+                } catch (const std::exception& failure) {
+                    preset_error = failure.what();
+                }
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel", {108 * scale, 0}) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+                preset_error.clear();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        if (!preset_error.empty() && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) ImGui::OpenPopup("Prompt preset error");
+        ImGui::SetNextWindowSize({420 * scale, 0});
+        if (ImGui::BeginPopupModal("Prompt preset error", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextWrapped("%s", preset_error.c_str());
+            ImGui::Spacing();
+            if (ImGui::Button("Close") || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+                preset_error.clear();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
     }
 
     void UserInterface::submit() {
@@ -316,13 +411,12 @@ namespace genesia::editor {
 
     UserInterface::ControlLayout UserInterface::control_layout(const float scale, const ImVec2 size) const {
         ControlLayout layout{};
-        layout.different = following_latest && image_texture && (image_width != draft.width || image_height != draft.height);
-        const float dimensions_width = following_latest ? 112 * scale + (layout.different ? ImGui::CalcTextSize("Next").x + 12 * scale : 0)
-            : image_texture ? ImGui::CalcTextSize(std::format("{} \xC3\x97 {}", image_width, image_height).c_str()).x : 0;
+        layout.different             = following_latest && image_texture && (image_width != draft.width || image_height != draft.height);
+        const float dimensions_width = following_latest ? 112 * scale + (layout.different ? ImGui::CalcTextSize("Next").x + 12 * scale : 0) : image_texture ? ImGui::CalcTextSize(std::format("{} \xC3\x97 {}", image_width, image_height).c_str()).x : 0;
         if (layout.different) layout.image_label_width = ImGui::CalcTextSize(std::format("{} {} \xC3\x97 {} \xE2\x86\x92", image_live ? "Preview" : "Image", image_width, image_height).c_str()).x + 12 * scale;
-        layout.right_width = layout.image_label_width + dimensions_width + (image_texture ? 116 * scale : 0);
+        layout.right_width    = layout.image_label_width + dimensions_width + (image_texture ? 116 * scale : 0);
         const float available = size.x - (2 * bottom_margin + history_amount * history_strip_width) * scale;
-        layout.image_above = layout.right_width > available;
+        layout.image_above    = layout.right_width > available;
         if (layout.image_above) layout.right_width -= layout.image_label_width;
         return layout;
     }
@@ -333,17 +427,17 @@ namespace genesia::editor {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
         ImGui::Begin("##Canvas", nullptr, overlay | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollWithMouse);
-        const auto& io = ImGui::GetIO();
-        const float left = history_amount * history_strip_width * scale;
+        const auto& io    = ImGui::GetIO();
+        const float left  = history_amount * history_strip_width * scale;
         const float right = size.x - tags_amount * tag_column_width * scale;
         const ImVec2 origin{(left + right) / 2, size.y / 2};
         const ImVec2 available{(right - left) * io.DisplayFramebufferScale.x, size.y * io.DisplayFramebufferScale.y};
         ImGui::SetCursorScreenPos({left, 0});
         ImGui::InvisibleButton("##ImageArea", {right - left, size.y});
-        const bool hovered = ImGui::IsItemHovered();
-        const bool held = ImGui::IsItemActive();
+        const bool hovered   = ImGui::IsItemHovered();
+        const bool held      = ImGui::IsItemActive();
         const bool activated = ImGui::IsItemActivated();
-        auto* draw = ImGui::GetWindowDrawList();
+        auto* draw           = ImGui::GetWindowDrawList();
         if (image_texture) {
             const double now = glfwGetTime();
             const ImVec2 image{float(image_width), float(image_height)};
@@ -352,7 +446,7 @@ namespace genesia::editor {
             const ImVec2 dimensions{image.x * view.zoom / io.DisplayFramebufferScale.x, image.y * view.zoom / io.DisplayFramebufferScale.y};
             const ImVec2 first{origin.x - view.center.x * dimensions.x, origin.y - view.center.y * dimensions.y};
             const bool over_image = hovered && ImGui::IsMouseHoveringRect(first, {first.x + dimensions.x, first.y + dimensions.y});
-            const bool movable = image.x * view.zoom > available.x + 0.5F || image.y * view.zoom > available.y + 0.5F;
+            const bool movable    = image.x * view.zoom > available.x + 0.5F || image.y * view.zoom > available.y + 0.5F;
             if (!held) view.dragging = false;
             if (activated && over_image && movable && !ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                 view.dragging    = true;
@@ -418,10 +512,10 @@ namespace genesia::editor {
     }
 
     void UserInterface::generation_settings(const float scale, const ImVec2 size) {
-        const float row_height = 32 * scale;
+        const float row_height       = 32 * scale;
         const float seed_label_width = ImGui::CalcTextSize("Seed").x + 12 * scale;
-        const float mode_width = ImGui::CalcTextSize("Random").x + 16 * scale;
-        const float panel_width = std::max(336 * scale, seed_label_width + mode_width + ImGui::CalcTextSize("18446744073709551615").x + 48 * scale);
+        const float mode_width       = ImGui::CalcTextSize("Random").x + 16 * scale;
+        const float panel_width      = std::max(336 * scale, seed_label_width + mode_width + ImGui::CalcTextSize("18446744073709551615").x + 48 * scale);
         ImGui::SetNextWindowPos({size.x - 12 * scale, (top_strip_height + 6) * scale}, ImGuiCond_Always, {1, 0});
         ImGui::SetNextWindowSize({panel_width, 0});
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {16 * scale, 12 * scale});
@@ -444,7 +538,7 @@ namespace genesia::editor {
         number_field("##CFG", "CFG", ImGuiDataType_Float, &draft.cfg, field_size, &cfg_step, "%.1f", scale, parameter_edit);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Guidance scale for the next image\nUp / Down: 0.1\nEnter to confirm, Esc to undo");
         const auto origin = ImGui::GetCursorScreenPos();
-        auto* draw = ImGui::GetWindowDrawList();
+        auto* draw        = ImGui::GetWindowDrawList();
         draw->AddLine({origin.x, origin.y - 8 * scale}, {origin.x + width, origin.y - 8 * scale}, ImGui::GetColorU32(ImVec4{1, 1, 1, 0.06F}), scale);
         draw->AddText({origin.x + 4 * scale, origin.y + (row_height - ImGui::GetFontSize()) / 2}, ImGui::GetColorU32(ImGuiCol_TextDisabled), "Seed");
         if (!random_seed) {
@@ -481,12 +575,12 @@ namespace genesia::editor {
         double elapsed{};
         {
             const std::lock_guard lock{session.mutex};
-            active = session.active.has_value();
-            paused = session.paused;
-            loaded = session.model_ready;
-            failed = !session.error.empty();
+            active      = session.active.has_value();
+            paused      = session.paused;
+            loaded      = session.model_ready;
+            failed      = !session.error.empty();
             unavailable = session.worker_done;
-            queued = session.queue.size();
+            queued      = session.queue.size();
             if (active) {
                 active_id = session.active->id;
                 steps     = session.active->parameters.steps;
@@ -547,43 +641,43 @@ namespace genesia::editor {
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Application menu\nF11 to toggle fullscreen\nEsc to exit");
         const float left_end = ImGui::GetItemRectMax().x + 4 * scale;
         if (ImGui::BeginPopup("Application")) {
-            ImGui::MenuItem("Live preview", nullptr, &configuration.preview.enabled);
+            ImGui::MenuItem("Live preview", nullptr, &preview_enabled);
             ImGui::Separator();
-            if (ImGui::MenuItem("Save configuration", "Ctrl+S", false, following_latest)) save_settings();
-            if (ImGui::MenuItem("Open output folder")) ShellExecuteW(window.native_window, L"open", std::filesystem::absolute(configuration.output).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            if (ImGui::MenuItem("Save prompt", "Ctrl+S", false, following_latest)) save_prompt();
+            if (ImGui::MenuItem("Open output folder")) ShellExecuteW(window.native_window, L"open", std::filesystem::absolute(defaults::output).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
             ImGui::EndPopup();
         }
         const bool queue_visible      = queued != 0 || paused || ImGui::IsPopupOpen("Queue");
         const std::string queue_label = queue_visible ? std::format("Queue  {}", queued) : "";
         const char* stop_label        = active ? "Stop" : paused && !failed ? "Resume" : "";
-        const float primary_width = (following_latest ? 150 : 184) * scale;
-        float controls_width = primary_width;
+        const float primary_width     = (following_latest ? 150 : 184) * scale;
+        float controls_width          = primary_width;
         for (const char* label : {queue_label.c_str(), stop_label})
             if (*label) controls_width += ImGui::CalcTextSize(label).x + 28 * scale;
-        const bool queue_paused = paused && !active && !failed;
-        const char* label = queue_paused ? "Queue paused" : progress_alpha > 0 ? progress_label.c_str() : "";
-        const float alpha = queue_paused ? 1 : progress_alpha;
-        const float right_start = maximum.x - controls_width;
-        const float label_width = *label ? std::max(ImGui::CalcTextSize("Finishing image").x, ImGui::CalcTextSize(label).x) : 0;
-        const auto time_text = ImGui::CalcTextSize(progress_time.c_str());
-        const float time_width = std::max(ImGui::CalcTextSize("0000.0s").x, time_text.x);
-        const bool show_time = *label && !queue_paused && !progress_time.empty() && label_width + 16 * scale + time_width <= right_start - left_end - 32 * scale;
+        const bool queue_paused  = paused && !active && !failed;
+        const char* label        = queue_paused ? "Queue paused" : progress_alpha > 0 ? progress_label.c_str() : "";
+        const float alpha        = queue_paused ? 1 : progress_alpha;
+        const float right_start  = maximum.x - controls_width;
+        const float label_width  = *label ? std::max(ImGui::CalcTextSize("Finishing image").x, ImGui::CalcTextSize(label).x) : 0;
+        const auto time_text     = ImGui::CalcTextSize(progress_time.c_str());
+        const float time_width   = std::max(ImGui::CalcTextSize("0000.0s").x, time_text.x);
+        const bool show_time     = *label && !queue_paused && !progress_time.empty() && label_width + 16 * scale + time_width <= right_start - left_end - 32 * scale;
         const float status_width = label_width + (show_time ? 16 * scale + time_width : 0);
-        const float group_left = right_start - status_width - (*label ? 12 * scale : 0) - 8 * scale;
+        const float group_left   = right_start - status_width - (*label ? 12 * scale : 0) - 8 * scale;
         if (image_texture) control_shade({group_left, minimum.y + 4 * scale}, maximum, scale);
         if (*label) {
             ImGui::SetCursorScreenPos({group_left + 8 * scale, minimum.y + 4 * scale});
             ImGui::Dummy({status_width, control_height * scale});
             const auto origin = ImGui::GetItemRectMin();
-            const auto text = ImGui::CalcTextSize(label);
-            const float y = origin.y + (control_height * scale - text.y) / 2;
+            const auto text   = ImGui::CalcTextSize(label);
+            const float y     = origin.y + (control_height * scale - text.y) / 2;
             draw->AddText({origin.x, y}, ImGui::GetColorU32(ImVec4{0.89F, 0.89F, 0.94F, alpha}), label);
             if (show_time) {
                 draw->AddCircleFilled({origin.x + label_width + 8 * scale, origin.y + control_height * scale / 2}, 1.25F * scale, ImGui::GetColorU32(ImVec4{0.57F, 0.58F, 0.64F, alpha}));
                 draw->AddText({origin.x + status_width - time_text.x, y}, ImGui::GetColorU32(ImVec4{0.67F, 0.68F, 0.74F, alpha}), progress_time.c_str());
             }
             const bool preview_visible = image_live && selected == active_id;
-            const bool hidden_time = !show_time && !queue_paused && !progress_time.empty();
+            const bool hidden_time     = !show_time && !queue_paused && !progress_time.empty();
             if (ImGui::IsItemHovered() && (hidden_time || preview_visible)) {
                 ImGui::BeginTooltip();
                 if (hidden_time) ImGui::Text("Elapsed: %s", progress_time.c_str());
@@ -624,8 +718,7 @@ namespace genesia::editor {
             x = ImGui::GetItemRectMax().x + 4 * scale;
         }
         // The owner button remains a single-click action while its settings are open.
-        if (ImGui::IsPopupOpen("Generation settings") && ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)
-            && ImGui::IsMouseHoveringRect({x, minimum.y}, maximum) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        if (ImGui::IsPopupOpen("Generation settings") && ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::IsMouseHoveringRect({x, minimum.y}, maximum) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             commit_parameters();
             ImGui::ClosePopupsOverWindow(ImGui::GetCurrentWindow(), false);
         }
@@ -635,7 +728,7 @@ namespace genesia::editor {
             ImGui::BeginDisabled(unavailable || !prompt_editor.valid);
             if (text_button("##Generate", "Generate", scale, primary_width, false, true)) submit();
             ImGui::EndDisabled();
-            const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+            const bool hovered            = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
             const bool settings_requested = (hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) || (ImGui::IsItemFocused() && ImGui::Shortcut(ImGuiMod_Shift | ImGuiKey_F10));
             if (settings_requested) {
                 commit_parameters();
@@ -660,7 +753,7 @@ namespace genesia::editor {
     void UserInterface::tag_column(const float scale, const ImVec2 size, const ControlLayout& layout) {
         if (!tags_open || !following_latest) prompt_editor.suspend();
         if (tags_amount < 0.03F) return;
-        const float top = (top_strip_height + 24) * scale;
+        const float top    = (top_strip_height + 24) * scale;
         const float bottom = (bottom_margin + control_height + 16 + (layout.image_above ? control_height + 8 : 0)) * scale;
         ImGui::SetNextWindowPos({size.x - tag_column_width * scale, top});
         ImGui::SetNextWindowSize({tag_column_width * scale, size.y - top - bottom});
@@ -671,7 +764,45 @@ namespace genesia::editor {
         else if (image_texture && !image_live) ImGui::Text("Image %03llu", static_cast<unsigned long long>(selected + 1));
         else ImGui::TextUnformatted("Image");
         ImGui::PushFont(nullptr, 12);
-        ImGui::TextDisabled(following_latest ? "Draft" : "Read only");
+        if (following_latest) {
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {0, 0});
+            ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, {0, 0.5F});
+            ImGui::PushStyleColor(ImGuiCol_Button, {0, 0, 0, 0});
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            if (ImGui::Button(preset.name.c_str(), {ImGui::CalcTextSize(preset.name.c_str()).x + 16 * scale, 0})) {
+                try {
+                    preset_names = prompt::list_presets();
+                    ImGui::OpenPopup("Prompt presets");
+                } catch (const std::exception& failure) {
+                    preset_error = failure.what();
+                }
+            }
+            const auto minimum = ImGui::GetItemRectMin();
+            const auto maximum = ImGui::GetItemRectMax();
+            const ImVec2 arrow{maximum.x - 5 * scale, (minimum.y + maximum.y) / 2};
+            ImGui::GetWindowDrawList()->AddTriangleFilled({arrow.x - 3 * scale, arrow.y - 1.5F * scale}, {arrow.x + 3 * scale, arrow.y - 1.5F * scale}, {arrow.x, arrow.y + 1.5F * scale}, ImGui::GetColorU32(ImGuiCol_Text));
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Choose a prompt preset\nCtrl+S: save prompt");
+            ImGui::PopStyleColor(2);
+            ImGui::PopStyleVar(2);
+            if (prompt != preset.prompt) {
+                ImGui::SameLine(0, 8 * scale);
+                const auto point = ImGui::GetCursorScreenPos();
+                ImGui::Dummy({8 * scale, ImGui::GetTextLineHeight()});
+                ImGui::GetWindowDrawList()->AddCircleFilled({point.x + 3 * scale, point.y + ImGui::GetTextLineHeight() / 2}, 2 * scale, ImGui::GetColorU32(ImGuiCol_CheckMark));
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Unsaved prompt changes");
+            }
+            if (ImGui::BeginPopup("Prompt presets")) {
+                for (const auto& name : preset_names) {
+                    if (ImGui::Selectable(name.c_str(), name == preset.name) && name != preset.name) {
+                        pending_preset = name;
+                        preset_error.clear();
+                    }
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Save as...")) save_as_requested = true;
+                ImGui::EndPopup();
+            }
+        } else ImGui::TextDisabled("Read only");
         ImGui::PopFont();
         ImGui::Dummy({0, 12 * scale});
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
@@ -690,9 +821,9 @@ namespace genesia::editor {
     }
 
     void UserInterface::bottom_controls(const float scale, const ImVec2 size, const ControlLayout& layout) {
-        const float y = size.y - (bottom_margin + control_height) * scale;
+        const float y     = size.y - (bottom_margin + control_height) * scale;
         const float right = size.x - bottom_margin * scale;
-        const float x = right - layout.right_width;
+        const float x     = right - layout.right_width;
         ImGui::SetNextWindowPos({x, y});
         ImGui::SetNextWindowSize({layout.right_width, control_height * scale});
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
@@ -700,7 +831,7 @@ namespace genesia::editor {
         ImGui::PopStyleVar();
         if (image_texture) control_shade({x, y}, {right, y + control_height * scale}, scale);
         float dimensions_x = x;
-        auto* draw = ImGui::GetWindowDrawList();
+        auto* draw         = ImGui::GetWindowDrawList();
         if (layout.different) {
             const float info_x = layout.image_above ? right - layout.image_label_width : dimensions_x;
             const float info_y = layout.image_above ? y - (control_height + 8) * scale : y;
@@ -736,14 +867,14 @@ namespace genesia::editor {
             if (ImGui::BeginPopup("Resolution presets")) {
                 for (const auto& [label, width, height] : std::array{std::tuple{"Portrait  1024 x 1536", 1024, 1536}, std::tuple{"Square  1024 x 1024", 1024, 1024}, std::tuple{"Landscape  1536 x 1024", 1536, 1024}}) {
                     if (ImGui::MenuItem(label, nullptr, draft.width == width && draft.height == height)) {
-                        draft.width = width;
+                        draft.width  = width;
                         draft.height = height;
                     }
                 }
                 if (image_texture) {
                     ImGui::Separator();
                     if (ImGui::MenuItem("Use image size")) {
-                        draft.width = image_width;
+                        draft.width  = image_width;
                         draft.height = image_height;
                     }
                 }
@@ -758,8 +889,8 @@ namespace genesia::editor {
         if (image_texture) {
             ImGui::SetCursorScreenPos({right - 104 * scale, y});
             const ImVec2 image{float(image_width), float(image_height)};
-            const auto& io = ImGui::GetIO();
-            const float width = size.x - (history_amount * history_strip_width + tags_amount * tag_column_width) * scale;
+            const auto& io     = ImGui::GetIO();
+            const float width  = size.x - (history_amount * history_strip_width + tags_amount * tag_column_width) * scale;
             const float fitted = std::min(width * io.DisplayFramebufferScale.x / image.x, size.y * io.DisplayFramebufferScale.y / image.y);
             if (text_button("##View", std::format("{}{:.0f}%", view.fit ? "Fit \xC2\xB7 " : "", view.zoom * 100).c_str(), scale, 104 * scale)) {
                 const double now = glfwGetTime();
@@ -790,10 +921,10 @@ namespace genesia::editor {
         for (auto& item : std::views::reverse(history)) {
             ImGui::PushID(static_cast<int>(item.id));
             const float width = ImGui::GetContentRegionAvail().x;
-            const float fit = std::min((width - 16 * scale) / item.record.parameters.width, 96 * scale / item.record.parameters.height);
-            const float w = fit * item.record.parameters.width;
-            const float h = fit * item.record.parameters.height;
-            const auto p = ImGui::GetCursorScreenPos();
+            const float fit   = std::min((width - 16 * scale) / item.record.parameters.width, 96 * scale / item.record.parameters.height);
+            const float w     = fit * item.record.parameters.width;
+            const float h     = fit * item.record.parameters.height;
+            const auto p      = ImGui::GetCursorScreenPos();
             if (ImGui::InvisibleButton("Image", {width, h + 28 * scale}, ImGuiButtonFlags_EnableNav) && item.saved) {
                 commit_parameters();
                 prompt_editor.suspend();
@@ -805,16 +936,14 @@ namespace genesia::editor {
                 } else if (transition_texture) renderer.retire(std::exchange(transition_texture, 0));
             }
             const bool hovered = ImGui::IsItemHovered();
-            const bool chosen = !following_latest && item.id == requested_image.value_or(selected);
-            auto* draw = ImGui::GetWindowDrawList();
+            const bool chosen  = !following_latest && item.id == requested_image.value_or(selected);
+            auto* draw         = ImGui::GetWindowDrawList();
             const ImVec2 minimum{p.x + (width - w) / 2, p.y};
-            draw->AddImage(item.texture, minimum, {minimum.x + w, minimum.y + h}, {0, 0}, {1, 1},
-                ImGui::GetColorU32(ImVec4{1, 1, 1, chosen || hovered ? 1.0F : 0.75F}));
+            draw->AddImage(item.texture, minimum, {minimum.x + w, minimum.y + h}, {0, 0}, {1, 1}, ImGui::GetColorU32(ImVec4{1, 1, 1, chosen || hovered ? 1.0F : 0.75F}));
             if (chosen) draw->AddLine({p.x + 2 * scale, p.y + 4 * scale}, {p.x + 2 * scale, p.y + h - 4 * scale}, ImGui::GetColorU32(ImVec4{0.65F, 0.60F, 0.88F, 0.9F}), 2 * scale);
             ImGui::PushFont(nullptr, 12);
             const auto label = std::format("{:03}", item.id + 1);
-            draw->AddText({p.x + (width - ImGui::CalcTextSize(label.c_str()).x) / 2, p.y + h + 6 * scale},
-                ImGui::GetColorU32(ImGuiCol_TextDisabled), label.c_str());
+            draw->AddText({p.x + (width - ImGui::CalcTextSize(label.c_str()).x) / 2, p.y + h + 6 * scale}, ImGui::GetColorU32(ImGuiCol_TextDisabled), label.c_str());
             ImGui::PopFont();
             if (hovered) ImGui::SetTooltip("%d x %d\nSeed: %llu%s", item.record.parameters.width, item.record.parameters.height, static_cast<unsigned long long>(item.record.seed), item.saved ? "\nTab: show tags" : "\nSaving...");
             if (ImGui::BeginPopupContextItem()) {
@@ -842,11 +971,11 @@ namespace genesia::editor {
         std::string error;
         {
             const std::lock_guard lock{session.mutex};
-            session.preview_enabled = configuration.preview.enabled;
+            session.preview_enabled = preview_enabled;
             session.preview_visible = renderer.visible && following_latest;
             error                   = session.error;
         }
-        const auto controls = control_layout(scale, size);
+        const auto controls   = control_layout(scale, size);
         const bool dismissing = escape_owned || parameter_edit.id || (tags_open && following_latest && prompt_editor.escape_owned) || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
         if (renderer.visible) {
             canvas(scale, size);
@@ -854,6 +983,7 @@ namespace genesia::editor {
             bottom_controls(scale, size, controls);
             history_strip(scale, size);
             top_strip(scale, size);
+            preset_dialogs(scale);
             if (!error.empty() && error != shown_error) {
                 shown_error = error;
                 ImGui::OpenPopup("Generation failed");
@@ -866,13 +996,11 @@ namespace genesia::editor {
                 ImGui::EndPopup();
             }
             if (following_latest && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_GraveAccent, ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverActive)) submit();
-            if (following_latest && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S, ImGuiInputFlags_RouteGlobal)) save_settings();
+            if (following_latest && !ImGui::GetTopMostPopupModal() && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S, ImGuiInputFlags_RouteGlobal)) save_prompt();
             if (ImGui::Shortcut(ImGuiKey_F11, ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverActive)) window.toggle_fullscreen();
             if (!dismissing && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && ImGui::Shortcut(ImGuiKey_Escape, ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverActive)) window.request_close();
             escape_owned = parameter_edit.id || (tags_open && following_latest && prompt_editor.escape_owned) || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
-            if (!ImGui::GetIO().WantTextInput && !(tags_open && following_latest && prompt_editor.focus_input)
-                && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)
-                && ImGui::Shortcut(ImGuiKey_Tab, ImGuiInputFlags_RouteGlobal)) tags_open = !tags_open;
+            if (!ImGui::GetIO().WantTextInput && !(tags_open && following_latest && prompt_editor.focus_input) && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && ImGui::Shortcut(ImGuiKey_Tab, ImGuiInputFlags_RouteGlobal)) tags_open = !tags_open;
             const auto& io = ImGui::GetIO();
             if (io.MouseDelta.x || io.MouseDelta.y || io.MouseWheel || io.InputQueueCharacters.Size || ImGui::IsAnyItemActive()) animate_until = glfwGetTime() + 0.16;
         }

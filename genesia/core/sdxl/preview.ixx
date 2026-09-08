@@ -40,7 +40,7 @@ export namespace genesia::sdxl {
         ::cuda::device_buffer<__nv_bfloat16> decoded;
         ::cuda::device_buffer<std::byte> workspace;
         ::cuda::device_buffer<std::byte> operator_workspace;
-        cudaGraphExec_t executable{};
+        std::unique_ptr<std::remove_pointer_t<cudaGraphExec_t>, decltype(&cudaGraphExecDestroy)> executable{nullptr, cudaGraphExecDestroy};
 
         void forward();
     };

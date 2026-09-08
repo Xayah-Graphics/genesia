@@ -2,10 +2,6 @@ export module genesia.prompt.catalog;
 import std;
 
 export namespace genesia::prompt {
-    struct CustomTag final {
-        std::string name;
-        std::string text;
-    };
     struct CatalogTag final {
         std::string_view name;
         std::string_view text;
@@ -22,10 +18,10 @@ export namespace genesia::prompt {
         std::vector<CatalogKey> names;
         std::vector<CatalogKey> alias_names;
 
-        explicit Catalog(std::span<const CustomTag> custom);
-        Catalog(const Catalog&) = delete;
+        Catalog();
+        Catalog(const Catalog&)            = delete;
         Catalog& operator=(const Catalog&) = delete;
         std::expected<std::uint32_t, std::string> resolve(std::string_view name) const;
     };
     std::string normalize(std::string_view text);
-}
+} // namespace genesia::prompt

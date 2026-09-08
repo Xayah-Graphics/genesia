@@ -8,5 +8,4 @@
 !genesia/
 !genesia/**
 !assets/
-!assets/tags/
-!assets/tags/danbooru.csv
+!assets/**

@@ -40,21 +40,14 @@ namespace genesia::neural {
         const auto [m, n, k, leading_a, leading_b, scalar, result_scalar, transpose_a, bias, residual] = shape;
         const cudaDataType_t dtype                                                                     = scalar == Scalar::f32 ? CUDA_R_32F : scalar == Scalar::f16 ? CUDA_R_16F : CUDA_R_16BF;
         const cudaDataType_t result_dtype                                                              = result_scalar == Scalar::f32 ? CUDA_R_32F : result_scalar == Scalar::f16 ? CUDA_R_16F : CUDA_R_16BF;
-        check(cublasLtMatmulDescCreate(&operation, CUBLAS_COMPUTE_32F, CUDA_R_32F));
+        check(cublasLtMatmulDescCreate(std::out_ptr(operation), CUBLAS_COMPUTE_32F, CUDA_R_32F));
         const cublasOperation_t transpose = transpose_a ? CUBLAS_OP_T : CUBLAS_OP_N;
-        check(cublasLtMatmulDescSetAttribute(operation, CUBLASLT_MATMUL_DESC_TRANSA, &transpose, sizeof(transpose)));
+        check(cublasLtMatmulDescSetAttribute(operation.get(), CUBLASLT_MATMUL_DESC_TRANSA, &transpose, sizeof(transpose)));
         const cublasLtEpilogue_t epilogue = bias ? CUBLASLT_EPILOGUE_BIAS : CUBLASLT_EPILOGUE_DEFAULT;
-        check(cublasLtMatmulDescSetAttribute(operation, CUBLASLT_MATMUL_DESC_EPILOGUE, &epilogue, sizeof(epilogue)));
-        check(cublasLtMatrixLayoutCreate(&a, dtype, transpose_a ? k : n, transpose_a ? n : k, leading_a));
-        check(cublasLtMatrixLayoutCreate(&b, dtype, k, m, leading_b));
-        check(cublasLtMatrixLayoutCreate(&output, result_dtype, n, m, n));
-    }
-
-    MatmulPlan::~MatmulPlan() {
-        cublasLtMatmulDescDestroy(operation);
-        cublasLtMatrixLayoutDestroy(a);
-        cublasLtMatrixLayoutDestroy(b);
-        cublasLtMatrixLayoutDestroy(output);
+        check(cublasLtMatmulDescSetAttribute(operation.get(), CUBLASLT_MATMUL_DESC_EPILOGUE, &epilogue, sizeof(epilogue)));
+        check(cublasLtMatrixLayoutCreate(std::out_ptr(a), dtype, transpose_a ? k : n, transpose_a ? n : k, leading_a));
+        check(cublasLtMatrixLayoutCreate(std::out_ptr(b), dtype, k, m, leading_b));
+        check(cublasLtMatrixLayoutCreate(std::out_ptr(output), result_dtype, n, m, n));
     }
 
     ConvPlan::ConvPlan(const std::array<int, 10>& shape) : key{shape} {
@@ -100,9 +93,9 @@ namespace genesia::neural {
     }
 
     InferenceRuntime::InferenceRuntime(const ::cuda::stream_ref execution, const std::filesystem::path& directory) : stream{execution}, workspace{stream, ::cuda::device_default_memory_pool(stream.device())}, intermediate{stream, ::cuda::device_default_memory_pool(stream.device())} {
-        check(cublasLtCreate(&blas));
-        check(cudnnCreate(&dnn));
-        check(cudnnSetStream(dnn, stream.get()));
+        check(cublasLtCreate(std::out_ptr(blas)));
+        check(cudnnCreate(std::out_ptr(dnn)));
+        check(cudnnSetStream(dnn.get(), stream.get()));
         cudaDeviceProp device;
         check(cudaGetDeviceProperties(&device, stream.device().get()));
         int driver;
@@ -113,11 +106,6 @@ namespace genesia::neural {
     }
     InferenceRuntime::~InferenceRuntime() {
         stream.sync();
-        convolutions.clear();
-        matmuls.clear();
-        attentions.clear();
-        cudnnDestroy(dnn);
-        cublasLtDestroy(blas);
     }
 
     void InferenceRuntime::begin_preparation() {
@@ -164,33 +152,31 @@ namespace genesia::neural {
             plan            = convolutions.emplace(convolutions.end(), key);
             const auto file = cache_directory / ("conv-" + nlohmann::json(key).dump() + ".bin");
             if (std::filesystem::exists(file)) {
-                check(plan->graph.deserialize(dnn, read_plan(file).get<std::vector<std::uint8_t>>(), false, false));
+                check(plan->graph.deserialize(dnn.get(), read_plan(file).get<std::vector<std::uint8_t>>(), false, false));
                 ++cache_hits;
             } else {
-                const auto started = std::chrono::steady_clock::now();
-                check(plan->graph.build_operation_graph(dnn));
+                check(plan->graph.build_operation_graph(dnn.get()));
                 check(plan->graph.create_execution_plans({cudnn_frontend::HeurMode_t::A}));
                 plan->graph.deselect_numeric_notes({cudnn_frontend::NumericalNote_t::NONDETERMINISTIC, cudnn_frontend::NumericalNote_t::REDUCED_PRECISION_REDUCTION});
                 plan->graph.deselect_workspace_greater_than((1uz << 30));
-                check(plan->graph.check_support(dnn));
+                check(plan->graph.check_support(dnn.get()));
                 check(plan->graph.build_plans(cudnn_frontend::BuildPlanPolicy_t::ALL));
                 ::cuda::device_buffer<std::byte> temporary{stream, ::cuda::device_default_memory_pool(stream.device()), output.bytes(), ::cuda::no_init};
                 tensors[4] = temporary.data();
-                check(plan->graph.autotune(dnn, tensors, workspace_data));
+                check(plan->graph.autotune(dnn.get(), tensors, workspace_data));
                 tensors[4] = output.data;
                 std::vector<std::uint8_t> bytes;
                 check(plan->graph.serialize(bytes, false));
                 write_plan(file, bytes);
                 ++cache_misses;
-                tuning_seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
             }
             required_workspace = std::max(required_workspace, static_cast<std::size_t>(plan->graph.get_workspace_size()));
         }
-        check(plan->graph.execute(dnn, tensors, workspace_data));
+        check(plan->graph.execute(dnn.get(), tensors, workspace_data));
     }
 
     void InferenceRuntime::layer_norm(const TensorView output, const TensorView input, const Norm& layer) {
-        kernels::layer_norm(stream, output.data, input.data, layer.weight.data, layer.bias.data, input.n * input.h * input.w, input.c, layer.epsilon, static_cast<int>(input.scalar));
+        kernels::layer_norm(stream, output.data, input.data, layer.weight.data, layer.bias.data, input.n * input.h * input.w, input.c, layer.epsilon);
     }
     void InferenceRuntime::group_norm(const TensorView output, const TensorView input, const Norm& layer, float* statistics, const bool silu, const bool prepared, const TensorView time, const int* step) {
         kernels::group_norm(stream, output.data, input.data, layer.weight.data, layer.bias.data, statistics, input.n, input.h * input.w, input.c, layer.epsilon, static_cast<int>(input.scalar), silu, prepared, time.data, step);
@@ -233,27 +219,25 @@ namespace genesia::neural {
             if (lengths) tensors.emplace(6, plan->query_lengths.data());
             const auto file = cache_directory / ("attention-" + nlohmann::json(shape).dump() + ".bin");
             if (std::filesystem::exists(file)) {
-                check(plan->graph.deserialize(dnn, read_plan(file).get<std::vector<std::uint8_t>>(), false, false));
+                check(plan->graph.deserialize(dnn.get(), read_plan(file).get<std::vector<std::uint8_t>>(), false, false));
                 ++cache_hits;
             } else {
-                const auto started = std::chrono::steady_clock::now();
-                check(plan->graph.build_operation_graph(dnn));
+                check(plan->graph.build_operation_graph(dnn.get()));
                 check(plan->graph.create_execution_plans({cudnn_frontend::HeurMode_t::A}));
                 plan->graph.deselect_numeric_notes({cudnn_frontend::NumericalNote_t::NONDETERMINISTIC, cudnn_frontend::NumericalNote_t::REDUCED_PRECISION_REDUCTION});
                 plan->graph.deselect_workspace_greater_than((1uz << 30));
-                check(plan->graph.check_support(dnn));
+                check(plan->graph.check_support(dnn.get()));
                 check(plan->graph.build_plans(cudnn_frontend::BuildPlanPolicy_t::ALL));
-                check(plan->graph.autotune(dnn, tensors, workspace_data));
+                check(plan->graph.autotune(dnn.get(), tensors, workspace_data));
                 std::vector<std::uint8_t> bytes;
                 check(plan->graph.serialize(bytes, false));
                 write_plan(file, bytes);
                 ++cache_misses;
-                tuning_seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
             }
             required_workspace = std::max(required_workspace, static_cast<std::size_t>(plan->graph.get_workspace_size()));
         }
         if (lengths) tensors[6] = plan->query_lengths.data();
-        check(plan->graph.execute(dnn, tensors, workspace_data));
+        check(plan->graph.execute(dnn.get(), tensors, workspace_data));
     }
 
     void* InferenceRuntime::scratch(const std::size_t bytes) {
@@ -269,7 +253,7 @@ namespace genesia::neural {
         auto plan          = std::ranges::find_if(matmuls, [&](const MatmulPlan& value) { return value.shape == shape; });
         const bool prepare = plan == matmuls.end();
         if (prepare) plan = matmuls.emplace(matmuls.end(), shape);
-        if (bias.data) check(cublasLtMatmulDescSetAttribute(plan->operation, CUBLASLT_MATMUL_DESC_BIAS_POINTER, &bias.data, sizeof(bias.data)));
+        if (bias.data) check(cublasLtMatmulDescSetAttribute(plan->operation.get(), CUBLASLT_MATMUL_DESC_BIAS_POINTER, &bias.data, sizeof(bias.data)));
         const float beta     = residual.data ? 1.0F : 0.0F;
         const void* previous = residual.data ? residual.data : result.data;
         if (prepare) {
@@ -281,21 +265,20 @@ namespace genesia::neural {
                 plan->workspace_bytes = cached.at("workspace").get<std::size_t>();
                 ++cache_hits;
             } else {
-                const auto started = std::chrono::steady_clock::now();
                 ::cuda::device_buffer<std::byte> temporary{stream, ::cuda::device_default_memory_pool(stream.device()), result.bytes(), ::cuda::no_init};
-                cudaEvent_t start, stop;
-                check(cudaEventCreate(&start));
-                check(cudaEventCreate(&stop));
-                cublasLtMatmulPreference_t preference{};
-                check(cublasLtMatmulPreferenceCreate(&preference));
+                std::unique_ptr<std::remove_pointer_t<cudaEvent_t>, decltype(&cudaEventDestroy)> start{nullptr, cudaEventDestroy};
+                std::unique_ptr<std::remove_pointer_t<cudaEvent_t>, decltype(&cudaEventDestroy)> stop{nullptr, cudaEventDestroy};
+                check(cudaEventCreate(std::out_ptr(start)));
+                check(cudaEventCreate(std::out_ptr(stop)));
+                std::unique_ptr<std::remove_pointer_t<cublasLtMatmulPreference_t>, decltype(&cublasLtMatmulPreferenceDestroy)> preference{nullptr, cublasLtMatmulPreferenceDestroy};
+                check(cublasLtMatmulPreferenceCreate(std::out_ptr(preference)));
                 const std::size_t workspace_bytes    = (1uz << 30);
                 const std::uint32_t reduction_scheme = CUBLASLT_REDUCTION_SCHEME_NONE | CUBLASLT_REDUCTION_SCHEME_COMPUTE_TYPE;
-                check(cublasLtMatmulPreferenceSetAttribute(preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &workspace_bytes, sizeof(workspace_bytes)));
-                check(cublasLtMatmulPreferenceSetAttribute(preference, CUBLASLT_MATMUL_PREF_REDUCTION_SCHEME_MASK, &reduction_scheme, sizeof(reduction_scheme)));
+                check(cublasLtMatmulPreferenceSetAttribute(preference.get(), CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &workspace_bytes, sizeof(workspace_bytes)));
+                check(cublasLtMatmulPreferenceSetAttribute(preference.get(), CUBLASLT_MATMUL_PREF_REDUCTION_SCHEME_MASK, &reduction_scheme, sizeof(reduction_scheme)));
                 std::array<cublasLtMatmulHeuristicResult_t, 32> candidates;
                 int count{};
-                check(cublasLtMatmulAlgoGetHeuristic(blas, plan->operation, plan->a, plan->b, plan->output, plan->output, preference, static_cast<int>(candidates.size()), candidates.data(), &count));
-                cublasLtMatmulPreferenceDestroy(preference);
+                check(cublasLtMatmulAlgoGetHeuristic(blas.get(), plan->operation.get(), plan->a.get(), plan->b.get(), plan->output.get(), plan->output.get(), preference.get(), static_cast<int>(candidates.size()), candidates.data(), &count));
                 if (count == 0) throw std::runtime_error{"Inference GEMM has no supported algorithm"};
 
                 float best = std::numeric_limits<float>::infinity();
@@ -303,32 +286,29 @@ namespace genesia::neural {
                     if (candidates[index].state != CUBLAS_STATUS_SUCCESS) continue;
                     const auto& candidate = candidates[index].algo;
                     cublasLtMatmulHeuristicResult_t checked{};
-                    if (cublasLtMatmulAlgoCheck(blas, plan->operation, plan->a, plan->b, plan->output, plan->output, &candidate, &checked) != CUBLAS_STATUS_SUCCESS || checked.state != CUBLAS_STATUS_SUCCESS) continue;
-                    check(cublasLtMatmul(blas, plan->operation, &alpha, a.data, plan->a, b.data, plan->b, &beta, previous, plan->output, temporary.data(), plan->output, &candidate, workspace_data, workspace_bytes, stream.get()));
-                    check(cudaEventRecord(start, stream.get()));
-                    for (int i = 0; i < 3; ++i) check(cublasLtMatmul(blas, plan->operation, &alpha, a.data, plan->a, b.data, plan->b, &beta, previous, plan->output, temporary.data(), plan->output, &candidate, workspace_data, workspace_bytes, stream.get()));
-                    check(cudaEventRecord(stop, stream.get()));
-                    check(cudaEventSynchronize(stop));
+                    if (cublasLtMatmulAlgoCheck(blas.get(), plan->operation.get(), plan->a.get(), plan->b.get(), plan->output.get(), plan->output.get(), &candidate, &checked) != CUBLAS_STATUS_SUCCESS || checked.state != CUBLAS_STATUS_SUCCESS) continue;
+                    check(cublasLtMatmul(blas.get(), plan->operation.get(), &alpha, a.data, plan->a.get(), b.data, plan->b.get(), &beta, previous, plan->output.get(), temporary.data(), plan->output.get(), &candidate, workspace_data, workspace_bytes, stream.get()));
+                    check(cudaEventRecord(start.get(), stream.get()));
+                    for (int i = 0; i < 3; ++i) check(cublasLtMatmul(blas.get(), plan->operation.get(), &alpha, a.data, plan->a.get(), b.data, plan->b.get(), &beta, previous, plan->output.get(), temporary.data(), plan->output.get(), &candidate, workspace_data, workspace_bytes, stream.get()));
+                    check(cudaEventRecord(stop.get(), stream.get()));
+                    check(cudaEventSynchronize(stop.get()));
                     float elapsed;
-                    check(cudaEventElapsedTime(&elapsed, start, stop));
+                    check(cudaEventElapsedTime(&elapsed, start.get(), stop.get()));
                     if (elapsed < best) {
                         best                  = elapsed;
                         plan->algorithm       = candidate;
                         plan->workspace_bytes = checked.workspaceSize;
                     }
                 }
-                cudaEventDestroy(start);
-                cudaEventDestroy(stop);
                 if (!std::isfinite(best)) throw std::runtime_error{"Inference GEMM candidate measurement failed"};
                 std::array<std::uint8_t, sizeof(cublasLtMatmulAlgo_t)> bytes;
                 std::memcpy(bytes.data(), &plan->algorithm, bytes.size());
                 write_plan(file, {{"algorithm", bytes}, {"workspace", plan->workspace_bytes}});
                 ++cache_misses;
-                tuning_seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
             }
             required_workspace = std::max(required_workspace, plan->workspace_bytes);
         }
-        check(cublasLtMatmul(blas, plan->operation, &alpha, a.data, plan->a, b.data, plan->b, &beta, previous, plan->output, result.data, plan->output, &plan->algorithm, workspace_data, workspace_bytes, stream.get()));
+        check(cublasLtMatmul(blas.get(), plan->operation.get(), &alpha, a.data, plan->a.get(), b.data, plan->b.get(), &beta, previous, plan->output.get(), result.data, plan->output.get(), &plan->algorithm, workspace_data, workspace_bytes, stream.get()));
     }
 
     void check(const cudaError_t status) {

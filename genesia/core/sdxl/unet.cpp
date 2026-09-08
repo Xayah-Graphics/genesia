@@ -142,10 +142,10 @@ namespace genesia::sdxl {
         const neural::TensorView summed        = scratch.combined.reshape(steps * 2, 1, 1, 1280);
         kernels::time_embedding(runtime.stream, embeddings.data(), times, steps, 320, 1);
         runtime.linear(expanded, {embeddings.data(), steps, 1, 1, 320}, time_input);
-        neural::kernels::activation(runtime.stream, expanded.data, expanded.data, expanded.elements(), 1, 0);
+        neural::kernels::activation(runtime.stream, expanded.data, expanded.data, expanded.elements(), 0);
         runtime.linear(time, expanded, time_output);
         runtime.linear(labels_hidden, condition, label_input);
-        neural::kernels::activation(runtime.stream, labels_hidden.data, labels_hidden.data, labels_hidden.elements(), 1, 0);
+        neural::kernels::activation(runtime.stream, labels_hidden.data, labels_hidden.data, labels_hidden.elements(), 0);
         runtime.linear(label, labels_hidden, label_output);
         kernels::time_condition(runtime.stream, summed.data, time.data, label.data, steps);
         const auto prepare_residual = [&](const Residual& residual) {

@@ -1,6 +1,6 @@
 export module genesia.editor;
-export import genesia.generation.configuration;
+export import genesia.prompt.preset;
 import std;
 export namespace genesia::editor {
-    void run(Configuration configuration, const std::filesystem::path& configuration_path);
+    void run(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog);
 }

@@ -58,7 +58,7 @@ namespace genesia::sdxl {
         if (begin < text.size()) segments.emplace_back(text.substr(begin), weight);
     }
 
-    Tokens Tokenizer::encode(const std::string_view text, const std::int32_t padding) {
+    Tokens Tokenizer::encode(const std::string_view text) {
         segments.clear();
         weighted_segments(text, 1.0, segments);
         Tokens result;
@@ -106,7 +106,7 @@ namespace genesia::sdxl {
                     result.ids.push_back(49407);
                     result.weights.push_back(1.0F);
                     while (result.ids.size() % 77) {
-                        result.ids.push_back(padding);
+                        result.ids.push_back(-1);
                         result.weights.push_back(1.0F);
                     }
                     result.ids.push_back(49406);
@@ -117,7 +117,7 @@ namespace genesia::sdxl {
         result.ids.push_back(49407);
         result.weights.push_back(1.0F);
         while (result.ids.size() % 77) {
-            result.ids.push_back(padding);
+            result.ids.push_back(-1);
             result.weights.push_back(1.0F);
         }
         result.chunks = static_cast<int>(result.ids.size() / 77);

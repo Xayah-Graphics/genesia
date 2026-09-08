@@ -26,13 +26,13 @@ export namespace genesia::sdxl {
         neural::Conv convolution(const std::string& prefix, neural::Scalar scalar, int stride = 1, int padding = 1);
 
     private:
-#if defined(_WIN32)
-        void* file{};
-        void* mapping{};
-#elif defined(__linux__)
-        std::size_t mapped_size{};
+        struct Unmap final {
+#if defined(__linux__)
+            std::size_t size;
 #endif
-        const std::byte* view{};
+            void operator()(const std::byte* view) const noexcept;
+        };
+        std::unique_ptr<const std::byte, Unmap> view{nullptr, Unmap{}};
         const std::byte* data{};
         nlohmann::json index;
         Weights& weights;

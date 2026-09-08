@@ -21,36 +21,31 @@ import genesia.neural.inference_runtime;
 namespace genesia::sdxl {
     Checkpoint::Checkpoint(const std::filesystem::path& path, neural::InferenceRuntime& execution, Weights& storage) : runtime{execution}, weights{storage} {
 #if defined(_WIN32)
-        file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (file == INVALID_HANDLE_VALUE) throw std::system_error{static_cast<int>(GetLastError()), std::system_category(), "SDXL checkpoint open"};
-        mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
+        const HANDLE opened = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (opened == INVALID_HANDLE_VALUE) throw std::system_error{static_cast<int>(GetLastError()), std::system_category(), "SDXL checkpoint open"};
+        const std::unique_ptr<void, decltype(&CloseHandle)> file{opened, CloseHandle};
+        const std::unique_ptr<void, decltype(&CloseHandle)> mapping{CreateFileMappingW(file.get(), nullptr, PAGE_READONLY, 0, 0, nullptr), CloseHandle};
         if (!mapping) throw std::system_error{static_cast<int>(GetLastError()), std::system_category(), "SDXL checkpoint mapping"};
-        view = static_cast<const std::byte*>(MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0));
+        view.reset(static_cast<const std::byte*>(MapViewOfFile(mapping.get(), FILE_MAP_READ, 0, 0, 0)));
         if (!view) throw std::system_error{static_cast<int>(GetLastError()), std::system_category(), "SDXL checkpoint view"};
 #elif defined(__linux__)
-        mapped_size    = std::filesystem::file_size(path);
-        const int file = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+        const auto size = std::filesystem::file_size(path);
+        const int file  = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
         if (file == -1) throw std::system_error{errno, std::generic_category(), "SDXL checkpoint open"};
-        view                    = static_cast<const std::byte*>(::mmap(nullptr, mapped_size, PROT_READ, MAP_PRIVATE, file, 0));
+        void* mapped            = ::mmap(nullptr, size, PROT_READ, MAP_PRIVATE, file, 0);
         const int mapping_error = errno;
         ::close(file);
-        if (view == MAP_FAILED) throw std::system_error{mapping_error, std::generic_category(), "SDXL checkpoint mapping"};
+        if (mapped == MAP_FAILED) throw std::system_error{mapping_error, std::generic_category(), "SDXL checkpoint mapping"};
+        view = std::unique_ptr<const std::byte, Unmap>{static_cast<const std::byte*>(mapped), Unmap{size}};
 #endif
         std::uint64_t header_size;
-        std::memcpy(&header_size, view, sizeof(header_size));
-        index = nlohmann::json::parse(reinterpret_cast<const char*>(view + 8), reinterpret_cast<const char*>(view + 8 + header_size));
-        data  = view + 8 + header_size;
+        std::memcpy(&header_size, view.get(), sizeof(header_size));
+        index = nlohmann::json::parse(reinterpret_cast<const char*>(view.get() + 8), reinterpret_cast<const char*>(view.get() + 8 + header_size));
+        data  = view.get() + 8 + header_size;
     }
 
     Checkpoint::~Checkpoint() {
         runtime.stream.sync();
-#if defined(_WIN32)
-        UnmapViewOfFile(view);
-        CloseHandle(mapping);
-        CloseHandle(file);
-#elif defined(__linux__)
-        ::munmap(const_cast<std::byte*>(view), mapped_size);
-#endif
     }
 
     neural::TensorView Checkpoint::tensor(const std::string& name, const neural::Scalar scalar, const bool convolution, const bool transpose) {
@@ -58,7 +53,7 @@ namespace genesia::sdxl {
         const auto shape        = entry.at("shape").get<std::vector<int>>();
         const auto offsets      = entry.at("data_offsets").get<std::array<std::size_t, 2>>();
         const std::size_t count = std::accumulate(shape.begin(), shape.end(), 1uz, std::multiplies<>{});
-        const std::unordered_map<std::string, neural::Scalar> types{{"F16", neural::Scalar::f16}, {"F32", neural::Scalar::f32}, {"BF16", neural::Scalar::bf16}};
+        static const std::unordered_map<std::string, neural::Scalar> types{{"F16", neural::Scalar::f16}, {"F32", neural::Scalar::f32}, {"BF16", neural::Scalar::bf16}};
         const neural::Scalar source_scalar = types.at(entry.at("dtype").get<std::string>());
         auto& destination                  = weights.storage.emplace_back(runtime.stream, ::cuda::device_default_memory_pool(runtime.stream.device()), count * (scalar == neural::Scalar::f32 ? 4uz : 2uz), ::cuda::no_init);
         neural::TensorView result{destination.data(), 1, 1, shape.size() >= 2 ? shape[0] : 1, shape.size() >= 2 ? shape[1] : shape[0], scalar};
@@ -109,5 +104,12 @@ namespace genesia::sdxl {
     }
     neural::Conv Checkpoint::convolution(const std::string& prefix, const neural::Scalar scalar, const int stride, const int padding) {
         return {tensor(prefix + ".weight", scalar, true), tensor(prefix + ".bias", scalar), stride, padding};
+    }
+    void Checkpoint::Unmap::operator()(const std::byte* view) const noexcept {
+#if defined(_WIN32)
+        UnmapViewOfFile(view);
+#elif defined(__linux__)
+        ::munmap(const_cast<std::byte*>(view), size);
+#endif
     }
 } // namespace genesia::sdxl

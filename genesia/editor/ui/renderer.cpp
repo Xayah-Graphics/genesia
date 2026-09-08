@@ -9,7 +9,7 @@ module genesia.editor.ui.renderer;
 import genesia.editor.platform.window;
 import genesia.editor.runtime.device;
 import genesia.editor.runtime.resources;
-import genesia.generation.output;
+import genesia.editor.runtime.images;
 import std;
 import vulkan;
 
@@ -62,8 +62,7 @@ namespace genesia::editor {
         glfwGetFramebufferSize(window.window, &width, &height);
         visible = width != 0 && height != 0;
         if (visible && (extent.width != width || extent.height != height)) recreate();
-        frame_started = std::chrono::steady_clock::now();
-        auto& frame   = frames[frame_index];
+        auto& frame = frames[frame_index];
         static_cast<void>(device.logical.waitForFences(*frame.finished, true, std::numeric_limits<std::uint64_t>::max()));
         frame.uploads.clear();
         frame.retired.clear();
@@ -87,7 +86,7 @@ namespace genesia::editor {
         glfwGetWindowContentScale(window.window, &scale, &vertical);
         if (scale != dpi || !window.hand_cursors[0]) window.prepare_hand_cursors(scale);
         if (scale != dpi) ImGui::GetStyle().ScaleAllSizes(scale / dpi);
-        hand_cursor = -1;
+        hand_cursor                    = -1;
         dpi                            = scale;
         ImGui::GetStyle().FontSizeBase = 15.5F;
         ImGui::GetStyle().FontScaleDpi = dpi;
@@ -123,8 +122,7 @@ namespace genesia::editor {
         } catch (const vk::OutOfDateKHRError&) {
             extent = vk::Extent2D{};
         }
-        frame_index        = (frame_index + 1) % frames.size();
-        last_frame_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - frame_started).count();
+        frame_index = (frame_index + 1) % frames.size();
     }
 
     std::uint64_t Renderer::texture(const vk::Extent2D extent, const vk::Format format) {

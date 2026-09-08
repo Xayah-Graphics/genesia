@@ -7,10 +7,15 @@
 
 namespace genesia::neural::kernels {
 
-    template <class Function>
+    template <bool Float = true, class Function>
     void dispatch(const int scalar, Function function) {
-        if (scalar == 0) function.template operator()<float>();
-        else if (scalar == 1) function.template operator()<__half>();
+        if constexpr (Float) {
+            if (scalar == 0) {
+                function.template operator()<float>();
+                return;
+            }
+        }
+        if (scalar == 1) function.template operator()<__half>();
         else function.template operator()<__nv_bfloat16>();
     }
 
@@ -25,15 +30,14 @@ namespace genesia::neural::kernels {
         const std::size_t i = blockIdx.x * blockDim.x + threadIdx.x;
         if (i >= count) return;
         const std::size_t nchw = (i / (spatial * channels) * channels + i % channels) * spatial + i / channels % spatial;
-        output[i] = O(float(input[nchw]));
+        output[i]              = O(float(input[nchw]));
     }
 
-    template <class T>
-    __global__ void activation_kernel(T* output, const T* input, const std::size_t count, const int kind) {
+    __global__ void activation_kernel(__half* output, const __half* input, const std::size_t count, const int kind) {
         const std::size_t i = blockIdx.x * blockDim.x + threadIdx.x;
         if (i >= count) return;
         const float x = float(input[i]);
-        output[i]     = T(kind == 0 ? x / (1.0F + expf(-x)) : kind == 1 ? x / (1.0F + expf(-1.702F * x)) : 0.5F * x * (1.0F + erff(x * 0.7071067811865475F)));
+        output[i]     = __half(kind == 0 ? x / (1.0F + expf(-x)) : kind == 1 ? x / (1.0F + expf(-1.702F * x)) : 0.5F * x * (1.0F + erff(x * 0.7071067811865475F)));
     }
 
     __global__ void geglu_kernel(__half* output, const __half* input, const __half* bias, const int count, const int width) {
@@ -192,14 +196,13 @@ namespace genesia::neural::kernels {
         dispatch(destination, [&]<class O>() { dispatch(source, [&]<class I>() { ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((count + 255) / 256), ::cuda::block_dims(256))), convert_layout_kernel<O, I>, static_cast<O*>(output), static_cast<const I*>(input), spatial, channels, count); }); });
     }
 
-    void activation(const ::cuda::stream_ref stream, void* output, const void* input, const std::size_t count, const int scalar, const int kind) {
-        dispatch(scalar, [&]<class T>() { ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((count + 255) / 256), ::cuda::block_dims(256))), activation_kernel<T>, static_cast<T*>(output), static_cast<const T*>(input), count, kind); });
+    void activation(const ::cuda::stream_ref stream, void* output, const void* input, const std::size_t count, const int kind) {
+        ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((count + 255) / 256), ::cuda::block_dims(256))), activation_kernel, static_cast<__half*>(output), static_cast<const __half*>(input), count, kind);
     }
     template <class T, bool Residual>
     void launch_norm(const ::cuda::stream_ref stream, T* output, const T* input, T* residual, const T* weight, const T* bias, const int rows, const int width, const float epsilon) {
         const auto launch = [&]<int Width>() { ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims(rows), ::cuda::block_dims(256))), layer_norm_kernel<T, Width, Residual>, output, input, residual, weight, bias, epsilon); };
         switch (width) {
-        case 320: launch.template operator()<320>(); break;
         case 640: launch.template operator()<640>(); break;
         case 768: launch.template operator()<768>(); break;
         case 1280: launch.template operator()<1280>(); break;
@@ -211,8 +214,8 @@ namespace genesia::neural::kernels {
         ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((count + 255) / 256), ::cuda::block_dims(256))), geglu_kernel, static_cast<__half*>(output), static_cast<const __half*>(input), static_cast<const __half*>(bias), count, width * 4);
     }
 
-    void layer_norm(const ::cuda::stream_ref stream, void* output, const void* input, const void* weight, const void* bias, const int rows, const int width, const float epsilon, const int scalar) {
-        dispatch(scalar, [&]<class T>() { launch_norm<T, false>(stream, static_cast<T*>(output), static_cast<const T*>(input), nullptr, static_cast<const T*>(weight), static_cast<const T*>(bias), rows, width, epsilon); });
+    void layer_norm(const ::cuda::stream_ref stream, void* output, const void* input, const void* weight, const void* bias, const int rows, const int width, const float epsilon) {
+        launch_norm<__half, false>(stream, static_cast<__half*>(output), static_cast<const __half*>(input), nullptr, static_cast<const __half*>(weight), static_cast<const __half*>(bias), rows, width, epsilon);
     }
 
     void residual_norm(const ::cuda::stream_ref stream, void* output, void* residual, const void* input, const void* weight, const void* bias, const int rows, const int width, const float epsilon) {
@@ -221,7 +224,7 @@ namespace genesia::neural::kernels {
 
     void group_moments(const ::cuda::stream_ref stream, float* statistics, const void* input, const void* second, void* joined, const void* time, const int* step, const int batch, const int spatial, const int width, const int first_width, const int scalar) {
         const int chunks = std::min((spatial + 7) / 8, 1024);
-        dispatch(scalar, [&]<class T>() {
+        dispatch<false>(scalar, [&]<class T>() {
             const auto launch = [&]<int GroupWidth>() { ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims(dim3(chunks, batch)), ::cuda::block_dims(256))), group_moments_kernel<T, GroupWidth>, statistics, static_cast<const T*>(input), static_cast<const T*>(second), static_cast<T*>(joined), static_cast<const T*>(time), step, spatial, first_width, chunks); };
             switch (width / 32) {
             case 4: launch.template operator()<4>(); break;
@@ -241,12 +244,12 @@ namespace genesia::neural::kernels {
         const int chunks = std::min((spatial + 7) / 8, 1024);
         if (!prepared) group_moments(stream, statistics, input, nullptr, nullptr, time, step, batch, spatial, width, width, scalar);
         ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims(batch * 32), ::cuda::block_dims(256))), group_reduce_kernel, statistics, chunks, epsilon);
-        dispatch(scalar, [&]<class T>() { ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((batch * spatial * width + 255) / 256), ::cuda::block_dims(256))), group_output_kernel<T>, static_cast<T*>(output), static_cast<const T*>(input), static_cast<const T*>(weight), static_cast<const T*>(bias), statistics, batch * spatial * width, spatial, width, chunks, silu, static_cast<const T*>(time), step, batch); });
+        dispatch<false>(scalar, [&]<class T>() { ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((batch * spatial * width + 255) / 256), ::cuda::block_dims(256))), group_output_kernel<T>, static_cast<T*>(output), static_cast<const T*>(input), static_cast<const T*>(weight), static_cast<const T*>(bias), statistics, batch * spatial * width, spatial, width, chunks, silu, static_cast<const T*>(time), step, batch); });
     }
 
     void resize(const ::cuda::stream_ref stream, void* output, const void* input, const int batch, const int height, const int width, const int channels, const int scalar) {
         const int count = batch * height * width * channels * 4;
-        dispatch(scalar, [&]<class T>() { ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((count + 255) / 256), ::cuda::block_dims(256))), resize_kernel<T>, static_cast<T*>(output), static_cast<const T*>(input), height, width, channels, count); });
+        dispatch<false>(scalar, [&]<class T>() { ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((count + 255) / 256), ::cuda::block_dims(256))), resize_kernel<T>, static_cast<T*>(output), static_cast<const T*>(input), height, width, channels, count); });
     }
 
 } // namespace genesia::neural::kernels

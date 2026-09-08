@@ -11,9 +11,9 @@ export namespace genesia::editor {
         struct Slot final {
             runtime::Buffer buffer;
             vk::raii::Semaphore timeline{nullptr};
-            cudaExternalMemory_t memory{};
-            cudaExternalSemaphore_t semaphore{};
-            std::uint8_t* pixels{};
+            std::unique_ptr<std::remove_pointer_t<cudaExternalMemory_t>, decltype(&cudaDestroyExternalMemory)> memory{nullptr, cudaDestroyExternalMemory};
+            std::unique_ptr<std::remove_pointer_t<cudaExternalSemaphore_t>, decltype(&cudaDestroyExternalSemaphore)> semaphore{nullptr, cudaDestroyExternalSemaphore};
+            std::unique_ptr<std::uint8_t, decltype(&cudaFree)> pixels{nullptr, cudaFree};
             std::uint64_t value{};
         };
         runtime::Device& device;

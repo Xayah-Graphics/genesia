@@ -2,7 +2,7 @@ export module genesia.editor.ui.renderer;
 import genesia.editor.platform.window;
 import genesia.editor.runtime.device;
 import genesia.editor.runtime.resources;
-import genesia.generation.output;
+import genesia.editor.runtime.images;
 import std;
 import vulkan;
 
@@ -17,7 +17,6 @@ export namespace genesia::editor {
         float dpi{1};
         bool visible{true};
         int hand_cursor{-1};
-        double last_frame_seconds{};
 
         explicit Renderer(WindowPlatform& window);
         ~Renderer();
@@ -58,7 +57,6 @@ export namespace genesia::editor {
         std::vector<vk::SemaphoreSubmitInfo> signals;
         std::size_t frame_index{};
         std::uint32_t image_index{};
-        std::chrono::steady_clock::time_point frame_started;
 
         void recreate();
         void update_fonts();

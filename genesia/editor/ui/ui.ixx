@@ -4,7 +4,8 @@ module;
 
 export module genesia.editor.ui;
 
-import genesia.generation.configuration;
+import genesia.generation.defaults;
+import genesia.prompt.preset;
 import genesia.generation.output;
 import genesia.sdxl;
 import genesia.editor.platform.window;
@@ -45,8 +46,14 @@ export namespace genesia::editor {
             bool different, image_above;
         };
 
-        Configuration configuration;
-        std::filesystem::path configuration_path;
+        const std::shared_ptr<const prompt::Catalog> catalog;
+        prompt::Preset preset;
+        std::vector<std::string> preset_names;
+        std::string pending_preset;
+        std::array<char, 128> new_preset_name{};
+        bool save_as_requested{};
+        std::string preset_error;
+        bool preview_enabled{defaults::preview_enabled};
         WindowPlatform& window;
         Renderer& renderer;
         Interop& interop;
@@ -56,8 +63,8 @@ export namespace genesia::editor {
         TagSearch tag_search;
         PromptEditor prompt_editor;
         std::vector<History> history;
-        std::uint64_t seed{};
-        bool random_seed{true};
+        std::uint64_t seed{defaults::seeds.front()};
+        bool random_seed{defaults::random_seed};
         bool tags_open{};
         bool history_open{};
         ParameterEdit parameter_edit;
@@ -80,16 +87,17 @@ export namespace genesia::editor {
         int image_width{}, image_height{};
         double animate_until{};
         double refresh_at{std::numeric_limits<double>::infinity()};
-        std::vector<double> display_times;
         std::string shown_error;
         bool escape_owned{};
 
-        UserInterface(Configuration settings, std::filesystem::path path, WindowPlatform& platform, Renderer& display, Interop& bridge, Session& generation);
+        UserInterface(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, WindowPlatform& platform, Renderer& display, Interop& bridge, Session& generation);
         void receive();
         void show_image(std::uint64_t texture, int width, int height, std::uint64_t id, bool transition);
         bool prepare_prompt();
         void commit_parameters();
-        void save_settings();
+        bool save_prompt();
+        void switch_preset();
+        void preset_dialogs(float scale);
         void submit();
         void return_to_create();
         ControlLayout control_layout(float scale, ImVec2 size) const;

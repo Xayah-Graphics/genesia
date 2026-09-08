@@ -2,11 +2,13 @@ module;
 #include "../../core/sdxl/control.h"
 #include <genesia/cuda.h>
 export module genesia.editor.session;
-import genesia.generation.configuration;
+import genesia.generation.defaults;
+import genesia.prompt;
 import genesia.generation.output;
 import genesia.sdxl;
 import genesia.sdxl.preview;
 import genesia.editor.platform.interop;
+import genesia.editor.runtime.images;
 import std;
 
 export namespace genesia::editor {
@@ -24,7 +26,6 @@ export namespace genesia::editor {
         Image image;
         std::size_t slot{};
         std::uint64_t ready{};
-        std::chrono::steady_clock::time_point generated_at;
     };
     struct PreviewFrame final {
         std::uint64_t id;
@@ -35,7 +36,7 @@ export namespace genesia::editor {
         std::uint64_t ready;
     };
     struct Session final {
-        const Configuration configuration;
+        const std::shared_ptr<const prompt::Catalog> catalog;
         ImageWriter images;
         Interop& interop;
         Interop& preview_interop;
@@ -52,11 +53,11 @@ export namespace genesia::editor {
         bool closing{};
         bool worker_done{};
         bool model_ready{};
-        bool preview_enabled;
+        bool preview_enabled{defaults::preview_enabled};
         bool preview_visible{true};
         std::string error;
 
-        Session(Configuration configuration, Interop& interop, Interop& preview_interop);
+        Session(std::shared_ptr<const prompt::Catalog> catalog, Interop& interop, Interop& preview_interop);
         ~Session();
         void enqueue(sdxl::Parameters parameters, std::uint64_t seed, prompt::Pair prompt);
         void stop();
@@ -83,7 +84,7 @@ export namespace genesia::editor {
         bool preview_sampling{};
         std::shared_ptr<sdxl::Snapshots> snapshots;
         ::cuda::stream preview_stream{::cuda::no_init};
-        cudaEvent_t preview_finished{};
+        std::unique_ptr<std::remove_pointer_t<cudaEvent_t>, decltype(&cudaEventDestroy)> preview_finished{nullptr, cudaEventDestroy};
         // Both generation and preview graphs reference these immutable model weights.
         std::unique_ptr<sdxl::Model> model;
         std::uint64_t next_id{};

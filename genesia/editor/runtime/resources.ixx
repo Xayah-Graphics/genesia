@@ -17,7 +17,7 @@ export namespace genesia::editor::runtime {
         ~Buffer();
         Buffer(Buffer&&) noexcept;
         Buffer& operator=(Buffer&&) noexcept;
-        Buffer(const Buffer&) = delete;
+        Buffer(const Buffer&)            = delete;
         Buffer& operator=(const Buffer&) = delete;
     };
 
@@ -43,4 +43,4 @@ export namespace genesia::editor::runtime {
         vk::DeviceSize resource_stride{};
     };
 
-}
+} // namespace genesia::editor::runtime

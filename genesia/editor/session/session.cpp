@@ -4,7 +4,7 @@ module;
 #include "../../core/sdxl/control.h"
 #include <genesia/cuda.h>
 module genesia.editor.session;
-import genesia.generation.configuration;
+import genesia.generation.defaults;
 import genesia.generation.output;
 import genesia.sdxl;
 import genesia.sdxl.preview;
@@ -19,13 +19,23 @@ namespace genesia::editor {
         return ::cuda::stream{::cuda::devices[0], high ? greatest : least};
     }
 
-    Session::Session(Configuration configuration, Interop& bridge, Interop& preview_bridge) : configuration{std::move(configuration)}, images{this->configuration.output}, interop{bridge}, preview_interop{preview_bridge}, stream{priority_stream(true)}, control{stream, ::cuda::pinned_default_memory_pool(), 1, ::cuda::no_init}, preview_enabled{this->configuration.preview.enabled} {
+    Session::Session(std::shared_ptr<const prompt::Catalog> catalog, Interop& bridge, Interop& preview_bridge) : catalog{std::move(catalog)}, images{defaults::output}, interop{bridge}, preview_interop{preview_bridge}, stream{priority_stream(true)}, control{stream, ::cuda::pinned_default_memory_pool(), 1, ::cuda::no_init} {
         std::construct_at(control.data());
         preview_stream = priority_stream(false);
-        neural::check(cudaEventCreateWithFlags(&preview_finished, cudaEventDisableTiming));
-        preview_worker = std::jthread{[this] { preview_images(); }};
-        worker         = std::jthread{[this] { generate(); }};
-        io             = std::jthread{[this] { write_files(); }};
+        neural::check(cudaEventCreateWithFlags(std::out_ptr(preview_finished), cudaEventDisableTiming));
+        try {
+            preview_worker = std::jthread{[this] { preview_images(); }};
+            worker         = std::jthread{[this] { generate(); }};
+            io             = std::jthread{[this] { write_files(); }};
+        } catch (...) {
+            {
+                const std::lock_guard lock{mutex};
+                closing = io_closing = preview_closing = true;
+                ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].cancel}.store(1, ::cuda::memory_order_release);
+            }
+            condition.notify_all();
+            throw;
+        }
     }
 
     Session::~Session() {
@@ -41,7 +51,6 @@ namespace genesia::editor {
         preview_worker.join();
         model.reset();
         preview_stream.sync();
-        cudaEventDestroy(preview_finished);
         stream.sync();
     }
 
@@ -89,7 +98,7 @@ namespace genesia::editor {
         try {
             ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].stage}.store(static_cast<std::uint32_t>(sdxl::Stage::loading));
             const auto load_started = std::chrono::steady_clock::now();
-            model                   = std::make_unique<sdxl::Model>(stream, configuration.checkpoint, configuration.cache);
+            model                   = std::make_unique<sdxl::Model>(stream, defaults::checkpoint, defaults::cache);
             std::println("LOAD {:.3f}s", std::chrono::duration<double>(std::chrono::steady_clock::now() - load_started).count());
             std::cout.flush();
             std::unique_ptr<sdxl::Inference> inference;
@@ -164,13 +173,12 @@ namespace genesia::editor {
                     }
                     condition.notify_all();
                     if (!output.cancelled) {
-                        const auto generated = std::chrono::steady_clock::now();
-                        const auto ready     = interop.publish(output.device_pixels, output.width, output.height, output.stream, slot);
-                        Record record{request.parameters, request.seed, {}, configuration.checkpoint.filename(), request.prompt, configuration.catalog};
-                        auto preview = thumbnail(output);
+                        const auto ready = interop.publish(output.device_pixels, output.width, output.height, output.stream, slot);
+                        Record record{request.parameters, request.seed, {}, std::filesystem::path{defaults::checkpoint}.filename(), request.prompt, catalog};
+                        auto preview = thumbnail({output.pixels.data(), output.pixels.size()}, output.width, output.height);
                         {
                             const std::lock_guard lock{mutex};
-                            events.push_back({EventKind::generated, request.id, record, std::move(preview), slot, ready, generated});
+                            events.push_back({EventKind::generated, request.id, record, std::move(preview), slot, ready});
                             saving[slot] = true;
                             files.push_back({request.id, &output, record, {}, slot});
                         }
@@ -226,7 +234,7 @@ namespace genesia::editor {
             for (;;) {
                 std::unique_lock lock{mutex};
                 if (in_flight) {
-                    const auto completion = cudaEventQuery(preview_finished);
+                    const auto completion = cudaEventQuery(preview_finished.get());
                     if (completion == cudaSuccess) {
                         ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{source->slots.data()[reading].state}.store(std::uint32_t(sdxl::SnapshotState::free), ::cuda::memory_order_release);
                         previews.push_back(*in_flight);
@@ -245,7 +253,7 @@ namespace genesia::editor {
                     lock.unlock();
                     if (!decoder || decoder->width != width || decoder->height != height) {
                         decoder.reset();
-                        decoder = std::make_unique<sdxl::Preview>(preview_stream, model->vae, configuration.cache, width, height);
+                        decoder = std::make_unique<sdxl::Preview>(preview_stream, model->vae, defaults::cache, width, height);
                     }
                     preview_interop.prepare(width, height, preview_stream);
                     lock.lock();
@@ -274,7 +282,7 @@ namespace genesia::editor {
                     }
                     if (now >= next_snapshot && free >= 0 && !requested) {
                         ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{source->slots.data()[free].state}.store(std::uint32_t(sdxl::SnapshotState::requested), ::cuda::memory_order_release);
-                        next_snapshot = now + std::chrono::milliseconds{configuration.preview.interval_ms};
+                        next_snapshot = now + std::chrono::milliseconds{defaults::preview_interval_ms};
                     }
                     if (newest >= 0) {
                         for (int i = 0; i < 3; ++i) {
@@ -295,7 +303,7 @@ namespace genesia::editor {
                                 lock.unlock();
                                 decoder->decode(source->latent.data() + std::size_t(reading) * (source->width / 8) * (source->height / 8) * 4);
                                 const auto ready = preview_interop.publish(decoder->pixels.data(), decoder->width, decoder->height, preview_stream, slot);
-                                neural::check(cudaEventRecord(preview_finished, preview_stream.get()));
+                                neural::check(cudaEventRecord(preview_finished.get(), preview_stream.get()));
                                 in_flight = PreviewFrame{task, step, decoder->width, decoder->height, slot, ready};
                                 lock.lock();
                             }

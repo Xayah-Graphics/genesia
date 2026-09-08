@@ -5,7 +5,7 @@ namespace genesia::prompt {
     std::expected<Input, Error> parse_tag(const Catalog& catalog, std::string_view text, const bool completion) {
         const auto begin = text.find_first_not_of(" \t\r\n");
         if (begin == std::string_view::npos) return std::unexpected{Error{"Enter a tag", 0, text.size()}};
-        text = text.substr(begin, text.find_last_not_of(" \t\r\n") - begin + 1);
+        text                = text.substr(begin, text.find_last_not_of(" \t\r\n") - begin + 1);
         const auto unescape = [](const std::string_view source) {
             std::string result;
             for (std::size_t i = 0; i < source.size(); ++i) {
@@ -20,7 +20,7 @@ namespace genesia::prompt {
         if (const auto id = catalog.resolve(result.name)) return Input{std::string{catalog.tags[*id].name}, 1};
         if (text.front() == '(') {
             if (!completion && text.back() != ')') return std::unexpected{Error{"Close the weighted tag with ')': (tag:1.1)", begin, text.size()}};
-            auto inner = text.substr(1, text.size() - (text.back() == ')' ? 2 : 1));
+            auto inner    = text.substr(1, text.size() - (text.back() == ')' ? 2 : 1));
             result.weight = 1.1F;
             if (const auto id = catalog.resolve(unescape(inner))) return Input{std::string{catalog.tags[*id].name}, result.weight};
             const auto colon = inner.rfind(':');
@@ -39,7 +39,7 @@ namespace genesia::prompt {
     std::expected<std::vector<Tag>, Error> parse(const Catalog& catalog, const std::string_view text) {
         std::vector<Tag> result;
         for (std::size_t begin = 0; begin < text.size();) {
-            const auto end = std::min(text.find_first_of(",\r\n", begin), text.size());
+            const auto end  = std::min(text.find_first_of(",\r\n", begin), text.size());
             const auto part = text.substr(begin, end - begin);
             if (part.find_first_not_of(" \t") != std::string_view::npos) {
                 auto input = parse_tag(catalog, part);
@@ -83,4 +83,4 @@ namespace genesia::prompt {
         result += side.fixed;
         return result;
     }
-}
+} // namespace genesia::prompt

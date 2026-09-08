@@ -23,13 +23,12 @@ namespace genesia::editor {
         Session session;
         UserInterface ui;
         bool closing{};
-        std::vector<double> frame_times;
 
-        Application(Configuration configuration, std::filesystem::path path);
+        Application(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog);
         void run();
     };
 
-    Application::Application(Configuration configuration, std::filesystem::path path) : session{configuration, interop, preview_interop}, ui{std::move(configuration), std::move(path), window, renderer, interop, session} {}
+    Application::Application(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog) : session{catalog, interop, preview_interop}, ui{std::move(preset), std::move(catalog), window, renderer, interop, session} {}
 
     void Application::run() {
         std::uint32_t previous_stage{}, previous_step{};
@@ -65,23 +64,14 @@ namespace genesia::editor {
             ui.receive();
             ui.draw();
             renderer.present();
-            if (busy && glfwGetTime() < ui.animate_until) frame_times.push_back(renderer.last_frame_seconds);
             const double wait = std::min(ui.refresh_at - glfwGetTime(), glfwGetTime() < ui.animate_until || animating ? 1.0 / 120 : busy ? 0.1 : 1.0);
             if (wait > 0) glfwWaitEventsTimeout(wait);
             else glfwPollEvents();
         }
-        if (!frame_times.empty()) {
-            std::ranges::sort(frame_times);
-            std::println("EDITOR interactive frame median={:.2f}ms p95={:.2f}ms", frame_times[frame_times.size() / 2] * 1000, frame_times[std::min(frame_times.size() - 1, frame_times.size() * 95 / 100)] * 1000);
-        }
-        if (!ui.display_times.empty()) {
-            std::ranges::sort(ui.display_times);
-            std::println("EDITOR result ready-to-submit median={:.2f}ms", ui.display_times[ui.display_times.size() / 2] * 1000);
-        }
     }
 
-    void run(Configuration configuration, const std::filesystem::path& configuration_path) {
-        Application application{std::move(configuration), configuration_path};
+    void run(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog) {
+        Application application{std::move(preset), std::move(catalog)};
         application.run();
     }
 } // namespace genesia::editor

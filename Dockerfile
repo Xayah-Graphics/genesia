@@ -26,7 +26,7 @@ RUN cmake -S . -B cmake-build-release -G Ninja \
         -DCMAKE_CUDA_COMPILER=/opt/cuda/bin/nvcc \
         -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-15 \
         -DGENESIA_BUILD_UI=OFF \
-        -DGENESIA_TAG_CATALOG=/opt/genesia/assets/tags/danbooru.csv \
+        -DGENESIA_ASSET_DIRECTORY=/opt/genesia/assets \
     && cmake --build cmake-build-release --target genesia --parallel
 
 
@@ -39,7 +39,7 @@ RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
     && install --directory --owner=10001 --group=10001 /opt/genesia/bin /workspace
 
 COPY --from=build --link /src/cmake-build-release/genesia /opt/genesia/bin/genesia
-COPY --from=build --link /src/assets/tags/danbooru.csv /opt/genesia/assets/tags/danbooru.csv
+COPY --from=build --link --chown=10001:10001 /src/assets /opt/genesia/assets
 COPY --from=build --link /src/LICENSE /opt/genesia/LICENSE
 
 USER 10001:10001
