@@ -35,6 +35,7 @@ export namespace genesia::sdxl {
         ::cuda::device_buffer<float> latent;
 
         ImageInput(::cuda::stream_ref stream, std::span<const std::uint8_t> pixels, int width, int height);
+        ImageInput(::cuda::stream_ref stream, int width, int height);
     };
 
     struct Model final {
@@ -85,19 +86,20 @@ export namespace genesia::sdxl {
         std::size_t cache_hits{};
         std::size_t cache_misses{};
 
-        Inference(Model& model, Parameters parameters, Control& control, Snapshots* snapshots = nullptr, const ImageInput* source = nullptr);
+        Inference(Model& model, Parameters parameters, Control& control, Snapshots* snapshots = nullptr, const ImageInput* source = nullptr, const std::uint8_t* mask = nullptr);
         ~Inference();
         Inference(const Inference&)            = delete;
         Inference& operator=(const Inference&) = delete;
         // Two pinned outputs alternate. Finish reading a result before the
         // second subsequent generate() call reuses its storage.
-        const Output& generate(std::uint64_t seed);
+        const Output& generate(std::uint64_t seed, bool download = true);
 
     private:
         Model& model;
         Control& control;
         Snapshots* snapshots;
         const ImageInput* source;
+        const std::uint8_t* mask;
         UNetWorkspaceLayout unet_layout;
         VAEWorkspaceLayout vae_layout;
         ::cuda::device_buffer<std::byte> workspace;
@@ -106,6 +108,7 @@ export namespace genesia::sdxl {
         ::cuda::device_buffer<std::uint64_t> seed;
         ::cuda::device_buffer<std::byte> operator_workspace;
         ::cuda::device_buffer<float> latent;
+        ::cuda::device_buffer<float> noise;
         ::cuda::device_buffer<int> step;
         ::cuda::device_buffer<__half> input;
         ::cuda::device_buffer<__half> epsilon;

@@ -82,7 +82,7 @@ namespace genesia::sdxl::kernels {
         if (i < steps) times[i] = float(time);
     }
 
-    __global__ void initialize_kernel(float* state, __half* input, int* step, const std::uint64_t* seed, const SamplingStep* schedule, const int count, const float* source, const bool full_noise) {
+    __global__ void initialize_kernel(float* state, __half* input, int* step, const std::uint64_t* seed, const SamplingStep* schedule, const int count, const float* source, const bool full_noise, const std::uint8_t* mask, float* noise) {
         const int i = blockIdx.x * blockDim.x + threadIdx.x;
         if (i >= count / 4) return;
         uint4 counter{static_cast<unsigned>(i), 0, 0, 0};
@@ -100,7 +100,8 @@ namespace genesia::sdxl::kernels {
         sincosf(float(counter.w) * 0x1p-32F * 6.283185307179586F, &sine1, &cosine1);
         const float radius0 = sqrtf(-2.0F * logf((float(counter.x) + 1.0F) * 0x1p-32F));
         const float radius1 = sqrtf(-2.0F * logf((float(counter.z) + 1.0F) * 0x1p-32F));
-        const float scale   = full_noise ? sqrtf(fmaf(schedule[0].sigma, schedule[0].sigma, 1.0F)) : schedule[0].sigma;
+        if (noise) reinterpret_cast<float4*>(noise)[i] = {radius0 * sine0, radius0 * cosine0, radius1 * sine1, radius1 * cosine1};
+        const float scale   = full_noise && (!mask || mask[i]) ? sqrtf(fmaf(schedule[0].sigma, schedule[0].sigma, 1.0F)) : schedule[0].sigma;
         float4 values{radius0 * sine0 * scale, radius0 * cosine0 * scale, radius1 * sine1 * scale, radius1 * cosine1 * scale};
         if (source) {
             const float4 original = reinterpret_cast<const float4*>(source)[i];
@@ -133,17 +134,22 @@ namespace genesia::sdxl::kernels {
         ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{slots[i].state}.store(std::uint32_t(SnapshotState::ready), ::cuda::memory_order_release);
     }
 
-    template <bool preview>
-    __global__ void euler_kernel(float* state, __half* input, const __half* epsilon, const SamplingStep* schedule, const int* step, const float cfg, const int count, float* snapshots, const int* selected) {
+    template <bool preview, bool masked>
+    __global__ void euler_kernel(float* state, __half* input, const __half* epsilon, const SamplingStep* schedule, const int* step, const float cfg, const int count, float* snapshots, const int* selected, const float* source, const std::uint8_t* mask, const float* noise) {
         const int i = blockIdx.x * blockDim.x + threadIdx.x;
         if (i >= count) return;
         const int index        = *step;
         const float derivative = fmaf(cfg, float(epsilon[i]) - float(epsilon[i + count]), float(epsilon[i + count]));
         if constexpr (preview) {
             const int slot = *selected;
-            if (slot >= 0) snapshots[slot * count + i] = fmaf(-schedule[index].sigma, derivative, state[i]);
+            if (slot >= 0) {
+                float denoised = fmaf(-schedule[index].sigma, derivative, state[i]);
+                if constexpr (masked) if (!mask[i / 4]) denoised = source[i];
+                snapshots[slot * count + i] = denoised;
+            }
         }
-        const float value = fmaf(schedule[index].delta, derivative, state[i]);
+        float value = fmaf(schedule[index].delta, derivative, state[i]);
+        if constexpr (masked) if (!mask[i / 4]) value = fmaf(schedule[index + 1].sigma, noise[i], source[i]);
         state[i]          = value;
         if (schedule[index + 1].sigma != 0.0F) input[i] = input[i + count] = __half(value * schedule[index + 1].inverse);
     }
@@ -214,8 +220,8 @@ namespace genesia::sdxl::kernels {
     void prepare_schedule(const ::cuda::stream_ref stream, SamplingStep* output, float* times, const float* training, const int steps, const float denoise) {
         ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((steps + 256) / 256), ::cuda::block_dims(256))), schedule_kernel, output, times, training, steps, static_cast<int>(steps / double(denoise)));
     }
-    void initialize(const ::cuda::stream_ref stream, float* state, void* input, int* step, const std::uint64_t* seed, const SamplingStep* schedule, const int count, const float* source, const bool full_noise) {
-        ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((count / 4 + 255) / 256), ::cuda::block_dims(256))), initialize_kernel, state, static_cast<__half*>(input), step, seed, schedule, count, source, full_noise);
+    void initialize(const ::cuda::stream_ref stream, float* state, void* input, int* step, const std::uint64_t* seed, const SamplingStep* schedule, const int count, const float* source, const bool full_noise, const std::uint8_t* mask, float* noise) {
+        ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((count / 4 + 255) / 256), ::cuda::block_dims(256))), initialize_kernel, state, static_cast<__half*>(input), step, seed, schedule, count, source, full_noise, mask, noise);
     }
     void snapshot_begin(const ::cuda::stream_ref stream, int* selected, SnapshotSlot* slots) {
         ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims(1), ::cuda::block_dims(1))), snapshot_begin_kernel, selected, slots);
@@ -225,10 +231,15 @@ namespace genesia::sdxl::kernels {
         ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims(1), ::cuda::block_dims(1))), snapshot_publish_kernel, selected, slots, step);
     }
 
-    void euler(const ::cuda::stream_ref stream, float* state, void* input, const void* epsilon, const SamplingStep* schedule, const int* step, const float cfg, const int count, float* snapshots, const int* selected) {
+    void euler(const ::cuda::stream_ref stream, float* state, void* input, const void* epsilon, const SamplingStep* schedule, const int* step, const float cfg, const int count, float* snapshots, const int* selected, const float* source, const std::uint8_t* mask, const float* noise) {
         const auto config = ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((count + 255) / 256), ::cuda::block_dims(256)));
-        if (snapshots) ::cuda::launch(stream, config, euler_kernel<true>, state, static_cast<__half*>(input), static_cast<const __half*>(epsilon), schedule, step, cfg, count, snapshots, selected);
-        else ::cuda::launch(stream, config, euler_kernel<false>, state, static_cast<__half*>(input), static_cast<const __half*>(epsilon), schedule, step, cfg, count, snapshots, selected);
+        if (mask) {
+            if (snapshots) ::cuda::launch(stream, config, euler_kernel<true, true>, state, static_cast<__half*>(input), static_cast<const __half*>(epsilon), schedule, step, cfg, count, snapshots, selected, source, mask, noise);
+            else ::cuda::launch(stream, config, euler_kernel<false, true>, state, static_cast<__half*>(input), static_cast<const __half*>(epsilon), schedule, step, cfg, count, snapshots, selected, source, mask, noise);
+        } else {
+            if (snapshots) ::cuda::launch(stream, config, euler_kernel<true, false>, state, static_cast<__half*>(input), static_cast<const __half*>(epsilon), schedule, step, cfg, count, snapshots, selected, source, mask, noise);
+            else ::cuda::launch(stream, config, euler_kernel<false, false>, state, static_cast<__half*>(input), static_cast<const __half*>(epsilon), schedule, step, cfg, count, snapshots, selected, source, mask, noise);
+        }
     }
     void advance(const ::cuda::stream_ref stream, int* step, const int count, const cudaGraphConditionalHandle loop, const cudaGraphConditionalHandle decode, Control* control) {
         ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims(1), ::cuda::block_dims(1))), advance_kernel, step, count, loop, decode, control);
