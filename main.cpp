@@ -5,7 +5,7 @@ import genesia.editor;
 import std;
 
 int main(const int argc, char** argv) try {
-    bool gui{}, named_preset{}, headless_options{}, region_options{};
+    bool gui{}, named_preset{}, headless_options{};
     genesia::headless::Options options;
     std::filesystem::path prompt_file;
     std::string_view name = genesia::defaults::preset;
@@ -23,17 +23,14 @@ int main(const int argc, char** argv) try {
         if (option == "--help") {
             std::println(R"(Genesia {}
 Headless: genesia [--preset NAME | --prompt-file FILE] [--count N] [--seed SEED]
-Repaint:  genesia --source PNG --denoise VALUE [--mask PNG | --region X Y W H] [--count N] [--seed SEED]
-          [--context PIXELS] [--work-size PIXELS] [--feather PIXELS]
+Repaint:  genesia --source PNG --denoise VALUE [--count N] [--seed SEED]
           [--preset NAME | --prompt-file FILE]
 Editor:   genesia --gui [--preset NAME]
 Defaults: preset={}, count=1, random seed per image.
 --seed uses SEED, SEED+1, ... (uint64).
 Repaint inherits the source PNG prompt, steps and CFG; a preset overrides its prompt.
---denoise is required for Repaint, in [0,1]. Without a mask/region it repaints the whole image.
-Masks are original-size binary PNGs: white may change, black remains pixel-identical.
-Regions use original-image pixels: left, top, width, height.
-Local defaults: context=96, work-size=1024 (long edge; 0 keeps native scale), feather=8 (inward).
+--denoise is required for whole-image Repaint, in [0,1]; 0 preserves the source pixels.
+Repaint keeps the source dimensions; nonzero denoise requires multiples of 64.
 --prompt-file uses the existing positive/negative fixed/groups preset format.
 Saved images are reported as JSON Lines on stdout; diagnostics go to stderr.)", GENESIA_VERSION, genesia::defaults::preset);
             return 0;
@@ -57,31 +54,13 @@ Saved images are reported as JSON Lines on stdout; diagnostics go to stderr.)", 
         } else if (option == "--denoise") {
             number(options.denoise.emplace());
             headless_options = true;
-        } else if (option == "--mask") {
-            options.mask = argument();
-            region_options = headless_options = true;
-        } else if (option == "--region") {
-            for (auto& value : options.region.emplace()) number(value);
-            region_options = headless_options = true;
-        } else if (option == "--context") {
-            number(options.repaint.context);
-            region_options = headless_options = true;
-        } else if (option == "--work-size") {
-            number(options.repaint.work_size);
-            region_options = headless_options = true;
-        } else if (option == "--feather") {
-            number(options.repaint.feather);
-            region_options = headless_options = true;
         } else throw std::runtime_error{std::format("Unknown option: {}", option)};
     }
     if (options.count <= 0) throw std::invalid_argument{"--count requires a positive integer"};
     if (named_preset && !prompt_file.empty()) throw std::invalid_argument{"Choose either --preset or --prompt-file"};
     if (gui && headless_options) throw std::invalid_argument{"Generation and Repaint options are headless-only"};
-    if (options.source.empty() && (options.denoise || region_options)) throw std::invalid_argument{"Repaint options require --source"};
+    if (options.source.empty() && options.denoise) throw std::invalid_argument{"Repaint options require --source"};
     if (!options.source.empty() && (!options.denoise || !(*options.denoise >= 0 && *options.denoise <= 1))) throw std::invalid_argument{"Repaint requires --denoise in [0,1]"};
-    if (options.region && !options.mask.empty()) throw std::invalid_argument{"Choose either --region or --mask"};
-    if (region_options && !options.region && options.mask.empty()) throw std::invalid_argument{"Crop and feather settings require --region or --mask"};
-    if (options.repaint.context < 0 || options.repaint.work_size < 0 || options.repaint.feather < 0) throw std::invalid_argument{"Context, work size and feather must be nonnegative"};
 #if !defined(GENESIA_HAS_EDITOR)
     if (gui) throw std::runtime_error{"This build does not contain the Editor"};
 #endif

@@ -52,10 +52,6 @@ namespace genesia {
         if (!record.source.empty()) {
             const auto source   = record.source.u8string();
             metadata["repaint"] = {{"source", std::string{source.begin(), source.end()}}, {"denoise", record.parameters.denoise}};
-            if (record.region) {
-                const auto& region = *record.region;
-                metadata["repaint"]["region"] = {{"context", region.settings.context}, {"work_size", region.settings.work_size}, {"feather", region.settings.feather}, {"crop", region.crop}, {"resized", region.resized}, {"work", region.work}, {"mask_runs", region.mask_runs}};
-            }
         }
         for (const auto& [name, side, text] : {std::tuple{"positive", &record.prompt.positive, &record.parameters.positive}, std::tuple{"negative", &record.prompt.negative, &record.parameters.negative}}) {
             auto& saved     = metadata["prompt"][name];
@@ -172,16 +168,6 @@ namespace genesia {
             const std::string source  = repaint.at("source");
             result.source             = std::filesystem::path{std::u8string{source.begin(), source.end()}};
             result.parameters.denoise = repaint.at("denoise");
-            if (repaint.contains("region")) {
-                const auto& region = repaint.at("region");
-                auto saved = std::make_shared<RepaintRecord>();
-                saved->settings = {region.at("context"), region.at("work_size"), region.at("feather")};
-                saved->crop = region.at("crop").get<std::array<int, 4>>();
-                saved->resized = region.at("resized").get<std::array<int, 2>>();
-                saved->work = region.at("work").get<std::array<int, 2>>();
-                saved->mask_runs = region.at("mask_runs").get<std::vector<std::array<std::uint32_t, 2>>>();
-                result.region = std::move(saved);
-            }
         }
         for (const auto& [name, side, text] : {std::tuple{"positive", &result.prompt.positive, &result.parameters.positive}, std::tuple{"negative", &result.prompt.negative, &result.parameters.negative}}) {
             const auto& saved = metadata.at("prompt").at(name);

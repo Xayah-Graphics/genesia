@@ -91,8 +91,6 @@ target_sources(
         genesia/core/headless.cpp
         genesia/core/generation/output.cpp
         genesia/core/generation/images.cpp
-        genesia/core/generation/repaint.cpp
-        genesia/core/generation/repaint-kernels.cu
         genesia/core/prompt/catalog.cpp
         genesia/core/prompt/prompt.cpp
         genesia/core/prompt/preset.cpp
@@ -111,7 +109,6 @@ target_sources(
         genesia/core/generation/defaults.ixx
         genesia/core/generation/output.ixx
         genesia/core/generation/images.ixx
-        genesia/core/generation/repaint.ixx
         genesia/core/prompt/catalog.ixx
         genesia/core/prompt/prompt.ixx
         genesia/core/prompt/preset.ixx

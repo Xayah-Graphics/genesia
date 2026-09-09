@@ -8,5 +8,5 @@ export namespace genesia {
         std::vector<std::uint8_t> pixels;
     };
 
-    Image read_image(const std::filesystem::path& path, int channels = 3);
+    Image read_image(const std::filesystem::path& path);
 } // namespace genesia
