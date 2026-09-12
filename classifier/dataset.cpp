@@ -101,6 +101,23 @@ namespace classifier {
         stbi_image_free(data);
         return image;
     }
+    std::vector<std::filesystem::path> image_paths(const std::filesystem::path& folder) {
+        std::vector<std::filesystem::path> paths;
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(folder)) {
+            auto extension = path_utf8(entry.path().extension());
+            std::ranges::transform(extension, extension.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+            if (entry.is_regular_file() && (extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".bmp" || extension == ".tga")) paths.push_back(entry.path());
+        }
+        std::ranges::sort(paths);
+        return paths;
+    }
+    std::string sha256(std::span<const unsigned char> bytes) {
+        Sha256 hash;
+        hash.update(bytes);
+        std::string result;
+        for (auto byte : hash.finish()) result += std::format("{:02x}", byte);
+        return result;
+    }
     void prepare(const std::vector<std::filesystem::path>& folders, const std::filesystem::path& output) {
         if (!std::filesystem::create_directories(output)) throw std::runtime_error("Prepare requires a new output directory for an immutable data snapshot");
         std::vector<std::filesystem::path> sorted = folders;
@@ -113,20 +130,10 @@ namespace classifier {
         for (const auto& folder : sorted) {
             int label = int(classes.size());
             classes.push_back(path_utf8(folder.filename()));
-            std::vector<std::filesystem::path> paths;
-            for (const auto& entry : std::filesystem::recursive_directory_iterator(folder)) {
-                auto ext = path_utf8(entry.path().extension());
-                std::ranges::transform(ext, ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
-                if (entry.is_regular_file() && (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga")) paths.push_back(entry.path());
-            }
-            std::ranges::sort(paths);
-            for (const auto& path : paths) {
+            for (const auto& path : image_paths(folder)) {
                 Image image = load_image(path);
                 if (!((image.width == 1024 && image.height == 1536) || (image.width == 1536 && image.height == 1024) || (image.width == 1024 && image.height == 1024))) throw std::runtime_error("Unsupported original size: " + path_utf8(path));
-                Sha256 hash;
-                hash.update(image.rgb);
-                std::string hex;
-                for (auto byte : hash.finish()) hex += std::format("{:02x}", byte);
+                std::string hex = sha256(image.rgb);
                 hashes.push_back(hex);
                 std::array<double, 1024> small{};
                 for (int y = 0; y < 32; ++y)
@@ -216,14 +223,7 @@ namespace classifier {
         for (const auto& folder : categories(root)) {
             auto label = folder.filename().generic_u8string();
             hash.update({reinterpret_cast<const unsigned char*>(label.data()), label.size() + 1});
-            std::vector<std::filesystem::path> paths;
-            for (const auto& entry : std::filesystem::recursive_directory_iterator(folder)) {
-                auto ext = path_utf8(entry.path().extension());
-                std::ranges::transform(ext, ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
-                if (entry.is_regular_file() && (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga")) paths.push_back(entry.path());
-            }
-            std::ranges::sort(paths);
-            for (const auto& path : paths) {
+            for (const auto& path : image_paths(folder)) {
                 auto relative = std::filesystem::relative(path, root).generic_u8string();
                 hash.update({reinterpret_cast<const unsigned char*>(relative.data()), relative.size() + 1});
                 Mapping file(path);

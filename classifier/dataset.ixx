@@ -24,6 +24,8 @@ export namespace classifier {
         std::vector<unsigned char> rgb;
     };
     Image load_image(const std::filesystem::path& path);
+    std::vector<std::filesystem::path> image_paths(const std::filesystem::path& folder);
+    std::string sha256(std::span<const unsigned char> bytes);
     void prepare(const std::vector<std::filesystem::path>& folders, const std::filesystem::path& output);
     std::vector<std::filesystem::path> categories(const std::filesystem::path& root);
     std::string fingerprint(const std::filesystem::path& root);

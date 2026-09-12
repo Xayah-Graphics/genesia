@@ -2,40 +2,50 @@
 #include <nlohmann/json.hpp>
 import std;
 import classifier.training;
+import classifier.audit;
 namespace {
 static_assert(std::atomic_bool::is_always_lock_free);
 std::atomic_bool interrupted=false;
-void interrupt_training(int signal) {
-    std::signal(signal,interrupt_training);
+void interrupt_work(int signal) {
+    std::signal(signal,interrupt_work);
     interrupted.store(true,std::memory_order_relaxed);
 }
 }
 int main(int argc,char** argv) {
     try {
         classifier::TrainingOptions options;
+        bool auditing=false, steps_set=false;
+        std::filesystem::path audit_model;
         const std::map<std::string,std::string> integers{{"--batch","physical_batch"},{"--effective-batch","effective_batch"},{"--freeze-steps","head_only_steps"},{"--warmup-steps","warmup_steps"},{"--eval-interval","eval_interval"},{"--save-interval","save_interval"},{"--log-interval","log_interval"}};
         const std::map<std::string,std::string> decimals{{"--backbone-lr","backbone_lr"},{"--head-lr","head_lr"},{"--frozen-head-lr","head_only_lr"},{"--weight-decay","weight_decay"},{"--clip-norm","clip_norm"}};
         for (int i=1;i<argc;++i) {
             std::string option=argv[i];
             if (option=="--help") {
+                std::println("Label audit (no training):\n  classifier-train --dataset <directory> --audit [--model <safetensors>]\n  Default model: <dataset>/model.safetensors; report: <dataset>/.classifier/audit.html\n");
                 std::println("classifier-train --dataset <YES/NO folders root> --steps <cumulative target>\n  --restart  Start a new task and archive existing results\n  --batch 4 --effective-batch 64 --freeze-steps 25 --warmup-steps 10\n  --backbone-lr 3e-5 --head-lr 3e-4 --frozen-head-lr 1e-3\n  --weight-decay 0.01 --clip-norm 1 --seed 42\n  --eval-interval 25 --save-interval 25 --log-interval 5\nCtrl+C saves after the current complete update."); return 0;
             }
             if (option=="--restart") { options.restart=true; continue; }
+            if (option=="--audit") { auditing=true; continue; }
             if (i+1==argc) throw std::runtime_error("Missing value for "+option);
             std::string value=argv[++i];
             if (option=="--dataset") options.dataset=std::filesystem::path(std::u8string(value.begin(),value.end()));
-            else if (option=="--steps") options.steps=std::stoi(value);
+            else if (option=="--model") audit_model=std::filesystem::path(std::u8string(value.begin(),value.end()));
+            else if (option=="--steps") { options.steps=std::stoi(value); steps_set=true; }
             else if (option=="--seed") options.overrides["seed"]=std::stoull(value);
             else if (integers.contains(option)) options.overrides[integers.at(option)]=std::stoi(value);
             else if (decimals.contains(option)) options.overrides[decimals.at(option)]=std::stof(value);
             else throw std::runtime_error("Unknown option: "+option);
         }
         if (options.dataset.empty()) throw std::runtime_error("Specify --dataset; use --help for options");
-        std::signal(SIGINT,interrupt_training);
-        std::signal(SIGTERM,interrupt_training);
+        if (!auditing && !audit_model.empty()) throw std::runtime_error("--model requires --audit");
+        if (auditing && (steps_set || options.restart || !options.overrides.empty())) throw std::runtime_error("Training options cannot be combined with --audit");
+        std::signal(SIGINT,interrupt_work);
+        std::signal(SIGTERM,interrupt_work);
 #ifdef SIGBREAK
-        std::signal(SIGBREAK,interrupt_training);
+        std::signal(SIGBREAK,interrupt_work);
 #endif
-        classifier::train(options,interrupted); return 0;
+        if (auditing) classifier::audit(options.dataset,audit_model,interrupted);
+        else classifier::train(options,interrupted);
+        return 0;
     } catch (const std::exception& e) { std::println(stderr,"{}",e.what()); return 1; }
 }

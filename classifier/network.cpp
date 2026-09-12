@@ -153,18 +153,24 @@ namespace classifier {
                 }
         }
         decltype(SafeFile::header) meta = metadata;
+        if (optimizer) {
+            UpdateState u;
+            cuda_check(cudaMemcpy(&u, optimizer->update, sizeof(u), cudaMemcpyDeviceToHost));
+            meta["step"] = std::to_string(u.step);
+        }
         if (optimizer && include_optimizer) {
             RandomState r;
-            UpdateState u;
             cuda_check(cudaMemcpy(&r, optimizer->random, sizeof(r), cudaMemcpyDeviceToHost));
-            cuda_check(cudaMemcpy(&u, optimizer->update, sizeof(u), cudaMemcpyDeviceToHost));
-            meta["step"]           = std::to_string(u.step);
             meta["sequence"]       = std::to_string(r.sequence);
             meta["training_state"] = state.dump();
         } else {
             meta.erase("training_state");
             meta.erase("sequence");
-            meta["step"] = "0";
+            if (state.contains("split")) {
+                decltype(SafeFile::header) source{{"fingerprint", state.at("fingerprint")}, {"records", decltype(SafeFile::header)::array()}};
+                for (const auto& record : state.at("split").at("records")) source["records"].push_back({{"id", record.at("id")}, {"sha256", record.at("sha256")}, {"split", record.at("split")}, {"width", record.at("width")}, {"height", record.at("height")}});
+                meta["training_data"] = source.dump();
+            }
         }
         save_tensors(path, tensors, meta);
     }
