@@ -42,6 +42,9 @@ namespace genesia::editor {
         io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasTextures;
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
         io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/SegUIVar.ttf");
+        ImFontConfig chinese;
+        chinese.MergeMode = true;
+        io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/msyh.ttc", 0, &chinese);
         if (!ImGui_ImplGlfw_InitForVulkan(window.window, true)) throw std::runtime_error{"Cannot initialize ImGui input"};
         recreate();
     }

@@ -2,12 +2,12 @@ export module genesia.generation.defaults;
 import std;
 
 export namespace genesia::defaults {
-    inline constexpr int width        = 1024;
-    inline constexpr int height       = 1536;
-    inline constexpr int steps        = 50;
-    inline constexpr float cfg        = 4.5F;
-    inline constexpr float denoise    = 0.75F;
-    inline constexpr bool random_seed = true;
+    inline constexpr int width               = 1024;
+    inline constexpr int height              = 1536;
+    inline constexpr int steps               = 50;
+    inline constexpr float cfg               = 4.5F;
+    inline constexpr float denoise           = 0.75F;
+    inline constexpr bool random_seed        = true;
     inline constexpr std::uint64_t seed      = 16494404764960740964ULL;
     inline constexpr bool preview_enabled    = true;
     inline constexpr int preview_interval_ms = 1000;

@@ -54,6 +54,7 @@ export namespace genesia::editor {
         struct ControlLayout final {
             float right_width, image_label_width;
             bool different, image_above;
+            float classifier_width, classifier_height, classifier_bottom;
         };
 
         const std::shared_ptr<const prompt::Catalog> catalog;
@@ -131,6 +132,7 @@ export namespace genesia::editor {
         void top_strip(float scale, ImVec2 size);
         void tag_column(float scale, ImVec2 size, const ControlLayout& layout);
         void bottom_controls(float scale, ImVec2 size, const ControlLayout& layout);
+        void classifier_panel(float scale, ImVec2 size, const ControlLayout& layout);
         void gallery_strip(float scale, ImVec2 size);
         void draw();
     };

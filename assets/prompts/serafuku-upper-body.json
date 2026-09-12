@@ -1,14 +1,7 @@
 {
   "negative": {
-    "fixed": "worst quality, normal quality, quality, lowres, anatomical nonsense, bad anatomy, bad hands, mutated hands, interlocked fingers, extra fingers, watermark, low resolution, old, transparent, low logo, text, username, signature, early, watermark, signature, jpeg artifacts, username, censored, lowres, logo, text, sketch, multiple views, monochrome, thick thighs",
-    "groups": [
-      {
-        "enabled": true,
-        "tags": [
-          "see-through_thighhighs"
-        ]
-      }
-    ]
+    "fixed": "worst quality, normal quality, quality, lowres, anatomical nonsense, bad anatomy, bad hands, mutated hands, interlocked fingers, extra fingers, watermark, low resolution, old, transparent, low logo, text, username, signature, early, watermark, signature, jpeg artifacts, username, censored, lowres, logo, text, sketch, multiple views, monochrome",
+    "groups": []
   },
   "positive": {
     "fixed": "(anime CG, realistic painting style), masterpiece, best quality, amazing quality, newest, very aesthetic, newest, highres, year 2025, high resolution, excellent, medium resolution, clean coloring, soft shading",
@@ -25,24 +18,23 @@
         "enabled": true,
         "tags": [
           "black_hair",
-          "long_hair",
+          "short_hair",
           "blue_serafuku",
           "red_neckerchief",
           "blue_sailor_collar",
           "long_sleeves",
           "pleated_skirt",
-          "blue_beret",
-          "black_thighhighs",
-          "skinny",
-          "slim_legs"
+          "blue_beret"
         ]
       },
       {
         "enabled": true,
         "tags": [
           "1girl",
+          "solo",
+          "portrait",
           "looking_at_viewer",
-          "cowboy_shot"
+          "simple_background"
         ]
       }
     ]

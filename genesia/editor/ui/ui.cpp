@@ -343,7 +343,6 @@ namespace genesia::editor {
                     displayed_task = event.id;
                     selected       = 0;
                     image_live     = false;
-                    if (!ImGui::GetIO().WantTextInput) image_tags = true;
                 } else renderer.discard(*source.timeline, event.ready);
                 animate_until = glfwGetTime() + 0.2;
             } else {
@@ -582,6 +581,18 @@ namespace genesia::editor {
         const float available = size.x - 2 * bottom_margin * scale;
         layout.image_above    = layout.right_width > available;
         if (layout.image_above) layout.right_width -= layout.image_label_width;
+        layout.classifier_width  = std::clamp(size.x - tags_amount * tag_column_width * scale - 2 * bottom_margin * scale, std::min(320 * scale, available), std::min(520 * scale, available));
+        layout.classifier_bottom = bottom_margin * scale;
+        if (layout.classifier_width + layout.right_width + 3 * bottom_margin * scale > size.x) layout.classifier_bottom += (control_height + 16 + (layout.image_above ? control_height + 8 : 0)) * scale;
+        std::size_t rows;
+        {
+            const std::lock_guard lock{session.mutex};
+            rows = session.classifiers.size();
+            if (image_record)
+                for (const auto& result : image_record->classification.classifiers)
+                    if (!std::ranges::contains(session.classifiers, result.id, &classifier::Descriptor::id)) ++rows;
+        }
+        layout.classifier_height = std::min((84 + 30 * std::min(std::size_t{6}, rows) + (image_record && image_record->discarded ? 24 : 0)) * scale, std::max(100 * scale, size.y - layout.classifier_bottom - (top_strip_height + 24) * scale));
         return layout;
     }
 
@@ -943,8 +954,9 @@ namespace genesia::editor {
         const bool has_image = image_texture && !image_live && !requested_image && image_file && image_record;
         if (has_image && (!tags_open || !image_tags)) image_prompt().editor.suspend();
         if (tags_amount < 0.03F) return;
-        const float top    = (top_strip_height + 24) * scale;
-        const float bottom = (bottom_margin + control_height + 16 + (layout.image_above ? control_height + 8 : 0)) * scale;
+        const float top = (top_strip_height + 24) * scale;
+        float bottom    = (bottom_margin + control_height + 16 + (layout.image_above ? control_height + 8 : 0)) * scale;
+        if (bottom_margin * scale + layout.classifier_width > size.x - tag_column_width * scale) bottom = std::max(bottom, layout.classifier_bottom + layout.classifier_height + 16 * scale);
         ImGui::SetNextWindowPos({size.x - tag_column_width * scale, top});
         ImGui::SetNextWindowSize({tag_column_width * scale, size.y - top - bottom});
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {16 * scale, 0});
@@ -1024,7 +1036,7 @@ namespace genesia::editor {
             ImGui::PushID(static_cast<int>(selected));
             edits.editor.draw(edits.prompt, tag_search, *edits.original.catalog, scale);
             ImGui::PopID();
-        } else ImGui::TextDisabled(image_live ? "Preview is not a Repaint source." : requested_image ? "Loading image..." : image_file ? "No generation metadata." : image_texture ? "Saving image..." : "No image selected.");
+        } else ImGui::TextDisabled(image_live ? "Preview is not a Repaint source." : requested_image ? "Loading image..." : image_file ? "No generation metadata." : image_record && image_record->discarded ? "Not saved: classification failed. Repaint needs a saved image." : image_texture ? "Saving image..." : "No image selected.");
         ImGui::EndChild();
         ImGui::PopStyleVar();
         ImGui::End();
@@ -1118,6 +1130,112 @@ namespace genesia::editor {
             }
         }
         ImGui::End();
+    }
+
+    void UserInterface::classifier_panel(const float scale, const ImVec2 size, const ControlLayout& layout) {
+        std::vector<classifier::Descriptor> models;
+        classifier::Selection selection;
+        std::vector<std::string> pending;
+        {
+            const std::lock_guard lock{session.mutex};
+            models    = session.classifiers;
+            selection = session.classification;
+            if (image_live && session.active && displayed_task == session.active->id) pending = session.active->classification.enabled;
+        }
+        std::vector<std::string> names;
+        for (const auto& model : models) names.push_back(model.id);
+        if (image_record)
+            for (const auto& result : image_record->classification.classifiers)
+                if (!std::ranges::contains(names, result.id)) names.push_back(result.id);
+        std::ranges::sort(names);
+        const ImVec2 origin{bottom_margin * scale, size.y - layout.classifier_bottom - layout.classifier_height};
+        ImGui::SetNextWindowPos(origin);
+        ImGui::SetNextWindowSize({layout.classifier_width, layout.classifier_height});
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {12 * scale, 8 * scale});
+        ImGui::SetNextWindowBgAlpha(0.70F);
+        ImGui::Begin("##Classifiers", nullptr, overlay);
+        ImGui::TextUnformatted("Classifiers");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Middle-click a classifier to enable or disable it for the next image.\nResults belong to the image currently displayed.");
+        ImGui::SameLine(ImGui::GetWindowWidth() - 72 * scale);
+        if (ImGui::SmallButton("Refresh")) {
+            try {
+                models = classifier::discover();
+                std::erase_if(selection.enabled, [&](const auto& id) { return !std::ranges::contains(models, id, &classifier::Descriptor::id); });
+                const std::lock_guard lock{session.mutex};
+                session.classifiers    = models;
+                session.classification = selection;
+            } catch (const std::exception& failure) {
+                const std::lock_guard lock{session.mutex};
+                session.error = failure.what();
+            }
+        }
+        if (ImGui::BeginPopupContextItem("Classifier files")) {
+            if (ImGui::MenuItem("Open models folder")) ShellExecuteW(window.native_window, L"open", classifier::model_directory().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            ImGui::EndPopup();
+        }
+        const auto discard_label = std::format("{}  Discard failed images", selection.discard_failed ? "ON " : "OFF");
+        ImGui::Selectable(discard_label.c_str(), selection.discard_failed, ImGuiSelectableFlags_None, {0, 24 * scale});
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Middle-click: discard new images rejected by any enabled classifier.\nNo enabled classifiers: save normally. Historical images are unchanged.");
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+                selection.discard_failed = !selection.discard_failed;
+                const std::lock_guard lock{session.mutex};
+                session.classification.discard_failed = selection.discard_failed;
+            }
+        }
+        if (image_record && image_record->discarded) ImGui::TextColored({1, .55F, .3F, 1}, "Not saved: classification failed");
+        ImGui::BeginChild("##ClassifierRows", {0, 0}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
+        if (names.empty()) ImGui::TextDisabled("No models. Add .safetensors files and refresh.");
+        for (const auto& name : names) {
+            const bool available             = std::ranges::contains(models, name, &classifier::Descriptor::id);
+            const bool enabled               = std::ranges::contains(selection.enabled, name);
+            const classifier::Result* result = nullptr;
+            if (image_record) {
+                const auto found = std::ranges::find(image_record->classification.classifiers, name, &classifier::Result::id);
+                if (found != image_record->classification.classifiers.end()) result = &*found;
+            }
+            std::string verdict = std::ranges::contains(pending, name) ? "Pending" : "Not checked";
+            ImVec4 ink          = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+            if (result) {
+                verdict = !result->error.empty() ? "ERROR" : result->accepted ? "PASS" : "FAIL  " + result->label;
+                ink     = !result->error.empty() ? ImVec4{1, .67F, .2F, 1} : result->accepted ? ImVec4{.3F, .88F, .5F, 1} : ImVec4{1, .36F, .4F, 1};
+            }
+            ImGui::PushID(name.c_str());
+            const auto row    = ImGui::GetCursorScreenPos();
+            const float width = ImGui::GetContentRegionAvail().x;
+            ImGui::Selectable("##Classifier", enabled, ImGuiSelectableFlags_None, {width, 30 * scale});
+            const bool hovered = ImGui::IsItemHovered();
+            if (hovered && available && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+                if (enabled) std::erase(selection.enabled, name);
+                else selection.enabled.push_back(name);
+                const std::lock_guard lock{session.mutex};
+                session.classification.enabled = selection.enabled;
+            }
+            auto* draw = ImGui::GetWindowDrawList();
+            draw->AddCircleFilled({row.x + 5 * scale, row.y + 13 * scale}, 3 * scale, ImGui::GetColorU32(enabled ? ImVec4{.63F, .62F, 1, 1} : ImVec4{.35F, .35F, .4F, 1}));
+            draw->PushClipRect({row.x + 16 * scale, row.y}, {row.x + width * .48F - 8 * scale, row.y + 30 * scale}, true);
+            draw->AddText({row.x + 16 * scale, row.y + 3 * scale}, ImGui::GetColorU32(available ? ImGuiCol_Text : ImGuiCol_TextDisabled), name.c_str());
+            draw->PopClipRect();
+            draw->PushClipRect({row.x + width * .48F, row.y}, {row.x + width, row.y + 30 * scale}, true);
+            draw->AddText({row.x + width * .48F, row.y + 3 * scale}, ImGui::GetColorU32(ink), verdict.c_str());
+            draw->PopClipRect();
+            if (hovered) {
+                ImGui::BeginTooltip();
+                ImGui::TextUnformatted(name.c_str());
+                ImGui::TextDisabled(available ? (enabled ? "Next image: ON" : "Next image: OFF") : "Model is no longer installed");
+                ImGui::TextColored(ink, "%s", verdict.c_str());
+                if (result) {
+                    ImGui::Text("YES threshold: %.3f", result->threshold);
+                    if (!result->error.empty()) ImGui::TextWrapped("%s", result->error.c_str());
+                    for (std::size_t i = 0; i < result->scores.size(); ++i) ImGui::Text("%s: %.5f", result->classes[i].c_str(), result->scores[i]);
+                }
+                ImGui::EndTooltip();
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndChild();
+        ImGui::End();
+        ImGui::PopStyleVar();
     }
 
     void UserInterface::gallery_strip(const float scale, const ImVec2 size) {
@@ -1244,6 +1362,7 @@ namespace genesia::editor {
             canvas(scale, viewport);
             tag_column(scale, viewport, controls);
             bottom_controls(scale, viewport, controls);
+            classifier_panel(scale, viewport, controls);
             gallery_strip(scale, size);
             top_strip(scale, size);
             preset_dialogs(scale);

@@ -2,6 +2,7 @@ export module genesia.generation.output;
 
 import genesia.sdxl;
 import genesia.prompt;
+export import classifier.inference;
 import std;
 
 export namespace genesia {
@@ -13,6 +14,8 @@ export namespace genesia {
         prompt::Pair prompt;
         std::shared_ptr<const prompt::Catalog> catalog;
         std::filesystem::path source;
+        classifier::Results classification;
+        bool discarded{};
     };
     struct ImageWriter final {
         std::filesystem::path directory;

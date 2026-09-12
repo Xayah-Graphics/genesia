@@ -4,5 +4,6 @@ cmake-build-*
 build*
 /install/
 /data/
+/assets/classifier/
 AGENTS.md
 TODO.md

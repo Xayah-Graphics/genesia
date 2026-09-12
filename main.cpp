@@ -32,6 +32,9 @@ Repaint inherits the source PNG prompt, steps and CFG; a preset overrides its pr
 --denoise is required for whole-image Repaint, in [0,1]; 0 preserves the source pixels.
 Repaint keeps the source dimensions; nonzero denoise requires multiples of 64.
 --prompt-file uses the existing positive/negative fixed/groups preset format.
+--classifier ID enables a model from assets/classifier/models; may be repeated.
+--discard-failed skips saving images rejected by any enabled classifier.
+--count counts attempts, including discarded images. Classifiers default OFF.
 Saved images are reported as JSON Lines on stdout; diagnostics go to stderr.)", GENESIA_VERSION, genesia::defaults::preset);
             return 0;
         }
@@ -53,6 +56,12 @@ Saved images are reported as JSON Lines on stdout; diagnostics go to stderr.)", 
             headless_options = true;
         } else if (option == "--denoise") {
             number(options.denoise.emplace());
+            headless_options = true;
+        } else if (option == "--classifier") {
+            options.classifiers.emplace_back(argument());
+            headless_options = true;
+        } else if (option == "--discard-failed") {
+            options.discard_failed = true;
             headless_options = true;
         } else throw std::runtime_error{std::format("Unknown option: {}", option)};
     }

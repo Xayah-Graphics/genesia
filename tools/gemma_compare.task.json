@@ -1,0 +1,18 @@
+{
+  "prompt": "这两张图中的领巾结款式是否相同。",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "same_style": {
+        "type": "boolean",
+        "description": "两张图中的领巾结款式是否相同"
+      },
+      "reason": {
+        "type": "string",
+        "description": "一句话说明判断原因"
+      }
+    },
+    "required": ["same_style", "reason"],
+    "additionalProperties": false
+  }
+}

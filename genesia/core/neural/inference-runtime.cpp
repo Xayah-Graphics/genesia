@@ -2,10 +2,11 @@ module;
 
 #include "inference-kernels.h"
 #include <cublasLt.h>
+// cuDNN plan JSON uses its own float encoding, separate from PNG and CLI metadata.
+#define nlohmann cudnn_json
 #include <cudnn_frontend.h>
+#undef nlohmann
 #include <genesia/cuda.h>
-
-#include <nlohmann/json.hpp>
 
 module genesia.neural.inference_runtime;
 
@@ -31,14 +32,14 @@ namespace genesia::neural {
         if (status.is_bad()) throw std::runtime_error{status.get_message()};
     }
 
-    nlohmann::json read_plan(const std::filesystem::path& path) {
+    cudnn_json::json read_plan(const std::filesystem::path& path) {
         std::ifstream file{path, std::ios::binary};
         file.exceptions(std::ios::failbit | std::ios::badbit);
-        return nlohmann::json::from_ubjson(std::vector<std::uint8_t>{std::istreambuf_iterator<char>{file}, {}});
+        return cudnn_json::json::from_ubjson(std::vector<std::uint8_t>{std::istreambuf_iterator<char>{file}, {}});
     }
 
-    void write_plan(const std::filesystem::path& path, const nlohmann::json& value) {
-        const auto bytes = nlohmann::json::to_ubjson(value);
+    void write_plan(const std::filesystem::path& path, const cudnn_json::json& value) {
+        const auto bytes = cudnn_json::json::to_ubjson(value);
         std::ofstream file{path, std::ios::binary};
         file.exceptions(std::ios::failbit | std::ios::badbit);
         file.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
@@ -169,7 +170,7 @@ namespace genesia::neural {
         if (residual.data) tensors.emplace(5, residual.data);
         if (plan == convolutions.end()) {
             plan            = convolutions.emplace(convolutions.end(), key);
-            const auto file = cache_directory / ("conv-" + nlohmann::json(key).dump() + ".bin");
+            const auto file = cache_directory / ("conv-" + cudnn_json::json(key).dump() + ".bin");
             if (std::filesystem::exists(file)) {
                 check(plan->graph.deserialize(dnn.get(), read_plan(file).get<std::vector<std::uint8_t>>(), false, false));
                 ++cache_hits;
@@ -236,7 +237,7 @@ namespace genesia::neural {
         if (plan == attentions.end()) {
             plan = attentions.emplace(attentions.end(), stream, shape);
             if (lengths) tensors.emplace(6, plan->query_lengths.data());
-            const auto file = cache_directory / ("attention-" + nlohmann::json(shape).dump() + ".bin");
+            const auto file = cache_directory / ("attention-" + cudnn_json::json(shape).dump() + ".bin");
             if (std::filesystem::exists(file)) {
                 check(plan->graph.deserialize(dnn.get(), read_plan(file).get<std::vector<std::uint8_t>>(), false, false));
                 ++cache_hits;

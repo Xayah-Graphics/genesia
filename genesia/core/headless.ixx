@@ -10,7 +10,9 @@ export namespace genesia::headless {
         std::optional<std::uint64_t> first_seed;
         std::filesystem::path source;
         std::optional<float> denoise;
+        std::vector<std::string> classifiers;
+        bool discard_failed{};
     };
 
     void run(const std::optional<prompt::Preset>& preset, std::shared_ptr<const prompt::Catalog> catalog, const Options& options);
-}
+} // namespace genesia::headless

@@ -22,6 +22,7 @@ namespace genesia::editor {
 
     Session::Session(Interop& bridge, Interop& preview_bridge) : images{defaults::output}, interop{bridge}, preview_interop{preview_bridge}, stream{priority_stream(true)}, control{stream, ::cuda::pinned_default_memory_pool(), 1, ::cuda::no_init} {
         std::construct_at(control.data());
+        classifiers    = classifier::discover();
         preview_stream = priority_stream(false);
         neural::check(cudaEventCreateWithFlags(std::out_ptr(preview_finished), cudaEventDisableTiming));
         try {
@@ -89,6 +90,7 @@ namespace genesia::editor {
 
     void Session::generate() {
         try {
+            classifier::Pipeline classification_pipeline;
             ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].stage}.store(static_cast<std::uint32_t>(sdxl::Stage::loading));
             const auto load_started = std::chrono::steady_clock::now();
             model                   = std::make_unique<sdxl::Model>(stream, defaults::checkpoint, defaults::cache);
@@ -113,18 +115,24 @@ namespace genesia::editor {
             glfwPostEmptyEvent();
             for (;;) {
                 Request request;
+                classifier::Selection selection;
+                std::vector<classifier::Descriptor> classifier_catalog;
                 {
                     std::unique_lock lock{mutex};
                     condition.wait(lock, [this] { return closing || (!paused && !queue.empty()); });
                     if (closing) break;
                     request = std::move(queue.front());
                     queue.pop_front();
-                    active  = request;
-                    started = std::chrono::steady_clock::now();
+                    request.classification = classification;
+                    active                 = request;
+                    selection              = classification;
+                    classifier_catalog     = classifiers;
+                    started                = std::chrono::steady_clock::now();
                     ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].cancel}.store(0);
                     ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].stage}.store(static_cast<std::uint32_t>(sdxl::Stage::preparing));
                 }
                 glfwPostEmptyEvent();
+                classification_pipeline.prepare(classifier_catalog, selection, request.parameters.width, request.parameters.height);
                 const auto source_id = request.source ? std::optional{std::pair{request.source->id, request.source->modified}} : std::nullopt;
                 if (!inference || inference->parameters != request.parameters || source_id != prepared_image) {
                     {
@@ -182,13 +190,27 @@ namespace genesia::editor {
                     }
                     condition.notify_all();
                     if (!output.cancelled) {
-                        const auto ready = interop.publish(output.device_pixels, output.width, output.height, output.stream, slot);
                         Record record{request.parameters, request.seed, {}, std::filesystem::path{defaults::checkpoint}.filename(), request.prompt, request.catalog, request.source ? request.source->path.filename() : std::filesystem::path{}};
+                        if (!selection.enabled.empty()) record.classification = classification_pipeline.run({output.device_pixels, output.width, output.height, std::size_t(output.width) * 3}, output.stream.get());
+                        record.discarded = selection.discard_failed && record.classification.error.empty() && !record.classification.passed;
+                        if (!record.classification.error.empty()) {
+                            {
+                                const std::lock_guard lock{mutex};
+                                saving[slot] = true;
+                                files.push_back({request.id, &output, record, slot});
+                            }
+                            condition.notify_all();
+                            glfwPostEmptyEvent();
+                            throw std::runtime_error{record.classification.error};
+                        }
+                        const auto ready = interop.publish(output.device_pixels, output.width, output.height, output.stream, slot);
                         {
                             const std::lock_guard lock{mutex};
                             events.push_back({EventKind::generated, request.id, record, slot, ready});
-                            saving[slot] = true;
-                            files.push_back({request.id, &output, record, slot});
+                            if (!record.discarded) {
+                                saving[slot] = true;
+                                files.push_back({request.id, &output, record, slot});
+                            }
                         }
                         glfwPostEmptyEvent();
                         condition.notify_all();
