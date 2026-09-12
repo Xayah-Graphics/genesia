@@ -5,9 +5,6 @@ module;
 module classifier.inference;
 import std;
 namespace classifier {
-    std::filesystem::path model_directory() {
-        return std::filesystem::path(u8"" CLASSIFIER_MODEL_ROOT);
-    }
     void to_json(nlohmann::json& json, const Result& result) {
         json = {{"id", result.id}, {"label", result.label}, {"classes", result.classes}, {"scores", result.scores}, {"threshold", result.threshold}, {"accepted", result.accepted}, {"error", result.error}};
     }
@@ -29,12 +26,12 @@ namespace classifier {
         json.at("error").get_to(results.error);
     }
     std::vector<Descriptor> discover() {
-        const auto root = model_directory();
+        const std::filesystem::path root{u8"" CLASSIFIER_MODEL_ROOT};
         std::vector<Descriptor> result;
         if (!std::filesystem::exists(root)) return result;
         for (const auto& file : std::filesystem::directory_iterator(root)) {
             if (!file.is_regular_file() || file.path().extension() != ".safetensors") continue;
-            result.push_back({path_utf8(file.path().stem()), file.path(), file.last_write_time()});
+            result.push_back({path_utf8(file.path().stem()), file.path()});
         }
         std::ranges::sort(result, {}, &Descriptor::id);
         return result;

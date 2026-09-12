@@ -9,7 +9,6 @@ export namespace classifier {
     struct Descriptor {
         std::string id;
         std::filesystem::path path;
-        std::filesystem::file_time_type modified;
         bool operator==(const Descriptor&) const = default;
     };
     struct Selection {
@@ -29,7 +28,6 @@ export namespace classifier {
         bool passed = true;
         std::string error;
     };
-    std::filesystem::path model_directory();
     void to_json(nlohmann::json& json, const Result& result);
     void from_json(const nlohmann::json& json, Result& result);
     void to_json(nlohmann::json& json, const Results& results);

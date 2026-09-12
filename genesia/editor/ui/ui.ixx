@@ -52,8 +52,17 @@ export namespace genesia::editor {
             void* value{};
         };
         struct ControlLayout final {
+            struct Classifier final {
+                std::string_view id;
+                const classifier::Result* result{};
+                std::string verdict;
+                ImVec4 ink;
+                bool available{}, enabled{};
+            };
             float right_width, image_label_width;
             bool different, image_above;
+            std::vector<Classifier> classifiers;
+            bool discard_failed{};
             float classifier_width, classifier_height, classifier_bottom;
         };
 
@@ -132,7 +141,7 @@ export namespace genesia::editor {
         void top_strip(float scale, ImVec2 size);
         void tag_column(float scale, ImVec2 size, const ControlLayout& layout);
         void bottom_controls(float scale, ImVec2 size, const ControlLayout& layout);
-        void classifier_panel(float scale, ImVec2 size, const ControlLayout& layout);
+        void classifier_controls(float scale, ImVec2 size, const ControlLayout& layout);
         void gallery_strip(float scale, ImVec2 size);
         void draw();
     };

@@ -61,7 +61,7 @@ export namespace genesia::editor {
         bool preview_enabled{defaults::preview_enabled};
         bool preview_visible{true};
         std::string error;
-        std::vector<classifier::Descriptor> classifiers;
+        const std::vector<classifier::Descriptor> classifiers{classifier::discover()};
         classifier::Selection classification;
 
         Session(Interop& interop, Interop& preview_interop);
