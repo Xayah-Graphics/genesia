@@ -123,4 +123,4 @@ jobs:
           -DGENESIA_BUILD_UI=${{ matrix.ui }}
 
       - name: Build
-        run: cmake --build cmake-build-release --target genesia --parallel
+        run: cmake --build cmake-build-release --target genesia classifier-train --parallel

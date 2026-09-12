@@ -1,15 +1,16 @@
-"""Keep images matching a configurable prompt and permanently delete nonmatches.
+"""Sort images into YES/NO subfolders according to a configurable prompt.
 
 Requires Python 3.14 and Pillow. Uses gemma_batch for independent single-image
 requests with no reference image. Edit PROMPT below or pass --prompt to change
 the requirement. The structured answer is {"matches": true} or {"matches": false}.
 
-Only images directly inside the input directory are processed. Matches stay
-in place; nonmatches are deleted immediately. No folders, database, or result
-files are created. Rerunning evaluates all remaining top-level images again.
-Four requests run concurrently by default. The main thread deletes each
-nonmatch when its result arrives. Request or parsing errors stop the run;
-the affected image is left in place.
+Only images directly inside the input directory are processed. Matches move
+to YES; nonmatches move to NO. Each subfolder is created when first needed.
+No database or result files are created. Rerunning evaluates all remaining
+top-level images again, skipping images already sorted into subfolders.
+Four requests run concurrently by default. The main thread moves each image
+when its result arrives. Request or parsing errors stop the run; the affected
+image is left in place.
 
 CLI:
     python tools/gemma_classify.py "IMAGE_DIR" [--prompt "REQUIREMENT"] [--no-think] [--workers 4]
@@ -52,16 +53,18 @@ def main():
         think=args.think, server=args.server, model=args.model,
         max_tokens=max_tokens, timeout=args.timeout, workers=args.workers,
     )
-    counts = {"KEEP": 0, "DELETE": 0}
+    counts = {"YES": 0, "NO": 0}
     print(f"Folder: {root}\nPrompt: {args.prompt}\nModel: {args.model} | think: {'on' if args.think else 'off'} | workers: {args.workers}", flush=True)
     with closing(rows):
         for number, row in enumerate(rows, start=1):
             source = Path(row["image"])
-            result = "KEEP" if row["result"]["matches"] else "DELETE"
-            if result == "DELETE": source.unlink()
+            result = "YES" if row["result"]["matches"] else "NO"
+            destination = root / result
+            destination.mkdir(exist_ok=True)
+            source.rename(destination / source.name)
             counts[result] += 1
             print(f"[{number}] {source.name} -> {result} | {row['seconds']:.3f}s", flush=True)
-    print(f"Done: kept {counts['KEEP']}, deleted {counts['DELETE']}.")
+    print(f"Done: YES {counts['YES']}, NO {counts['NO']}.")
 
 
 if __name__ == "__main__":

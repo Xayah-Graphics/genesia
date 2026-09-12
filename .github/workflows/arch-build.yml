@@ -48,4 +48,4 @@ jobs:
             -DGENESIA_BUILD_UI=OFF
 
       - name: Build
-        run: cmake --build cmake-build-release --target genesia --parallel
+        run: cmake --build cmake-build-release --target genesia classifier-train --parallel
