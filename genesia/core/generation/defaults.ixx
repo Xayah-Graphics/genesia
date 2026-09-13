@@ -16,8 +16,7 @@ export namespace genesia::defaults {
 #elif defined(__linux__)
     inline constexpr std::string_view checkpoint = "/workspace/models/oneObsession_v22.safetensors";
 #endif
-    inline constexpr std::string_view output = "data/sdxl";
-    inline constexpr std::string_view cache  = "genesia-cache";
+    inline constexpr std::string_view cache  = GENESIA_CACHE_DIRECTORY;
     inline constexpr std::string_view preset = "default";
     inline constexpr std::string_view assets = GENESIA_ASSET_DIRECTORY;
 } // namespace genesia::defaults

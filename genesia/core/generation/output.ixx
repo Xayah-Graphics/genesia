@@ -16,12 +16,6 @@ export namespace genesia {
         std::filesystem::path source;
         classifier::Results classification;
     };
-    struct ImageWriter final {
-        std::filesystem::path directory;
-        std::uint64_t next_index{1};
-
-        explicit ImageWriter(std::filesystem::path directory);
-        std::filesystem::path save(const sdxl::Output& output, const Record& record);
-    };
-    std::optional<Record> read_record(const std::filesystem::path& path, std::shared_ptr<const prompt::Catalog> catalog);
+    std::filesystem::path save_image(const sdxl::Output& output, const Record& record);
+    Record read_record(const std::filesystem::path& path, std::shared_ptr<const prompt::Catalog> catalog);
 } // namespace genesia

@@ -2,7 +2,6 @@ module;
 
 #include "sdxl/control.h"
 #include <genesia/cuda.h>
-
 #include <nlohmann/json.hpp>
 
 module genesia.headless;
@@ -11,6 +10,7 @@ import genesia.generation.output;
 import genesia.generation.images;
 import genesia.sdxl;
 import std;
+import genesia.dataset;
 
 namespace genesia::headless {
     void run(const std::optional<prompt::Preset>& preset, std::shared_ptr<const prompt::Catalog> catalog, const Options& options) {
@@ -18,13 +18,11 @@ namespace genesia::headless {
         prompt::Pair prompt;
         Image original;
         if (!options.source.empty()) {
-            original         = read_image(options.source);
-            const auto saved = read_record(options.source, catalog);
-            if (saved) {
-                parameters = saved->parameters;
-                prompt     = saved->prompt;
-                catalog    = saved->catalog;
-            } else if (!preset) throw std::runtime_error{"Source PNG has no Genesia prompt metadata; specify --preset or --prompt-file"};
+            original           = read_image(options.source);
+            const auto saved   = read_record(options.source, catalog);
+            parameters         = saved.parameters;
+            prompt             = saved.prompt;
+            catalog            = saved.catalog;
             parameters.width   = original.width;
             parameters.height  = original.height;
             parameters.denoise = *options.denoise;
@@ -39,7 +37,8 @@ namespace genesia::headless {
         const auto available = classifier::discover();
         classifier::Selection selection;
         if (options.classifiers) selection.enabled = *options.classifiers;
-        else for (const auto& model : available) selection.enabled.push_back(model.id);
+        else
+            for (const auto& model : available) selection.enabled.push_back(model.id);
         classifiers.prepare(available, selection, parameters.width, parameters.height);
         ::cuda::host_buffer<sdxl::Control> control{stream, ::cuda::pinned_default_memory_pool(), 1, ::cuda::no_init};
         std::construct_at(control.data());
@@ -71,7 +70,6 @@ namespace genesia::headless {
                 unchanged->device_pixels = source->pixels.data();
             }
         }
-        ImageWriter images{defaults::output};
         std::future<void> pending_save;
         std::random_device random;
         std::uniform_int_distribution<std::uint64_t> seeds;
@@ -81,11 +79,11 @@ namespace genesia::headless {
             // The two pinned outputs alternate; finish the previous save before
             // its storage can be reused by the next generate() call.
             if (pending_save.valid()) pending_save.get();
-            Record record{parameters, seed, {}, std::filesystem::path{defaults::checkpoint}.filename(), prompt, catalog, options.source.empty() ? std::filesystem::path{} : std::filesystem::absolute(options.source).lexically_normal()};
+            Record record{parameters, seed, {}, std::filesystem::path{defaults::checkpoint}.filename(), prompt, catalog, options.source.empty() ? std::filesystem::path{} : std::filesystem::absolute(options.source).lexically_normal().lexically_relative(dataset::directory)};
             if (!selection.enabled.empty()) record.classification = classifiers.run({result.device_pixels, result.width, result.height, std::size_t(result.width) * 3}, result.stream.get());
             std::println(std::cerr, "GENERATE {}/{} seed={} sample={:.3f}s decode={:.3f}s", i + 1, options.count, seed, result.sample_seconds, result.decode_seconds);
-            pending_save = std::async(std::launch::async, [&images, &result, record, i, count = options.count] {
-                const auto path = std::filesystem::absolute(images.save(result, record)).lexically_normal().generic_u8string();
+            pending_save = std::async(std::launch::async, [&result, record, i, count = options.count] {
+                const auto path = std::filesystem::absolute(save_image(result, record)).lexically_normal().generic_u8string();
                 nlohmann::json output{{"index", i + 1}, {"total", count}, {"seed", std::to_string(record.seed)}, {"path", std::string{path.begin(), path.end()}}};
                 if (!record.classification.classifiers.empty()) output["classification"] = record.classification;
                 std::println("{}", output.dump());

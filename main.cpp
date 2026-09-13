@@ -1,4 +1,5 @@
 import genesia.headless;
+import genesia.dataset;
 #if defined(GENESIA_HAS_EDITOR)
 import genesia.editor;
 #endif
@@ -8,6 +9,7 @@ int main(const int argc, char** argv) try {
     bool gui{}, named_preset{}, headless_options{};
     genesia::headless::Options options;
     std::filesystem::path prompt_file;
+    std::string dataset;
     std::string_view name = genesia::defaults::preset;
     for (int i = 1; i < argc; ++i) {
         const std::string_view option{argv[i]};
@@ -16,7 +18,7 @@ int main(const int argc, char** argv) try {
             return argv[++i];
         };
         const auto number = [&](auto& destination) {
-            const auto text = argument();
+            const auto text   = argument();
             const auto parsed = std::from_chars(text.data(), text.data() + text.size(), destination);
             if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) throw std::invalid_argument{std::format("Invalid number for {}", option)};
         };
@@ -25,7 +27,7 @@ int main(const int argc, char** argv) try {
 Headless: genesia [--preset NAME | --prompt-file FILE] [--count N] [--seed SEED]
 Repaint:  genesia --source PNG --denoise VALUE [--count N] [--seed SEED]
           [--preset NAME | --prompt-file FILE]
-Editor:   genesia --gui [--preset NAME]
+Editor:   genesia --gui [--preset NAME] [--dataset ROOT[/CONCEPT]]
 Defaults: preset={}, count=1, random seed per image.
 --seed uses SEED, SEED+1, ... (uint64).
 Repaint inherits the source PNG prompt, steps and CFG; a preset overrides its prompt.
@@ -35,15 +37,17 @@ Repaint keeps the source dimensions; nonzero denoise requires multiples of 64.
 --classifier ID selects a model from assets/classifier/models; repeat to select a subset.
 --no-classifiers disables classification.
 All available classifiers are enabled by default. PASS and FAIL images are saved.
-Saved images are reported as JSON Lines on stdout; diagnostics go to stderr.)", GENESIA_VERSION, genesia::defaults::preset);
+Saved images are reported as JSON Lines on stdout; diagnostics go to stderr.)",
+                GENESIA_VERSION, genesia::defaults::preset);
             return 0;
         }
         if (option == "--gui") gui = true;
+        else if (option == "--dataset") dataset = argument();
         else if (option == "--preset") {
-            name = argument();
+            name         = argument();
             named_preset = true;
         } else if (option == "--prompt-file") {
-            prompt_file = argument();
+            prompt_file      = argument();
             headless_options = true;
         } else if (option == "--count") {
             number(options.count);
@@ -52,7 +56,7 @@ Saved images are reported as JSON Lines on stdout; diagnostics go to stderr.)", 
             number(options.first_seed.emplace());
             headless_options = true;
         } else if (option == "--source") {
-            options.source = argument();
+            options.source   = argument();
             headless_options = true;
         } else if (option == "--denoise") {
             number(options.denoise.emplace());
@@ -65,6 +69,15 @@ Saved images are reported as JSON Lines on stdout; diagnostics go to stderr.)", 
             options.classifiers.emplace();
             headless_options = true;
         } else throw std::runtime_error{std::format("Unknown option: {}", option)};
+    }
+    if (!dataset.empty()) {
+        if (!gui) throw std::invalid_argument{"--dataset requires --gui"};
+        const std::filesystem::path selected{dataset};
+        const auto count = std::distance(selected.begin(), selected.end());
+        if (selected.is_absolute() || count < 1 || count > 2 || std::ranges::any_of(selected, [](const auto& part) { return part.empty() || part.string().starts_with('.'); })) throw std::invalid_argument{"--dataset accepts a root or ROOT/CONCEPT"};
+        dataset = selected.generic_string();
+        if (dataset == "raw") std::filesystem::create_directories(genesia::dataset::raw);
+        if (!std::filesystem::is_directory(genesia::dataset::directory / selected)) throw std::runtime_error{"Dataset does not exist: " + dataset};
     }
     if (options.count <= 0) throw std::invalid_argument{"--count requires a positive integer"};
     if (named_preset && !prompt_file.empty()) throw std::invalid_argument{"Choose either --preset or --prompt-file"};
@@ -79,7 +92,7 @@ Saved images are reported as JSON Lines on stdout; diagnostics go to stderr.)", 
     if (options.source.empty() || named_preset || !prompt_file.empty()) preset = prompt_file.empty() ? genesia::prompt::read_preset(name, *catalog) : genesia::prompt::Preset{prompt_file.stem().string(), genesia::prompt::read_prompt(prompt_file, *catalog)};
 #if defined(GENESIA_HAS_EDITOR)
     if (gui) {
-        genesia::editor::run(std::move(*preset), std::move(catalog));
+        genesia::editor::run(std::move(*preset), std::move(catalog), std::move(dataset));
         return 0;
     }
 #endif

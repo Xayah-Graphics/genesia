@@ -51,7 +51,7 @@ export namespace genesia::editor {
         float width, height;
         bool input_expanded{};
 
-        TagLayout(const prompt::Group& group, const prompt::Catalog& catalog, float width, float scale, const TagEditor& editor);
+        TagLayout(const prompt::Group& group, const prompt::Catalog& catalog, float width, float scale, const TagEditor* editor);
     };
     struct TagEditor final {
         std::optional<GroupChange> change;
@@ -106,4 +106,5 @@ export namespace genesia::editor {
         void draw_groups(prompt::Side& side, std::size_t side_index, const TagSearch& search, const prompt::Catalog& catalog, float scale);
         void draw(prompt::Pair& prompt, const TagSearch& search, const prompt::Catalog& catalog, float scale);
     };
+    void show_prompt(const prompt::Pair& prompt, const prompt::Catalog& catalog, float scale);
 } // namespace genesia::editor

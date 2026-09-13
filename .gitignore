@@ -7,3 +7,4 @@ build*
 /assets/classifier/
 AGENTS.md
 TODO.md
+/.genesia/

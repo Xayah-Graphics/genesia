@@ -70,6 +70,17 @@ if (GENESIA_BUILD_UI)
 endif ()
 
 # ============================================================================
+# Dataset and shared hashing (no generation runtime dependency)
+# ============================================================================
+add_library(genesia_data STATIC genesia/data/hash.cpp genesia/data/dataset.cpp)
+target_sources(genesia_data PUBLIC FILE_SET cxx_modules TYPE CXX_MODULES FILES
+        genesia/data/hash.ixx
+        genesia/data/dataset.ixx
+)
+target_compile_definitions(genesia_data PUBLIC GENESIA_DATA_DIRECTORY="${PROJECT_SOURCE_DIR}/data")
+target_link_libraries(genesia_data PUBLIC nlohmann_json::nlohmann_json Threads::Threads)
+
+# ============================================================================
 # Classifier
 # ============================================================================
 add_library(classifier_runtime STATIC
@@ -112,7 +123,7 @@ file(READ "${PROJECT_SOURCE_DIR}/classifier/audit.html" GENESIA_CLASSIFIER_AUDIT
 file(CONFIGURE OUTPUT "${PROJECT_BINARY_DIR}/classifier-audit-report.h"
         CONTENT "constexpr char audit_report[] = R\"GENESIA_AUDIT(${GENESIA_CLASSIFIER_AUDIT_REPORT})GENESIA_AUDIT\";\n" @ONLY)
 target_include_directories(classifier_training PRIVATE "${PROJECT_BINARY_DIR}")
-target_link_libraries(classifier_training PUBLIC classifier::runtime PRIVATE genesia::stb)
+target_link_libraries(classifier_training PUBLIC classifier::runtime PRIVATE genesia_data genesia::stb)
 add_executable(classifier-train classifier/trainer.cpp)
 add_executable(classifier::train ALIAS classifier-train)
 target_link_libraries(classifier-train PRIVATE classifier::training)
@@ -175,12 +186,14 @@ endif ()
 target_compile_definitions(
         genesia_core
         PRIVATE
+        GENESIA_CACHE_DIRECTORY="${PROJECT_BINARY_DIR}/genesia-cache"
         GENESIA_CXX_COMPILER="${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}"
         GENESIA_PLATFORM="${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}"
 )
 target_link_libraries(
         genesia_core
         PUBLIC
+        genesia_data
         CCCL::libcudacxx
         classifier::runtime
         CUDA::toolkit
@@ -206,13 +219,12 @@ if (GENESIA_BUILD_UI)
             PRIVATE
             genesia/editor/runtime/device.cpp
             genesia/editor/runtime/resources.cpp
-            genesia/editor/runtime/images.cpp
             genesia/editor/platform/window.cpp
             genesia/editor/ui/renderer.cpp
             genesia/editor/platform/interop.cpp
             genesia/editor/platform/interop.cu
             genesia/editor/session/session.cpp
-            genesia/editor/gallery/gallery.cpp
+            genesia/editor/library/library.cpp
             genesia/editor/ui/ui.cpp
             genesia/editor/ui/tag-editor.cpp
             genesia/editor/editor.cpp
@@ -223,12 +235,11 @@ if (GENESIA_BUILD_UI)
             FILE_SET editor_modules TYPE CXX_MODULES FILES
             genesia/editor/runtime/device.ixx
             genesia/editor/runtime/resources.ixx
-            genesia/editor/runtime/images.ixx
             genesia/editor/platform/window.ixx
             genesia/editor/ui/renderer.ixx
             genesia/editor/platform/interop.ixx
             genesia/editor/session/session.ixx
-            genesia/editor/gallery/gallery.ixx
+            genesia/editor/library/library.ixx
             genesia/editor/ui/ui.ixx
             genesia/editor/ui/tag-editor.ixx
     )

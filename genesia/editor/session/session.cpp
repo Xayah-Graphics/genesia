@@ -1,6 +1,5 @@
 module;
 #include <GLFW/glfw3.h>
-
 #include "../../core/sdxl/control.h"
 #include <genesia/cuda.h>
 module genesia.editor.session;
@@ -10,8 +9,9 @@ import genesia.sdxl;
 import genesia.sdxl.preview;
 import genesia.neural.inference_runtime;
 import genesia.editor.platform.interop;
-import genesia.editor.runtime.images;
+import genesia.generation.images;
 import std;
+import genesia.dataset;
 
 namespace genesia::editor {
     ::cuda::stream priority_stream(const bool high) {
@@ -20,8 +20,7 @@ namespace genesia::editor {
         return ::cuda::stream{::cuda::devices[0], high ? greatest : least};
     }
 
-    Session::Session(Interop& bridge, Interop& preview_bridge) : images{defaults::output}, interop{bridge}, preview_interop{preview_bridge}, stream{priority_stream(true)}, control{stream, ::cuda::pinned_default_memory_pool(), 1, ::cuda::no_init} {
-        for (const auto& model : classifiers) classification.enabled.push_back(model.id);
+    Session::Session(Interop& bridge, Interop& preview_bridge, const std::vector<classifier::Descriptor>& classifiers, const classifier::Selection& classification) : interop{bridge}, preview_interop{preview_bridge}, stream{priority_stream(true)}, control{stream, ::cuda::pinned_default_memory_pool(), 1, ::cuda::no_init}, classifiers{classifiers}, classification{classification} {
         std::construct_at(control.data());
         preview_stream = priority_stream(false);
         neural::check(cudaEventCreateWithFlags(std::out_ptr(preview_finished), cudaEventDisableTiming));
@@ -56,12 +55,15 @@ namespace genesia::editor {
         stream.sync();
     }
 
-    void Session::enqueue(sdxl::Parameters parameters, const std::uint64_t seed, prompt::Pair prompt, std::shared_ptr<const prompt::Catalog> catalog, std::optional<RepaintSource> source) {
+    std::uint64_t Session::enqueue(sdxl::Parameters parameters, const std::uint64_t seed, prompt::Pair prompt, std::shared_ptr<const prompt::Catalog> catalog, std::optional<RepaintSource> source) {
+        std::uint64_t id;
         {
             const std::lock_guard lock{mutex};
-            queue.push_back({next_id++, std::move(parameters), seed, std::move(prompt), std::move(catalog), std::move(source)});
+            id = next_id++;
+            queue.push_back({id, std::move(parameters), seed, std::move(prompt), std::move(catalog), std::move(source)});
         }
         condition.notify_all();
+        return id;
     }
 
     void Session::stop() {
@@ -97,7 +99,7 @@ namespace genesia::editor {
             std::println("LOAD {:.3f}s", std::chrono::duration<double>(std::chrono::steady_clock::now() - load_started).count());
             std::cout.flush();
             std::unique_ptr<sdxl::ImageInput> source_image;
-            std::optional<std::pair<std::uint64_t, std::uint64_t>> encoded_image, prepared_image;
+            std::optional<std::string> encoded_image, prepared_image;
             std::unique_ptr<sdxl::Inference> inference;
             struct PendingWrites final {
                 Session& session;
@@ -130,7 +132,7 @@ namespace genesia::editor {
                 glfwPostEmptyEvent();
                 const auto& selection = request.classification;
                 classification_pipeline.prepare(classifiers, selection, request.parameters.width, request.parameters.height);
-                const auto source_id = request.source ? std::optional{std::pair{request.source->id, request.source->modified}} : std::nullopt;
+                const auto source_id = request.source ? std::optional{request.source->sha} : std::nullopt;
                 if (!inference || inference->parameters != request.parameters || source_id != prepared_image) {
                     {
                         std::unique_lock lock{mutex};
@@ -187,7 +189,7 @@ namespace genesia::editor {
                     }
                     condition.notify_all();
                     if (!output.cancelled) {
-                        Record record{request.parameters, request.seed, {}, std::filesystem::path{defaults::checkpoint}.filename(), request.prompt, request.catalog, request.source ? request.source->path.filename() : std::filesystem::path{}};
+                        Record record{request.parameters, request.seed, {}, std::filesystem::path{defaults::checkpoint}.filename(), request.prompt, request.catalog, request.source ? request.source->path.lexically_relative(dataset::directory) : std::filesystem::path{}};
                         if (!selection.enabled.empty()) record.classification = classification_pipeline.run({output.device_pixels, output.width, output.height, std::size_t(output.width) * 3}, output.stream.get());
                         if (!record.classification.error.empty()) {
                             {
@@ -323,12 +325,13 @@ namespace genesia::editor {
                                 reading         = newest;
                                 const auto step = source->slots.data()[reading].step;
                                 ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{source->slots.data()[reading].state}.store(std::uint32_t(sdxl::SnapshotState::reading), ::cuda::memory_order_release);
-                                preview_working = true;
+                                preview_working       = true;
+                                const bool from_image = active->source.has_value();
                                 lock.unlock();
                                 decoder->decode(source->latent.data() + std::size_t(reading) * (source->width / 8) * (source->height / 8) * 4);
                                 const auto ready = preview_interop.publish(decoder->pixels.data(), decoder->width, decoder->height, preview_stream, slot);
                                 neural::check(cudaEventRecord(preview_finished.get(), preview_stream.get()));
-                                in_flight = PreviewFrame{task, step, decoder->width, decoder->height, slot, ready};
+                                in_flight = PreviewFrame{task, step, decoder->width, decoder->height, slot, ready, from_image};
                                 lock.lock();
                             }
                         }
@@ -365,7 +368,7 @@ namespace genesia::editor {
                 files.pop_front();
             }
             try {
-                task.record.path = std::filesystem::absolute(images.save(*task.output, task.record));
+                task.record.path = std::filesystem::absolute(save_image(*task.output, task.record));
                 const std::lock_guard lock{mutex};
                 saving[task.slot] = false;
                 events.push_back({EventKind::saved, task.id, std::move(task.record)});
@@ -379,4 +382,5 @@ namespace genesia::editor {
             glfwPostEmptyEvent();
         }
     }
+    GenerationRuntime::GenerationRuntime(runtime::Device& device, const std::vector<classifier::Descriptor>& classifiers, const classifier::Selection& classification) : interop{device}, preview{device}, session{interop, preview, classifiers, classification} {}
 } // namespace genesia::editor

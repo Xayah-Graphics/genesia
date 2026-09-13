@@ -8,13 +8,13 @@ import genesia.generation.output;
 import genesia.sdxl;
 import genesia.sdxl.preview;
 import genesia.editor.platform.interop;
+import genesia.editor.runtime.device;
 import std;
 
 export namespace genesia::editor {
     struct RepaintSource final {
-        std::uint64_t id;
+        std::string sha;
         std::filesystem::path path;
-        std::uint64_t modified;
     };
     struct Request final {
         std::uint64_t id{};
@@ -40,9 +40,9 @@ export namespace genesia::editor {
         int height;
         std::size_t slot;
         std::uint64_t ready;
+        bool from_image{};
     };
     struct Session final {
-        ImageWriter images;
         Interop& interop;
         Interop& preview_interop;
         ::cuda::stream stream;
@@ -61,12 +61,12 @@ export namespace genesia::editor {
         bool preview_enabled{defaults::preview_enabled};
         bool preview_visible{true};
         std::string error;
-        const std::vector<classifier::Descriptor> classifiers{classifier::discover()};
-        classifier::Selection classification;
+        const std::vector<classifier::Descriptor>& classifiers;
+        const classifier::Selection& classification;
 
-        Session(Interop& interop, Interop& preview_interop);
+        Session(Interop& interop, Interop& preview_interop, const std::vector<classifier::Descriptor>& classifiers, const classifier::Selection& classification);
         ~Session();
-        void enqueue(sdxl::Parameters parameters, std::uint64_t seed, prompt::Pair prompt, std::shared_ptr<const prompt::Catalog> catalog, std::optional<RepaintSource> source = {});
+        std::uint64_t enqueue(sdxl::Parameters parameters, std::uint64_t seed, prompt::Pair prompt, std::shared_ptr<const prompt::Catalog> catalog, std::optional<RepaintSource> source = {});
         void stop();
         void resume();
         void shutdown();
@@ -100,5 +100,10 @@ export namespace genesia::editor {
         void generate();
         void preview_images();
         void write_files();
+    };
+    struct GenerationRuntime final {
+        Interop interop, preview;
+        Session session;
+        GenerationRuntime(runtime::Device& device, const std::vector<classifier::Descriptor>& classifiers, const classifier::Selection& classification);
     };
 } // namespace genesia::editor

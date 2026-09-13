@@ -6,6 +6,7 @@ module classifier.audit;
 import classifier.dataset;
 import classifier.inference;
 import std;
+import genesia.hash;
 namespace classifier {
     void audit(const std::filesystem::path& dataset, const std::filesystem::path& model, const std::atomic_bool& interrupted) {
         const auto root       = std::filesystem::absolute(dataset).lexically_normal();
@@ -15,7 +16,7 @@ namespace classifier {
         std::fflush(nullptr);
         const auto content = fingerprint(root);
         Mapping model_file(model_path);
-        const auto model_hash = sha256({static_cast<const unsigned char*>(model_file.data), model_file.size});
+        const auto model_hash = genesia::sha256({static_cast<const unsigned char*>(model_file.data), model_file.size});
         std::println("Preparing model: {}", path_utf8(model_path));
         std::fflush(nullptr);
         Pipeline pipeline;
@@ -56,7 +57,7 @@ namespace classifier {
             auto scores         = std::move(result.classifiers.front().scores);
             const int predicted = int(std::ranges::max_element(scores) - scores.begin());
             const auto id       = path_utf8(path.lexically_relative(root));
-            const auto digest   = sha256(image.rgb);
+            const auto digest   = genesia::sha256(image.rgb);
             std::string split   = "unknown";
             if (!provenance.is_null()) {
                 if (!records.contains(id)) split = "new";

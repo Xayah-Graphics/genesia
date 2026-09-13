@@ -1,9 +1,6 @@
 module;
-
 #include <imgui.h>
-
 export module genesia.editor.ui;
-
 import genesia.generation.defaults;
 import genesia.prompt.preset;
 import genesia.generation.output;
@@ -13,43 +10,69 @@ import genesia.editor.platform.interop;
 import genesia.editor.ui.renderer;
 import genesia.editor.ui.tag_editor;
 import genesia.editor.session;
-import genesia.editor.gallery;
+import genesia.editor.library;
 import std;
 
 export namespace genesia::editor {
     struct UserInterface final {
         struct ImageView final {
             float zoom{1};
-            bool fit{true};
-            bool dragging{};
+            bool fit{true}, dragging{};
             ImVec2 center{0.5F, 0.5F};
             float initial_zoom{1}, target_zoom{1};
             ImVec2 anchor{}, pivot{};
             double started{-1};
-
             void scale_to(float ratio, ImVec2 position, ImVec2 image, bool fitting, double now);
             void update(ImVec2 available, ImVec2 image, double now);
             void constrain(ImVec2 available, ImVec2 image);
         };
         struct RepaintDraft final {
             const std::shared_ptr<const prompt::Catalog> catalog;
-            std::uint64_t modified;
             prompt::Pair prompt;
             PromptEditor editor;
-
-            RepaintDraft(const Record& source, std::uint64_t modified);
+            explicit RepaintDraft(const Record& source);
         };
-        struct Thumbnail final {
-            Gallery::File file;
+        enum class Page { generation, dataset };
+        enum class View { browse, inspect, repaint, comparison, source, result };
+        enum class Role { image, source, result };
+        enum class ImageAction { none, click, repaint };
+        struct Output final {
+            std::optional<std::uint64_t> task;
+            std::optional<Record> record;
+            std::optional<dataset::File> saved;
             std::uint64_t texture{};
             int width{}, height{};
-            std::uint64_t touched{};
-            std::string error;
+            bool preview{};
+            std::uint32_t step{};
+        };
+        struct Repaint final {
+            dataset::File source;
+            Page return_page;
+            View return_view;
+            ImageView return_camera;
+            Output result;
+        };
+        struct Position final {
+            std::string selected;
+            std::size_t index{};
+            float scroll{};
+        };
+        struct Picture final {
+            std::uint64_t texture{};
+            int width{}, height{};
+            const Record* record{};
+            std::optional<dataset::File> file;
+            bool preview{};
+            Role role{Role::image};
         };
         struct ParameterEdit final {
             ImGuiID id{};
             ImGuiDataType type{};
             void* value{};
+        };
+        struct Sidebar final {
+            bool open{};
+            float amount{}, width{};
         };
         struct ControlLayout final {
             struct Classifier final {
@@ -59,10 +82,10 @@ export namespace genesia::editor {
                 ImVec4 ink;
                 bool available{}, enabled{};
             };
-            float right_width, image_label_width;
-            bool different, image_above;
+            float right_width{}, image_label_width{};
+            bool different{}, image_above{};
             std::vector<Classifier> classifiers;
-            float classifier_width, classifier_height, classifier_bottom;
+            float classifier_width{}, classifier_height{}, classifier_bottom{};
         };
 
         const std::shared_ptr<const prompt::Catalog> catalog;
@@ -75,72 +98,65 @@ export namespace genesia::editor {
         bool preview_enabled{defaults::preview_enabled};
         WindowPlatform& window;
         Renderer& renderer;
-        Interop& interop;
-        Session& session;
-        Gallery gallery;
+        Library library;
+        const std::vector<classifier::Descriptor> classifiers{classifier::discover()};
+        classifier::Selection classification;
+        std::unique_ptr<GenerationRuntime> runtime;
         sdxl::Parameters draft;
         prompt::Pair prompt;
         TagSearch tag_search;
         PromptEditor prompt_editor;
-        std::map<std::uint64_t, Thumbnail> thumbnails;
-        std::map<std::uint64_t, std::unique_ptr<RepaintDraft>> repaints;
-        std::optional<Record> image_record;
-        std::optional<Gallery::File> image_file;
-        std::uint64_t thumbnail_clock{};
-        std::size_t thumbnail_bytes{};
-        bool reveal_selected{};
-        float gallery_scroll{};
+        std::map<std::string, std::unique_ptr<RepaintDraft>> repaints;
+        Output generation;
+        std::optional<Repaint> repaint;
+        Page page{Page::generation};
+        View viewing{View::browse};
+        std::string collection_key;
+        dataset::Root* root{};
+        dataset::Collection* collection{};
+        std::map<std::string, Position> positions;
+        std::optional<std::filesystem::path> locate;
         std::uint64_t seed{defaults::seed};
         bool random_seed{defaults::random_seed};
-        bool tags_open{};
-        bool gallery_open{};
+        Sidebar dataset_sidebar, prompt_sidebar;
+        ImVec2 canvas_origin{}, canvas_size{};
         ParameterEdit parameter_edit;
-        bool following_latest{true};
-        bool repaint_mode{};
         float denoise{defaults::denoise};
-        float tags_amount{};
-        float gallery_amount{};
-        ImageView view;
-        bool image_live{};
+        ImageView view, generation_view;
+        ImVec2 view_available{};
         float progress_alpha{};
-        std::string progress_label;
-        std::string progress_time;
-        std::uint64_t observed_task{std::numeric_limits<std::uint64_t>::max()};
-        std::optional<std::uint64_t> displayed_task, completed_task, saved_task;
-        std::filesystem::path latest_path;
-        std::uint32_t preview_step{};
-        std::uint64_t transition_texture{};
-        int transition_width{}, transition_height{};
-        double transition_started{};
-        std::uint64_t image_texture{};
-        std::uint64_t selected{};
-        std::optional<Gallery::File> requested_image;
-        std::uint64_t requested_ticket{};
-        int image_width{}, image_height{};
-        double animate_until{};
+        std::string progress_label, progress_time;
+        double frame_time{}, animate_until{};
         double refresh_at{std::numeric_limits<double>::infinity()};
-        std::string shown_error;
+        std::string shown_error, action_error;
         bool escape_owned{};
 
-        UserInterface(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, WindowPlatform& platform, Renderer& display, Interop& bridge, Session& generation);
+        UserInterface(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, WindowPlatform& platform, Renderer& renderer, std::string dataset);
+        ~UserInterface();
         void receive();
-        void show_image(std::uint64_t texture, int width, int height, bool transition, bool reset);
-        bool select_image(const Gallery::File& file);
-        void navigate_image(int direction);
+        void synchronize_collection();
+        void select_collection(std::string key, std::optional<std::filesystem::path> locate = {});
+        void center_image(std::size_t index);
+        void start_repaint(const dataset::File& source);
+        bool leave_repaint();
+        void back();
+        Picture resolve_image(const dataset::File& file, Role role = Role::image) const;
+        Picture resolve_output(const Output& output, Role role = Role::image) const;
         void commit_parameters();
         bool save_prompt();
         void switch_preset();
         void preset_dialogs(float scale);
-        RepaintDraft& image_prompt();
+        void begin_output(Output& output, std::uint64_t task, int width, int height);
         void submit();
-        ControlLayout control_layout(float scale, ImVec2 size) const;
+        ControlLayout control_layout(float scale, ImVec2 size, const Picture& image) const;
+        ImageAction image_panel(const char* id, const Picture& image, ImVec2 origin, ImVec2 size, float scale, bool interactive, float brightness = 1);
         void canvas(float scale, ImVec2 size);
         void generation_settings(float scale, ImVec2 size);
         void top_strip(float scale, ImVec2 size);
-        void tag_column(float scale, ImVec2 size, const ControlLayout& layout);
-        void bottom_controls(float scale, ImVec2 size, const ControlLayout& layout);
-        void classifier_controls(float scale, ImVec2 size, const ControlLayout& layout);
-        void gallery_strip(float scale, ImVec2 size);
+        void sidebar(bool left, float scale, ImVec2 size, const Picture& image);
+        std::optional<std::string> dataset_contents();
+        void bottom_controls(float scale, ImVec2 size, const ControlLayout& layout, const Picture& image);
+        void classifier_controls(float scale, ImVec2 size, const ControlLayout& layout, const Picture& image);
         void draw();
     };
 } // namespace genesia::editor
