@@ -36,8 +36,11 @@ namespace genesia::headless {
         }
         ::cuda::stream stream{::cuda::devices[0]};
         classifier::Pipeline classifiers;
-        const classifier::Selection selection{options.classifiers, options.discard_failed};
-        classifiers.prepare(classifier::discover(), selection, parameters.width, parameters.height);
+        const auto available = classifier::discover();
+        classifier::Selection selection;
+        if (options.classifiers) selection.enabled = *options.classifiers;
+        else for (const auto& model : available) selection.enabled.push_back(model.id);
+        classifiers.prepare(available, selection, parameters.width, parameters.height);
         ::cuda::host_buffer<sdxl::Control> control{stream, ::cuda::pinned_default_memory_pool(), 1, ::cuda::no_init};
         std::construct_at(control.data());
         std::unique_ptr<sdxl::ImageInput> source;
@@ -80,19 +83,11 @@ namespace genesia::headless {
             if (pending_save.valid()) pending_save.get();
             Record record{parameters, seed, {}, std::filesystem::path{defaults::checkpoint}.filename(), prompt, catalog, options.source.empty() ? std::filesystem::path{} : std::filesystem::absolute(options.source).lexically_normal()};
             if (!selection.enabled.empty()) record.classification = classifiers.run({result.device_pixels, result.width, result.height, std::size_t(result.width) * 3}, result.stream.get());
-            record.discarded = selection.discard_failed && record.classification.error.empty() && !record.classification.passed;
             std::println(std::cerr, "GENERATE {}/{} seed={} sample={:.3f}s decode={:.3f}s", i + 1, options.count, seed, result.sample_seconds, result.decode_seconds);
             pending_save = std::async(std::launch::async, [&images, &result, record, i, count = options.count] {
-                nlohmann::json output{{"index", i + 1}, {"total", count}, {"seed", std::to_string(record.seed)}, {"path", nullptr}};
-                if (!record.discarded) {
-                    const auto path = std::filesystem::absolute(images.save(result, record)).lexically_normal().generic_u8string();
-                    output["path"]  = std::string{path.begin(), path.end()};
-                }
-                if (!record.classification.classifiers.empty()) {
-                    output["classification"] = record.classification;
-                    output["saved"]          = !record.discarded;
-                    output["discarded"]      = record.discarded;
-                }
+                const auto path = std::filesystem::absolute(images.save(result, record)).lexically_normal().generic_u8string();
+                nlohmann::json output{{"index", i + 1}, {"total", count}, {"seed", std::to_string(record.seed)}, {"path", std::string{path.begin(), path.end()}}};
+                if (!record.classification.classifiers.empty()) output["classification"] = record.classification;
                 std::println("{}", output.dump());
                 std::cout.flush();
             });

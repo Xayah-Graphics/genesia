@@ -15,7 +15,6 @@ export namespace genesia {
         std::shared_ptr<const prompt::Catalog> catalog;
         std::filesystem::path source;
         classifier::Results classification;
-        bool discarded{};
     };
     struct ImageWriter final {
         std::filesystem::path directory;

@@ -21,6 +21,7 @@ namespace genesia::editor {
     }
 
     Session::Session(Interop& bridge, Interop& preview_bridge) : images{defaults::output}, interop{bridge}, preview_interop{preview_bridge}, stream{priority_stream(true)}, control{stream, ::cuda::pinned_default_memory_pool(), 1, ::cuda::no_init} {
+        for (const auto& model : classifiers) classification.enabled.push_back(model.id);
         std::construct_at(control.data());
         preview_stream = priority_stream(false);
         neural::check(cudaEventCreateWithFlags(std::out_ptr(preview_finished), cudaEventDisableTiming));
@@ -188,7 +189,6 @@ namespace genesia::editor {
                     if (!output.cancelled) {
                         Record record{request.parameters, request.seed, {}, std::filesystem::path{defaults::checkpoint}.filename(), request.prompt, request.catalog, request.source ? request.source->path.filename() : std::filesystem::path{}};
                         if (!selection.enabled.empty()) record.classification = classification_pipeline.run({output.device_pixels, output.width, output.height, std::size_t(output.width) * 3}, output.stream.get());
-                        record.discarded = selection.discard_failed && record.classification.error.empty() && !record.classification.passed;
                         if (!record.classification.error.empty()) {
                             {
                                 const std::lock_guard lock{mutex};
@@ -203,10 +203,8 @@ namespace genesia::editor {
                         {
                             const std::lock_guard lock{mutex};
                             events.push_back({EventKind::generated, request.id, record, slot, ready});
-                            if (!record.discarded) {
-                                saving[slot] = true;
-                                files.push_back({request.id, &output, record, slot});
-                            }
+                            saving[slot] = true;
+                            files.push_back({request.id, &output, record, slot});
                         }
                         glfwPostEmptyEvent();
                         condition.notify_all();

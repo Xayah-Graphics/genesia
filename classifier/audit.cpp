@@ -21,7 +21,7 @@ namespace classifier {
         std::fflush(nullptr);
         Pipeline pipeline;
         const std::vector<Descriptor> catalog{{"audit", model_path}};
-        const Selection selection{{"audit"}, false};
+        const Selection selection{{"audit"}};
         pipeline.prepare(catalog, selection, 1024, 1536);
         auto& loaded = pipeline.models.front();
         const auto& network = *loaded.network;

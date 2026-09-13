@@ -13,7 +13,6 @@ export namespace classifier {
     };
     struct Selection {
         std::vector<std::string> enabled;
-        bool discard_failed = false;
     };
     struct Result {
         std::string id, label;

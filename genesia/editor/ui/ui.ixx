@@ -62,7 +62,6 @@ export namespace genesia::editor {
             float right_width, image_label_width;
             bool different, image_above;
             std::vector<Classifier> classifiers;
-            bool discard_failed{};
             float classifier_width, classifier_height, classifier_bottom;
         };
 

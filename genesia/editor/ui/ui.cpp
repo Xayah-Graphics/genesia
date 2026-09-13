@@ -602,14 +602,12 @@ namespace genesia::editor {
         if (layout.classifiers.size() > session.classifiers.size()) std::ranges::sort(layout.classifiers, {}, &ControlLayout::Classifier::id);
         {
             const std::lock_guard lock{session.mutex};
-            layout.discard_failed = session.classification.discard_failed;
             for (auto& row : layout.classifiers) {
                 row.enabled = std::ranges::contains(session.classification.enabled, row.id);
                 row.verdict = image_live && session.active && displayed_task == session.active->id && std::ranges::contains(session.active->classification.enabled, row.id) ? "\xE2\x80\xA6" : "\xE2\x80\x94";
             }
         }
-        const float filter_width = ImGui::CalcTextSize("Keep PASS \xC2\xB7 Off").x + 24 * scale;
-        float width = session.classifiers.empty() ? 0 : filter_width;
+        float width = 0;
         for (auto& row : layout.classifiers) {
             row.ink = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
             if (row.result) {
@@ -618,19 +616,17 @@ namespace genesia::editor {
             }
             width = std::max(width, ImGui::CalcTextSize(row.id.data(), row.id.data() + row.id.size()).x + ImGui::CalcTextSize(row.verdict.c_str()).x + ImGui::CalcTextSize("\xC2\xB7 ").x + 36 * scale);
         }
-        const bool discarded = image_record && image_record->discarded;
-        if (discarded) width = std::max(width, ImGui::CalcTextSize("Not saved \xC2\xB7 Classification failed").x + 24 * scale);
+        const float minimum_width = std::min(width, 160 * scale);
         layout.classifier_bottom = bottom_margin * scale;
         float left_width = available - layout.right_width - bottom_margin * scale;
-        if (left_width < filter_width) {
+        if (left_width < minimum_width) {
             layout.classifier_bottom += (control_height + 16 + (layout.image_above ? control_height + 8 : 0)) * scale;
             left_width = available;
         }
-        const float footer_rows = !session.classifiers.empty() + discarded;
-        const float rows = float(std::min(std::size_t{6}, layout.classifiers.size())) + footer_rows;
+        const float rows = float(std::min(std::size_t{6}, layout.classifiers.size()));
         layout.classifier_height = std::min(rows * control_height * scale, std::max(0.0F, size.y - layout.classifier_bottom - (top_strip_height + 24) * scale));
-        if ((layout.classifiers.size() + footer_rows) * control_height * scale > layout.classifier_height) width += 3 * scale;
-        const float tag_space = std::max(available - tags_amount * tag_column_width * scale, std::min(available, filter_width));
+        if (layout.classifiers.size() * control_height * scale > layout.classifier_height) width += 3 * scale;
+        const float tag_space = std::max(available - tags_amount * tag_column_width * scale, std::min(available, minimum_width));
         layout.classifier_width = std::min(width, std::max(0.0F, std::min(left_width, tag_space)));
         return layout;
     }
@@ -1075,7 +1071,7 @@ namespace genesia::editor {
             ImGui::PushID(static_cast<int>(selected));
             edits.editor.draw(edits.prompt, tag_search, *edits.original.catalog, scale);
             ImGui::PopID();
-        } else ImGui::TextDisabled(image_live ? "Preview is not a Repaint source." : requested_image ? "Loading image..." : image_file ? "No generation metadata." : image_record && image_record->discarded ? "Not saved: classification failed. Repaint needs a saved image." : image_texture ? "Saving image..." : "No image selected.");
+        } else ImGui::TextDisabled(image_live ? "Preview is not a Repaint source." : requested_image ? "Loading image..." : image_file ? "No generation metadata." : image_texture ? "Saving image..." : "No image selected.");
         ImGui::EndChild();
         ImGui::PopStyleVar();
         ImGui::End();
@@ -1175,8 +1171,6 @@ namespace genesia::editor {
         if (layout.classifier_width <= 0 || layout.classifier_height <= 0) return;
         const ImVec2 origin{bottom_margin * scale, size.y - layout.classifier_bottom - layout.classifier_height};
         const float row_height = control_height * scale;
-        const bool discarded = image_record && image_record->discarded;
-        const float list_height = std::max(0.0F, layout.classifier_height - (!session.classifiers.empty() + discarded) * row_height);
         ImGui::SetNextWindowPos(origin);
         ImGui::SetNextWindowSize({layout.classifier_width, layout.classifier_height});
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
@@ -1184,68 +1178,44 @@ namespace genesia::editor {
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0, 0});
         ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, 3 * scale);
         ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, {0, 0, 0, 0});
-        ImGui::Begin("##ClassifierControls", nullptr, overlay | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollWithMouse);
+        ImGui::Begin("##ClassifierControls", nullptr, (overlay & ~ImGuiWindowFlags_NoScrollbar) | ImGuiWindowFlags_NoBackground);
         if (image_texture) control_shade(origin, {origin.x + layout.classifier_width, origin.y + layout.classifier_height}, scale);
-        if (list_height > 0) {
-            if (ImGui::BeginChild("##ClassifierRows", {0, list_height}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground)) {
-                for (const auto& row : layout.classifiers) {
-                    ImGui::PushID(row.id.data(), row.id.data() + row.id.size());
-                    ImGui::BeginGroup();
-                    const auto position = ImGui::GetCursorScreenPos();
-                    const float width = ImGui::GetContentRegionAvail().x;
-                    const auto detail = std::format("\xC2\xB7 {}", row.verdict);
-                    const float detail_width = ImGui::CalcTextSize(detail.c_str()).x;
-                    const float name_width = std::min(ImGui::CalcTextSize(row.id.data(), row.id.data() + row.id.size()).x, std::max(0.0F, width - 36 * scale - std::min(detail_width, width * .6F)));
-                    const bool hovered = ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(position, {position.x + width, position.y + row_height});
-                    text_button("##Toggle", row.id.data(), scale, name_width + 24 * scale, row.enabled || hovered);
-                    ImGui::SameLine(0, 0);
-                    const auto verdict_position = ImGui::GetCursorScreenPos();
-                    ImGui::Dummy({std::max(1.0F, width - name_width - 24 * scale), row_height});
-                    control_text(detail, {verdict_position.x, position.y + (row_height - ImGui::GetFontSize()) / 2}, position.x + width - 12 * scale, row.ink, scale);
-                    ImGui::EndGroup();
-                    if (ImGui::IsItemHovered()) {
-                        if (row.available && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
-                            const std::lock_guard lock{session.mutex};
-                            if (row.enabled) std::erase(session.classification.enabled, row.id);
-                            else session.classification.enabled.emplace_back(row.id);
-                            animate_until = std::max(animate_until, glfwGetTime() + 0.16);
-                        }
-                        ImGui::BeginTooltip();
-                        ImGui::TextUnformatted(row.id.data(), row.id.data() + row.id.size());
-                        ImGui::TextDisabled(row.available ? (row.enabled ? "Next image: ON" : "Next image: OFF") : "Historical result only; model unavailable at startup");
-                        if (row.available) ImGui::TextDisabled("Middle-click: enable / disable for subsequent images");
-                        ImGui::TextDisabled("Result belongs to the displayed image");
-                        ImGui::TextColored(row.ink, "%s", row.result ? row.verdict.c_str() : row.verdict == "\xE2\x80\xA6" ? "Pending" : "Not checked");
-                        if (row.result) {
-                            ImGui::Text("YES threshold: %.3f", row.result->threshold);
-                            if (!row.result->error.empty()) ImGui::TextWrapped("%s", row.result->error.c_str());
-                            for (std::size_t i = 0; i < row.result->scores.size(); ++i) ImGui::Text("%s: %.5f", row.result->classes[i].c_str(), row.result->scores[i]);
-                        }
-                        ImGui::EndTooltip();
-                    }
-                    ImGui::PopID();
-                }
-            }
-            ImGui::EndChild();
-        }
-        ImGui::SetCursorScreenPos({origin.x, origin.y + list_height});
-        if (!session.classifiers.empty()) {
-            const auto label = std::format("Keep PASS \xC2\xB7 {}", layout.discard_failed ? "On" : "Off");
-            text_button("##KeepPass", label.c_str(), scale, std::min(layout.classifier_width, ImGui::CalcTextSize(label.c_str()).x + 24 * scale), layout.discard_failed);
+        for (const auto& row : layout.classifiers) {
+            ImGui::PushID(row.id.data(), row.id.data() + row.id.size());
+            ImGui::BeginGroup();
+            const auto position = ImGui::GetCursorScreenPos();
+            const float width = ImGui::GetContentRegionAvail().x;
+            const auto detail = std::format("\xC2\xB7 {}", row.verdict);
+            const float detail_width = ImGui::CalcTextSize(detail.c_str()).x;
+            const float name_width = std::min(ImGui::CalcTextSize(row.id.data(), row.id.data() + row.id.size()).x, std::max(0.0F, width - 36 * scale - std::min(detail_width, width * .6F)));
+            const bool hovered = ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(position, {position.x + width, position.y + row_height});
+            text_button("##Toggle", row.id.data(), scale, name_width + 24 * scale, row.enabled || hovered);
+            ImGui::SameLine(0, 0);
+            const auto verdict_position = ImGui::GetCursorScreenPos();
+            ImGui::Dummy({std::max(1.0F, width - name_width - 24 * scale), row_height});
+            control_text(detail, {verdict_position.x, position.y + (row_height - ImGui::GetFontSize()) / 2}, position.x + width - 12 * scale, row.ink, scale);
+            ImGui::EndGroup();
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Middle-click: keep only new images accepted by every enabled classifier.\nNo enabled classifiers: save normally. Historical images are unchanged.");
-                if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+                if (row.available && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
                     const std::lock_guard lock{session.mutex};
-                    session.classification.discard_failed = !layout.discard_failed;
+                    if (row.enabled) std::erase(session.classification.enabled, row.id);
+                    else session.classification.enabled.emplace_back(row.id);
                     animate_until = std::max(animate_until, glfwGetTime() + 0.16);
                 }
+                ImGui::BeginTooltip();
+                ImGui::TextUnformatted(row.id.data(), row.id.data() + row.id.size());
+                ImGui::TextDisabled(row.available ? (row.enabled ? "Next image: ON" : "Next image: OFF") : "Historical result only; model unavailable at startup");
+                if (row.available) ImGui::TextDisabled("Middle-click: enable / disable for subsequent images");
+                ImGui::TextDisabled("Result belongs to the displayed image");
+                ImGui::TextColored(row.ink, "%s", row.result ? row.verdict.c_str() : row.verdict == "\xE2\x80\xA6" ? "Pending" : "Not checked");
+                if (row.result) {
+                    ImGui::Text("YES threshold: %.3f", row.result->threshold);
+                    if (!row.result->error.empty()) ImGui::TextWrapped("%s", row.result->error.c_str());
+                    for (std::size_t i = 0; i < row.result->scores.size(); ++i) ImGui::Text("%s: %.5f", row.result->classes[i].c_str(), row.result->scores[i]);
+                }
+                ImGui::EndTooltip();
             }
-        }
-        if (discarded) {
-            const auto position = ImGui::GetCursorScreenPos();
-            ImGui::Dummy({layout.classifier_width, row_height});
-            control_text("Not saved \xC2\xB7 Classification failed", {position.x + 12 * scale, position.y + (row_height - ImGui::GetFontSize()) / 2}, position.x + layout.classifier_width - 12 * scale, {1, .55F, .3F, 1}, scale);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Not saved: classification failed.\nThis image is not in the gallery and cannot be used as a Repaint source.");
+            ImGui::PopID();
         }
         ImGui::End();
         ImGui::PopStyleColor();
