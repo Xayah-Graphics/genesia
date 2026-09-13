@@ -61,8 +61,9 @@ namespace classifier {
         }
         nlohmann::json metrics = {{"step", step}, {"loss", loss / dataset.val.size()}, {"yes_bce", bce / dataset.val.size()}, {"confusion", confusion}, {"samples", dataset.val.size()}};
         for (int t = 0; t < 3; ++t) {
-            auto [tp, fp, fn, tn] = binary[t];
-            double precision = tp ? double(tp) / (tp + fp) : 0, recall = tp ? double(tp) / (tp + fn) : 0;
+            auto [tp, fp, fn, tn]                         = binary[t];
+            double precision                              = tp ? double(tp) / (tp + fp) : 0;
+            double recall                                 = tp ? double(tp) / (tp + fn) : 0;
             metrics[std::format("{:.1f}", thresholds[t])] = {{"tp", tp}, {"fp", fp}, {"fn", fn}, {"tn", tn}, {"precision", precision}, {"recall", recall}, {"f0.5", precision + recall ? 1.25 * precision * recall / (.25 * precision + recall) : 0}};
         }
         write_json(output / std::format("step_{:04}_predictions.json", step), predictions);
@@ -71,10 +72,13 @@ namespace classifier {
         return metrics;
     }
     void train(const TrainingOptions& options, const std::atomic_bool& interrupted) {
-        auto root = std::filesystem::absolute(options.dataset), latest = root / "latest.safetensors";
+        auto root           = std::filesystem::absolute(options.dataset);
+        auto latest         = root / "latest.safetensors";
+        auto model_path     = root / "model.safetensors";
         std::string content = fingerprint(root);
-        nlohmann::json state, saved_config = TrainingConfig{};
-        int completed = 0;
+        nlohmann::json state;
+        nlohmann::json saved_config = TrainingConfig{};
+        int completed               = 0;
         if (std::filesystem::exists(latest)) {
             SafeFile saved(latest);
             auto meta    = saved.header.at("__metadata__");
@@ -86,7 +90,9 @@ namespace classifier {
         nlohmann::json config = saved_config;
         for (auto item = options.overrides.begin(); item != options.overrides.end(); ++item) {
             bool frequency = item.key() == "eval_interval" || item.key() == "save_interval" || item.key() == "log_interval";
-            if (resume && !frequency && item.value() != saved_config.at(item.key())) throw std::runtime_error("Changing " + item.key() + " requires --restart");
+            if (resume && !frequency && item.value() != saved_config.at(item.key())) {
+                throw std::runtime_error("Changing " + item.key() + " requires --restart");
+            }
             config[item.key()] = item.value();
         }
         TrainingConfig settings = config.get<TrainingConfig>();
@@ -96,14 +102,16 @@ namespace classifier {
         }
         if (!resume) {
             if (!state.is_null()) {
-                std::string old = state.at("run_id");
-                for (const auto* name : std::array{"latest", "best", "model"}) {
+                std::string old = state.at("run_id").get<std::string>();
+                for (const auto* name : std::array{"latest", "model"}) {
                     auto file = root / (std::string(name) + ".safetensors");
-                    if (std::filesystem::exists(file)) std::filesystem::rename(file, root / std::format("{}.{}.safetensors", name, old));
+                    if (std::filesystem::exists(file)) {
+                        std::filesystem::rename(file, root / std::format("{}.{}.safetensors", name, old));
+                    }
                 }
             }
             std::string run = std::format("{}-{}", std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count(), content.substr(0, 8));
-            state           = {{"run_id", run}, {"fingerprint", content}, {"schedule_steps", options.steps}, {"cursor", 0}, {"best", {-1., -1., -1.}}};
+            state           = {{"run_id", run}, {"fingerprint", content}, {"schedule_steps", options.steps}, {"cursor", 0}};
             completed       = 0;
         }
         state["config"] = config;
@@ -177,15 +185,10 @@ namespace classifier {
             if (evaluation) {
                 auto metrics = evaluate(model, dataset, output, update.step);
                 history.push_back(metrics);
-                std::array<double, 3> score{metrics["0.9"]["f0.5"], metrics["0.9"]["precision"], -metrics["yes_bce"].get<double>()};
-                if (score > state.at("best").get<std::array<double, 3>>()) {
-                    state["best"] = score;
-                    model.save(root / "best.safetensors", state);
-                    model.save(root / "model.safetensors", state, false);
-                }
                 write_json(output / "history.json", history);
             }
             model.save(latest, state);
+            model.save(model_path, state, false);
         };
         if (!resume) checkpoint(true);
         std::ofstream log(output / "steps.csv", resume ? std::ios::app : std::ios::out);
@@ -203,7 +206,7 @@ namespace classifier {
             optimizer_begin(resources.stream, model.optimizer->update);
             ++update.step;
             int micro = 0;
-            for (const auto& [shape, indices] : batch)
+            for (const auto& [shape, indices] : batch) {
                 for (int begin = 0; begin < int(indices.size()); begin += physical) {
                     int n             = std::min(physical, int(indices.size()) - begin);
                     auto& plan        = get_plan(n, shape.first, shape.second);
@@ -218,6 +221,7 @@ namespace classifier {
                     }
                     plan.microbatch(resources.pinned[slot], targets, update.step <= settings.head_only_steps, resources.stream, resources.copied[slot]);
                 }
+            }
             cuda_check(cudaGraphLaunch(resources.optimizer, resources.stream));
             cuda_check(cudaMemcpyAsync(&update, model.optimizer->update, sizeof(update), cudaMemcpyDeviceToHost, resources.stream));
             cuda_check(cudaStreamSynchronize(resources.stream));
@@ -228,11 +232,14 @@ namespace classifier {
                 std::println("Step {} loss {:.6f} norm {:.5f} elapsed {:.1f}s", update.step, update.loss, std::sqrt(update.norm2), seconds);
                 std::fflush(stdout);
             }
-            bool final = update.step == options.steps || interrupted.load(std::memory_order_relaxed), evaluation = final || update.step % settings.eval_interval == 0;
-            if (evaluation || update.step % settings.save_interval == 0) checkpoint(evaluation);
+            bool final      = update.step == options.steps || interrupted.load(std::memory_order_relaxed);
+            bool evaluation = final || update.step % settings.eval_interval == 0;
+            if (evaluation || update.step % settings.save_interval == 0) {
+                checkpoint(evaluation);
+            }
         }
         const bool stopped = interrupted.load(std::memory_order_relaxed);
         if (stopped) checkpoint(false);
-        std::println("{} at step {}. Checkpoints: {}", stopped ? "Interrupted" : "Completed", update.step, path_utf8(root));
+        std::println("{} at step {}. latest.safetensors and model.safetensors contain step {}. Checkpoints: {}", stopped ? "Interrupted" : "Completed", update.step, update.step, path_utf8(root));
     }
 } // namespace classifier

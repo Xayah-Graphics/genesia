@@ -32,12 +32,12 @@ export namespace genesia::editor {
             void constrain(ImVec2 available, ImVec2 image);
         };
         struct RepaintDraft final {
-            Record original;
+            const std::shared_ptr<const prompt::Catalog> catalog;
             std::uint64_t modified;
             prompt::Pair prompt;
             PromptEditor editor;
 
-            RepaintDraft(const Record& original, std::uint64_t modified);
+            RepaintDraft(const Record& source, std::uint64_t modified);
         };
         struct Thumbnail final {
             Gallery::File file;
@@ -96,7 +96,7 @@ export namespace genesia::editor {
         bool gallery_open{};
         ParameterEdit parameter_edit;
         bool following_latest{true};
-        bool image_tags{};
+        bool repaint_mode{};
         float denoise{defaults::denoise};
         float tags_amount{};
         float gallery_amount{};
@@ -127,13 +127,12 @@ export namespace genesia::editor {
         void show_image(std::uint64_t texture, int width, int height, bool transition, bool reset);
         bool select_image(const Gallery::File& file);
         void navigate_image(int direction);
-        bool prepare_prompt();
         void commit_parameters();
         bool save_prompt();
         void switch_preset();
         void preset_dialogs(float scale);
         RepaintDraft& image_prompt();
-        void submit(bool repaint = false);
+        void submit();
         ControlLayout control_layout(float scale, ImVec2 size) const;
         void canvas(float scale, ImVec2 size);
         void generation_settings(float scale, ImVec2 size);
