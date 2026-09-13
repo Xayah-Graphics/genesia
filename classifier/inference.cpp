@@ -1,6 +1,5 @@
 module;
 #include "kernels.h"
-
 #include <nlohmann/json.hpp>
 module classifier.inference;
 import std;

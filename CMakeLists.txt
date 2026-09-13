@@ -94,12 +94,18 @@ target_link_libraries(classifier_runtime
 )
 target_compile_options(classifier_runtime PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:-lineinfo;--extended-lambda>")
 
-add_library(classifier_training STATIC classifier/dataset.cpp classifier/training.cpp classifier/audit.cpp)
+add_library(classifier_training STATIC
+        classifier/dataset.cpp
+        classifier/training.cpp
+        classifier/audit.cpp
+        classifier/classify.cpp
+)
 add_library(classifier::training ALIAS classifier_training)
 target_sources(classifier_training PUBLIC FILE_SET cxx_modules TYPE CXX_MODULES FILES
         classifier/dataset.ixx
         classifier/training.ixx
         classifier/audit.ixx
+        classifier/classify.ixx
 )
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/classifier/audit.html")
 file(READ "${PROJECT_SOURCE_DIR}/classifier/audit.html" GENESIA_CLASSIFIER_AUDIT_REPORT)
@@ -271,7 +277,7 @@ if (WIN32)
     add_custom_target(genesia_cudnn_runtime
             COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:genesia>"
             COMMAND "${CMAKE_COMMAND}" -E copy_if_different ${GENESIA_CUDNN_DLLS}
-                "$<TARGET_FILE_DIR:genesia>"
+            "$<TARGET_FILE_DIR:genesia>"
             COMMAND_EXPAND_LISTS
             VERBATIM
     )

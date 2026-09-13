@@ -2,7 +2,6 @@ module;
 #include "kernels.h"
 #include <cublasLt.h>
 #include <cudnn.h>
-
 #include <nlohmann/json.hpp>
 export module classifier.network;
 export import classifier.storage;

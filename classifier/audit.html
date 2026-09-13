@@ -4,137 +4,539 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Classifier · 标签排查</title>
 <style>
-:root{color-scheme:dark;font:15px/1.55 "Segoe UI Variable","Microsoft YaHei",system-ui,sans-serif;background:#101214;color:#e3e5e9}
-*{box-sizing:border-box}body{margin:0 auto;padding:36px 28px;max-width:1580px}h1{font-size:25px;font-weight:550;margin:0 0 8px}p{margin:8px 0}small,.muted{color:#9297a3}button,input,select{font:inherit;color:inherit}button{cursor:pointer;background:transparent;border:0;padding:8px 12px;border-radius:6px}button:hover,button:focus-visible{background:#ffffff0c}button:disabled{opacity:.3;cursor:default}a{color:#bab3ec;text-decoration:none}a:hover{text-decoration:underline}input,select{background:#1a1d22;border:1px solid #ffffff12;border-radius:6px;padding:8px 10px;min-width:0}input{flex:1;min-width:160px}details{margin-top:14px}summary{cursor:pointer;color:#acb0bb}dl{display:grid;grid-template-columns:auto 1fr;gap:6px 18px;font-size:13px}dt{color:#9297a3}dd{margin:0;overflow-wrap:anywhere}nav,.tools,.pager{display:flex;gap:8px;align-items:center;flex-wrap:wrap}nav{margin:28px 0 12px}nav button{color:#979ca7;border-radius:0;border-bottom:2px solid transparent}nav button[aria-pressed=true]{color:#eee;border-bottom-color:#b4a9ee}.tools{margin-bottom:20px}.pager{justify-content:space-between;margin-top:24px}.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(235px,1fr));gap:22px}.card{min-width:0}.picture{display:block;padding:0;width:100%;border-radius:8px;overflow:hidden;background:#191c20;position:relative}.picture img{display:block;width:100%;height:245px;object-fit:contain}.number{position:absolute;left:10px;top:9px;background:#101214bd;padding:2px 7px;border-radius:4px;font-size:12px}.label{margin-top:10px;overflow-wrap:anywhere}.prediction{color:#a7acb7;font-size:13px}.scores{display:flex;gap:14px;margin:7px 0;font-variant-numeric:tabular-nums}.path{display:block;overflow-wrap:anywhere;font-size:12px;color:#8f94a0}.pass{color:#74cb95}.fail{color:#ee9295}.badge{font-size:12px}.error{color:#ecb476}.empty{padding:55px 0;text-align:center;color:#969ba6}dialog{color:inherit;background:#14171c;border:1px solid #ffffff20;border-radius:10px;width:min(1200px,94vw);max-height:94vh;padding:18px}dialog::backdrop{background:#000c}.dialog-head{display:flex;justify-content:space-between;align-items:center;gap:12px}.detail-layout{display:grid;grid-template-columns:minmax(0,2fr) minmax(250px,1fr);gap:24px;margin-top:12px}.detail-image{width:100%;height:72vh;object-fit:contain}.detail-info{overflow-wrap:anywhere}table{width:100%;border-collapse:collapse;font-size:13px;margin-top:15px}td{padding:6px 0;border-bottom:1px solid #ffffff0a}td:last-child{text-align:right;font-variant-numeric:tabular-nums}.truth td:first-child{color:#d2c8ff}.footer{margin-top:28px;color:#9297a3;font-size:13px}
-@media(max-width:720px){body{padding:22px 16px}.cards{grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.picture img{height:190px}.scores{display:block}.detail-layout{grid-template-columns:1fr}.detail-image{height:48vh}.dialog-head{align-items:start}nav button{padding:8px}dl{grid-template-columns:1fr;gap:3px}dd{margin-bottom:9px}}
+    :root {
+        color-scheme: dark;
+        font: 15px/1.55 "Segoe UI Variable", "Microsoft YaHei", system-ui, sans-serif;
+        background: #101214;
+        color: #e3e5e9
+    }
+
+    * {
+        box-sizing: border-box
+    }
+
+    body {
+        margin: 0 auto;
+        padding: 36px 28px;
+        max-width: 1580px
+    }
+
+    h1 {
+        font-size: 25px;
+        font-weight: 550;
+        margin: 0 0 8px
+    }
+
+    p {
+        margin: 8px 0
+    }
+
+    small, .muted {
+        color: #9297a3
+    }
+
+    button, input, select {
+        font: inherit;
+        color: inherit
+    }
+
+    button {
+        cursor: pointer;
+        background: transparent;
+        border: 0;
+        padding: 8px 12px;
+        border-radius: 6px
+    }
+
+    button:hover, button:focus-visible {
+        background: #ffffff0c
+    }
+
+    button:disabled {
+        opacity: .3;
+        cursor: default
+    }
+
+    a {
+        color: #bab3ec;
+        text-decoration: none
+    }
+
+    a:hover {
+        text-decoration: underline
+    }
+
+    input, select {
+        background: #1a1d22;
+        border: 1px solid #ffffff12;
+        border-radius: 6px;
+        padding: 8px 10px;
+        min-width: 0
+    }
+
+    input {
+        flex: 1;
+        min-width: 160px
+    }
+
+    details {
+        margin-top: 14px
+    }
+
+    summary {
+        cursor: pointer;
+        color: #acb0bb
+    }
+
+    dl {
+        display: grid;
+        grid-template-columns:auto 1fr;
+        gap: 6px 18px;
+        font-size: 13px
+    }
+
+    dt {
+        color: #9297a3
+    }
+
+    dd {
+        margin: 0;
+        overflow-wrap: anywhere
+    }
+
+    nav, .tools, .pager {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap
+    }
+
+    nav {
+        margin: 28px 0 12px
+    }
+
+    nav button {
+        color: #979ca7;
+        border-radius: 0;
+        border-bottom: 2px solid transparent
+    }
+
+    nav button[aria-pressed=true] {
+        color: #eee;
+        border-bottom-color: #b4a9ee
+    }
+
+    .tools {
+        margin-bottom: 20px
+    }
+
+    .pager {
+        justify-content: space-between;
+        margin-top: 24px
+    }
+
+    .cards {
+        display: grid;
+        grid-template-columns:repeat(auto-fill, minmax(235px, 1fr));
+        gap: 22px
+    }
+
+    .card {
+        min-width: 0
+    }
+
+    .picture {
+        display: block;
+        padding: 0;
+        width: 100%;
+        border-radius: 8px;
+        overflow: hidden;
+        background: #191c20;
+        position: relative
+    }
+
+    .picture img {
+        display: block;
+        width: 100%;
+        height: 245px;
+        object-fit: contain
+    }
+
+    .number {
+        position: absolute;
+        left: 10px;
+        top: 9px;
+        background: #101214bd;
+        padding: 2px 7px;
+        border-radius: 4px;
+        font-size: 12px
+    }
+
+    .label {
+        margin-top: 10px;
+        overflow-wrap: anywhere
+    }
+
+    .prediction {
+        color: #a7acb7;
+        font-size: 13px
+    }
+
+    .scores {
+        display: flex;
+        gap: 14px;
+        margin: 7px 0;
+        font-variant-numeric: tabular-nums
+    }
+
+    .path {
+        display: block;
+        overflow-wrap: anywhere;
+        font-size: 12px;
+        color: #8f94a0
+    }
+
+    .pass {
+        color: #74cb95
+    }
+
+    .fail {
+        color: #ee9295
+    }
+
+    .badge {
+        font-size: 12px
+    }
+
+    .error {
+        color: #ecb476
+    }
+
+    .empty {
+        padding: 55px 0;
+        text-align: center;
+        color: #969ba6
+    }
+
+    dialog {
+        color: inherit;
+        background: #14171c;
+        border: 1px solid #ffffff20;
+        border-radius: 10px;
+        width: min(1200px, 94vw);
+        max-height: 94vh;
+        padding: 18px
+    }
+
+    dialog::backdrop {
+        background: #000c
+    }
+
+    .dialog-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px
+    }
+
+    .detail-layout {
+        display: grid;
+        grid-template-columns:minmax(0, 2fr) minmax(250px, 1fr);
+        gap: 24px;
+        margin-top: 12px
+    }
+
+    .detail-image {
+        width: 100%;
+        height: 72vh;
+        object-fit: contain
+    }
+
+    .detail-info {
+        overflow-wrap: anywhere
+    }
+
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        margin-top: 15px
+    }
+
+    td {
+        padding: 6px 0;
+        border-bottom: 1px solid #ffffff0a
+    }
+
+    td:last-child {
+        text-align: right;
+        font-variant-numeric: tabular-nums
+    }
+
+    .truth td:first-child {
+        color: #d2c8ff
+    }
+
+    .footer {
+        margin-top: 28px;
+        color: #9297a3;
+        font-size: 13px
+    }
+
+    @media (max-width: 720px) {
+        body {
+            padding: 22px 16px
+        }
+
+        .cards {
+            grid-template-columns:repeat(2, minmax(0, 1fr));
+            gap: 14px
+        }
+
+        .picture img {
+            height: 190px
+        }
+
+        .scores {
+            display: block
+        }
+
+        .detail-layout {
+            grid-template-columns:1fr
+        }
+
+        .detail-image {
+            height: 48vh
+        }
+
+        .dialog-head {
+            align-items: start
+        }
+
+        nav button {
+            padding: 8px
+        }
+
+        dl {
+            grid-template-columns:1fr;
+            gap: 3px
+        }
+
+        dd {
+            margin-bottom: 9px
+        }
+    }
 </style>
 <h1>标签排查</h1>
 <p class="muted" id="summary"></p>
 <p class="muted">从排序靠前的图片开始确认。分数表示模型倾向，不代表标签错误的概率；高分也不能证明标签正确。</p>
-<details><summary>模型与数据来源</summary><dl id="metadata"></dl></details>
+<details>
+    <summary>模型与数据来源</summary>
+    <dl id="metadata"></dl>
+</details>
 <nav aria-label="排查方向">
-  <button data-view="yes" aria-pressed="true">YES 中的疑似混入</button>
-  <button data-view="no" aria-pressed="false">NO 中的疑似合格</button>
-  <button data-view="subclass" aria-pressed="false">NO 子类别冲突</button>
+    <button data-view="yes" aria-pressed="true">YES 中的疑似混入</button>
+    <button data-view="no" aria-pressed="false">NO 中的疑似合格</button>
+    <button data-view="subclass" aria-pressed="false">NO 子类别冲突</button>
 </nav>
 <div class="tools">
-  <input id="search" type="search" placeholder="搜索路径或类别" aria-label="搜索路径或类别">
-  <select id="category" aria-label="原标签筛选"><option value="">全部原标签</option></select>
-  <select id="order" aria-label="排序"><option value="default">疑点优先</option><option value="label">原标签分数从低到高</option><option value="path">文件路径</option></select>
-  <button id="export">导出当前筛选 CSV</button>
+    <input id="search" type="search" placeholder="搜索路径或类别" aria-label="搜索路径或类别">
+    <select id="category" aria-label="原标签筛选">
+        <option value="">全部原标签</option>
+    </select>
+    <select id="order" aria-label="排序">
+        <option value="default">疑点优先</option>
+        <option value="label">原标签分数从低到高</option>
+        <option value="path">文件路径</option>
+    </select>
+    <button id="export">导出当前筛选 CSV</button>
 </div>
 <p id="count" class="muted" aria-live="polite"></p>
 <main id="cards" class="cards"></main>
-<div class="pager"><button id="previous">← 上一页</button><span id="page" class="muted"></span><button id="next">下一页 →</button></div>
-<p class="footer">每页 100 张，全部打分结果均保留。生产接受阈值仅用于显示 PASS / FAIL，不参与疑点筛选。报告不修改图片或标签。移动图片后，请重新运行排查更新报告。</p>
+<div class="pager">
+    <button id="previous">← 上一页</button>
+    <span id="page" class="muted"></span>
+    <button id="next">下一页 →</button>
+</div>
+<p class="footer">每页 100 张，全部打分结果均保留。生产接受阈值仅用于显示 PASS /
+    FAIL，不参与疑点筛选。报告不修改图片或标签。移动图片后，请重新运行排查更新报告。</p>
 <dialog id="viewer">
-  <div class="dialog-head"><span id="detail-title"></span><div><button id="detail-previous" aria-label="上一张">←</button><button id="detail-next" aria-label="下一张">→</button><button id="close">关闭 ×</button></div></div>
-  <div class="detail-layout"><img id="detail-image" class="detail-image" alt=""><div class="detail-info" id="detail-info"></div></div>
+    <div class="dialog-head"><span id="detail-title"></span>
+        <div>
+            <button id="detail-previous" aria-label="上一张">←</button>
+            <button id="detail-next" aria-label="下一张">→</button>
+            <button id="close">关闭 ×</button>
+        </div>
+    </div>
+    <div class="detail-layout"><img id="detail-image" class="detail-image" alt="">
+        <div class="detail-info" id="detail-info"></div>
+    </div>
 </dialog>
 <script id="audit-data" type="application/json">__GENESIA_AUDIT_DATA__</script>
 <script>
-'use strict';
-const report = JSON.parse(document.getElementById('audit-data').textContent);
-const byId = id => document.getElementById(id);
-const percent = value => `${(value * 100).toFixed(3)}%`;
-const splitNames = {train:'原训练集',val:'原验证集',unknown:'训练来源未知',new:'新增或路径 / 标签变化',changed:'图片内容已变化'};
-const imageUrl = row => '../' + row.path.split('/').map(encodeURIComponent).join('/');
-const comparePath = (a,b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
-function selectRows(view, category, query, order) {
-  const search = query.trim().toLocaleLowerCase();
-  const rows = report.rows.filter(row => {
-    const matchesView = view === 'yes' ? row.label === 0 : view === 'no' ? row.label !== 0 : row.label !== 0 && row.predicted !== 0 && row.predicted !== row.label;
-    return matchesView && (category === '' || row.label === Number(category)) && (!search || `${row.path} ${report.classes[row.label]} ${report.classes[row.predicted]}`.toLocaleLowerCase().includes(search));
-  });
-  rows.sort((a,b) => {
-    if (order === 'path') return comparePath(a,b);
-    const difference = order === 'label' || view === 'subclass' ? a.scores[a.label]-b.scores[b.label] : view === 'yes' ? a.scores[0]-b.scores[0] : b.scores[0]-a.scores[0];
-    return difference || comparePath(a,b);
-  });
-  return rows;
-}
-function node(tag, text, className) {
-  const element = document.createElement(tag);
-  if (text !== undefined) element.textContent = text;
-  if (className) element.className = className;
-  return element;
-}
-function csv(rows) {
-  const cell = value => {
-    let text = String(value);
-    if (typeof value === 'string' && /^[=+\-@\t\r]/.test(text)) text = "'" + text;
-    return '"' + text.replaceAll('"','""') + '"';
-  };
-  const header = ['path','label','predicted','p_yes','p_label','accepted','threshold','split','model_sha256','dataset_fingerprint',...report.classes.map(name=>'score:'+name)];
-  return '\ufeff' + [header,...rows.map(row=>[row.path,report.classes[row.label],report.classes[row.predicted],row.scores[0],row.scores[row.label],row.accepted,report.threshold,row.split,report.model_sha256,report.fingerprint,...row.scores])].map(row=>row.map(cell).join(',')).join('\r\n');
-}
-let view = 'yes', page = 0, selected = -1, filtered = [];
-const pageSize = 100;
-function render() {
-  filtered = selectRows(view,byId('category').value,byId('search').value,byId('order').value);
-  const pages = Math.max(1,Math.ceil(filtered.length/pageSize));
-  page = Math.min(page,pages-1);
-  const cards = byId('cards');
-  cards.replaceChildren();
-  filtered.slice(page*pageSize,(page+1)*pageSize).forEach((row,offset)=>{
-    const index = page*pageSize+offset;
-    const card = node('article',undefined,'card');
-    const picture = node('button',undefined,'picture');
-    picture.setAttribute('aria-label',`查看 ${row.path}`);
-    const image = node('img');
-    image.loading = 'lazy'; image.decoding = 'async'; image.alt = row.path; image.src = imageUrl(row);
-    image.addEventListener('error',()=>{image.alt='无法读取原图，请检查路径或重新生成报告';card.classList.add('error');});
-    picture.append(image,node('span',String(index+1),'number'));
-    picture.addEventListener('click',()=>show(index));
-    const scores = node('div',undefined,'scores');
-    scores.append(node('span',`YES ${percent(row.scores[0])}`),node('small',`原标签 ${percent(row.scores[row.label])}`));
-    const link = node('a',row.path,'path'); link.href=imageUrl(row); link.target='_blank'; link.rel='noopener';
-    card.append(picture,node('div',report.classes[row.label],'label'),node('div',`预测 ${report.classes[row.predicted]}`,'prediction'),scores,node('div',`${row.accepted?'PASS':'FAIL'} · ${splitNames[row.split]}`,row.accepted?'pass badge':'fail badge'),link);
-    cards.append(card);
-  });
-  if (!filtered.length) cards.append(node('p','当前条件下没有图片。','empty'));
-  byId('count').textContent=`${filtered.length} 张 · ${byId('order').selectedOptions[0].textContent}`;
-  byId('page').textContent=`${page+1} / ${pages}`;
-  byId('previous').disabled=page===0; byId('next').disabled=page+1>=pages;
-}
-function show(index) {
-  selected=index;
-  const row=filtered[index], dialog=byId('viewer'), info=byId('detail-info');
-  byId('detail-title').textContent=`${index+1} / ${filtered.length} · ${row.path}`;
-  byId('detail-image').src=imageUrl(row); byId('detail-image').alt=row.path;
-  info.replaceChildren(node('p',`原标签：${report.classes[row.label]}`),node('p',`最高概率类别：${report.classes[row.predicted]}`),node('p',`${row.accepted?'PASS':'FAIL'} · YES 阈值 ${percent(report.threshold)}`,row.accepted?'pass':'fail'),node('p',`${row.width} × ${row.height} · ${splitNames[row.split]}`,'muted'));
-  if (row.split==='new' || row.split==='unknown') info.append(node('p','无法据此确定模型是否见过这张图片。','muted'));
-  const table=node('table');
-  report.classes.forEach((name,i)=>{const tr=node('tr',undefined,i===row.label?'truth':'');tr.append(node('td',name),node('td',percent(row.scores[i])));table.append(tr);});
-  const original=node('a','打开原图 ↗');original.href=imageUrl(row);original.target='_blank';original.rel='noopener';
-  info.append(table,node('p',`RGB SHA-256：${row.rgb_sha256}`,'muted'),original);
-  byId('detail-previous').disabled=index===0; byId('detail-next').disabled=index+1>=filtered.length;
-  if (!dialog.open) dialog.showModal();
-}
-byId('summary').textContent=`${report.rows.length} 张图片 · ${report.classes.length} 个模型类别 · ${report.step===null?'训练步数未知':`检查点 ${report.step} 步`} · ${report.created_utc}`;
-const provenance=report.training_fingerprint===null?'模型未保存训练来源':report.training_fingerprint===report.fingerprint?'与训练快照一致':'与训练快照不同；逐图按记录及 RGB 指纹匹配';
-for (const [key,value] of [['数据集',report.dataset],['模型',report.model],['模型 SHA-256',report.model_sha256],['当前数据指纹',report.fingerprint],['训练数据指纹',report.training_fingerprint??'未知'],['数据关系',provenance]]) byId('metadata').append(node('dt',key),node('dd',value));
-report.classes.forEach((name,i)=>{const option=node('option',name);option.value=String(i);byId('category').append(option);});
-for (const button of document.querySelectorAll('[data-view]')) button.addEventListener('click',()=>{
-  view=button.dataset.view;page=0;byId('category').value='';byId('viewer').close();
-  for (const item of document.querySelectorAll('[data-view]')) item.setAttribute('aria-pressed',String(item===button));
-  render();
-});
-for (const id of ['search','category','order']) byId(id).addEventListener(id==='search'?'input':'change',()=>{page=0;byId('viewer').close();render();});
-byId('previous').addEventListener('click',()=>{--page;render();});
-byId('next').addEventListener('click',()=>{++page;render();});
-byId('close').addEventListener('click',()=>byId('viewer').close());
-byId('viewer').addEventListener('close',()=>{selected=-1;});
-byId('detail-previous').addEventListener('click',()=>show(selected-1));
-byId('detail-next').addEventListener('click',()=>show(selected+1));
-byId('viewer').addEventListener('keydown',event=>{
-  if (event.key==='ArrowLeft' && selected>0){event.preventDefault();show(selected-1);}
-  if (event.key==='ArrowRight' && selected+1<filtered.length){event.preventDefault();show(selected+1);}
-});
-byId('export').addEventListener('click',()=>{
-  const url=URL.createObjectURL(new Blob([csv(filtered)],{type:'text/csv;charset=utf-8'}));
-  const link=node('a');link.href=url;link.download=`classifier-audit-${view}.csv`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
-});
-render();
+    'use strict';
+    const report = JSON.parse(document.getElementById('audit-data').textContent);
+    const byId = id => document.getElementById(id);
+    const percent = value => `${(value * 100).toFixed(3)}%`;
+    const splitNames = {
+        train: '原训练集',
+        val: '原验证集',
+        unknown: '训练来源未知',
+        new: '新增或路径 / 标签变化',
+        changed: '图片内容已变化'
+    };
+    const imageUrl = row => '../' + row.path.split('/').map(encodeURIComponent).join('/');
+    const comparePath = (a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
+
+    function selectRows(view, category, query, order) {
+        const search = query.trim().toLocaleLowerCase();
+        const rows = report.rows.filter(row => {
+            const matchesView = view === 'yes' ? row.label === 0 : view === 'no' ? row.label !== 0 : row.label !== 0 && row.predicted !== 0 && row.predicted !== row.label;
+            return matchesView && (category === '' || row.label === Number(category)) && (!search || `${row.path} ${report.classes[row.label]} ${report.classes[row.predicted]}`.toLocaleLowerCase().includes(search));
+        });
+        rows.sort((a, b) => {
+            if (order === 'path') return comparePath(a, b);
+            const difference = order === 'label' || view === 'subclass' ? a.scores[a.label] - b.scores[b.label] : view === 'yes' ? a.scores[0] - b.scores[0] : b.scores[0] - a.scores[0];
+            return difference || comparePath(a, b);
+        });
+        return rows;
+    }
+
+    function node(tag, text, className) {
+        const element = document.createElement(tag);
+        if (text !== undefined) element.textContent = text;
+        if (className) element.className = className;
+        return element;
+    }
+
+    function csv(rows) {
+        const cell = value => {
+            let text = String(value);
+            if (typeof value === 'string' && /^[=+\-@\t\r]/.test(text)) text = "'" + text;
+            return '"' + text.replaceAll('"', '""') + '"';
+        };
+        const header = ['path', 'label', 'predicted', 'p_yes', 'p_label', 'accepted', 'threshold', 'split', 'model_sha256', 'dataset_fingerprint', ...report.classes.map(name => 'score:' + name)];
+        return '\ufeff' + [header, ...rows.map(row => [row.path, report.classes[row.label], report.classes[row.predicted], row.scores[0], row.scores[row.label], row.accepted, report.threshold, row.split, report.model_sha256, report.fingerprint, ...row.scores])].map(row => row.map(cell).join(',')).join('\r\n');
+    }
+
+    let view = 'yes', page = 0, selected = -1, filtered = [];
+    const pageSize = 100;
+
+    function render() {
+        filtered = selectRows(view, byId('category').value, byId('search').value, byId('order').value);
+        const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+        page = Math.min(page, pages - 1);
+        const cards = byId('cards');
+        cards.replaceChildren();
+        filtered.slice(page * pageSize, (page + 1) * pageSize).forEach((row, offset) => {
+            const index = page * pageSize + offset;
+            const card = node('article', undefined, 'card');
+            const picture = node('button', undefined, 'picture');
+            picture.setAttribute('aria-label', `查看 ${row.path}`);
+            const image = node('img');
+            image.loading = 'lazy';
+            image.decoding = 'async';
+            image.alt = row.path;
+            image.src = imageUrl(row);
+            image.addEventListener('error', () => {
+                image.alt = '无法读取原图，请检查路径或重新生成报告';
+                card.classList.add('error');
+            });
+            picture.append(image, node('span', String(index + 1), 'number'));
+            picture.addEventListener('click', () => show(index));
+            const scores = node('div', undefined, 'scores');
+            scores.append(node('span', `YES ${percent(row.scores[0])}`), node('small', `原标签 ${percent(row.scores[row.label])}`));
+            const link = node('a', row.path, 'path');
+            link.href = imageUrl(row);
+            link.target = '_blank';
+            link.rel = 'noopener';
+            card.append(picture, node('div', report.classes[row.label], 'label'), node('div', `预测 ${report.classes[row.predicted]}`, 'prediction'), scores, node('div', `${row.accepted ? 'PASS' : 'FAIL'} · ${splitNames[row.split]}`, row.accepted ? 'pass badge' : 'fail badge'), link);
+            cards.append(card);
+        });
+        if (!filtered.length) cards.append(node('p', '当前条件下没有图片。', 'empty'));
+        byId('count').textContent = `${filtered.length} 张 · ${byId('order').selectedOptions[0].textContent}`;
+        byId('page').textContent = `${page + 1} / ${pages}`;
+        byId('previous').disabled = page === 0;
+        byId('next').disabled = page + 1 >= pages;
+    }
+
+    function show(index) {
+        selected = index;
+        const row = filtered[index], dialog = byId('viewer'), info = byId('detail-info');
+        byId('detail-title').textContent = `${index + 1} / ${filtered.length} · ${row.path}`;
+        byId('detail-image').src = imageUrl(row);
+        byId('detail-image').alt = row.path;
+        info.replaceChildren(node('p', `原标签：${report.classes[row.label]}`), node('p', `最高概率类别：${report.classes[row.predicted]}`), node('p', `${row.accepted ? 'PASS' : 'FAIL'} · YES 阈值 ${percent(report.threshold)}`, row.accepted ? 'pass' : 'fail'), node('p', `${row.width} × ${row.height} · ${splitNames[row.split]}`, 'muted'));
+        if (row.split === 'new' || row.split === 'unknown') info.append(node('p', '无法据此确定模型是否见过这张图片。', 'muted'));
+        const table = node('table');
+        report.classes.forEach((name, i) => {
+            const tr = node('tr', undefined, i === row.label ? 'truth' : '');
+            tr.append(node('td', name), node('td', percent(row.scores[i])));
+            table.append(tr);
+        });
+        const original = node('a', '打开原图 ↗');
+        original.href = imageUrl(row);
+        original.target = '_blank';
+        original.rel = 'noopener';
+        info.append(table, node('p', `RGB SHA-256：${row.rgb_sha256}`, 'muted'), original);
+        byId('detail-previous').disabled = index === 0;
+        byId('detail-next').disabled = index + 1 >= filtered.length;
+        if (!dialog.open) dialog.showModal();
+    }
+
+    byId('summary').textContent = `${report.rows.length} 张图片 · ${report.classes.length} 个模型类别 · ${report.step === null ? '训练步数未知' : `检查点 ${report.step} 步`} · ${report.created_utc}`;
+    const provenance = report.training_fingerprint === null ? '模型未保存训练来源' : report.training_fingerprint === report.fingerprint ? '与训练快照一致' : '与训练快照不同；逐图按记录及 RGB 指纹匹配';
+    for (const [key, value] of [['数据集', report.dataset], ['模型', report.model], ['模型 SHA-256', report.model_sha256], ['当前数据指纹', report.fingerprint], ['训练数据指纹', report.training_fingerprint ?? '未知'], ['数据关系', provenance]]) byId('metadata').append(node('dt', key), node('dd', value));
+    report.classes.forEach((name, i) => {
+        const option = node('option', name);
+        option.value = String(i);
+        byId('category').append(option);
+    });
+    for (const button of document.querySelectorAll('[data-view]')) button.addEventListener('click', () => {
+        view = button.dataset.view;
+        page = 0;
+        byId('category').value = '';
+        byId('viewer').close();
+        for (const item of document.querySelectorAll('[data-view]')) item.setAttribute('aria-pressed', String(item === button));
+        render();
+    });
+    for (const id of ['search', 'category', 'order']) byId(id).addEventListener(id === 'search' ? 'input' : 'change', () => {
+        page = 0;
+        byId('viewer').close();
+        render();
+    });
+    byId('previous').addEventListener('click', () => {
+        --page;
+        render();
+    });
+    byId('next').addEventListener('click', () => {
+        ++page;
+        render();
+    });
+    byId('close').addEventListener('click', () => byId('viewer').close());
+    byId('viewer').addEventListener('close', () => {
+        selected = -1;
+    });
+    byId('detail-previous').addEventListener('click', () => show(selected - 1));
+    byId('detail-next').addEventListener('click', () => show(selected + 1));
+    byId('viewer').addEventListener('keydown', event => {
+        if (event.key === 'ArrowLeft' && selected > 0) {
+            event.preventDefault();
+            show(selected - 1);
+        }
+        if (event.key === 'ArrowRight' && selected + 1 < filtered.length) {
+            event.preventDefault();
+            show(selected + 1);
+        }
+    });
+    byId('export').addEventListener('click', () => {
+        const url = URL.createObjectURL(new Blob([csv(filtered)], {type: 'text/csv;charset=utf-8'}));
+        const link = node('a');
+        link.href = url;
+        link.download = `classifier-audit-${view}.csv`;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+    render();
 </script>
 </html>

@@ -1,6 +1,5 @@
 module;
 #include "kernels.h"
-
 #include <nlohmann/json.hpp>
 export module classifier.inference;
 export import classifier.network;

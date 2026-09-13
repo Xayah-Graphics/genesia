@@ -67,10 +67,13 @@ namespace classifier {
                 // timm stores convolution filters as OIHW; the native plans use OHWI and spatial/channel depthwise filters.
                 if (p.name.ends_with("conv_dw.weight")) {
                     p.shape = {spatial, outputs};
-                    for (std::int64_t r = 0; r < spatial; ++r) for (std::int64_t c = 0; c < outputs; ++c) std::memcpy(&reordered[r * outputs + c], source + (c * spatial + r) * sizeof(float), sizeof(float));
+                    for (std::int64_t r = 0; r < spatial; ++r)
+                        for (std::int64_t c = 0; c < outputs; ++c) std::memcpy(&reordered[r * outputs + c], source + (c * spatial + r) * sizeof(float), sizeof(float));
                 } else {
                     p.shape = {outputs, height, width, inputs};
-                    for (std::int64_t o = 0; o < outputs; ++o) for (std::int64_t r = 0; r < spatial; ++r) for (std::int64_t i = 0; i < inputs; ++i) std::memcpy(&reordered[(o * spatial + r) * inputs + i], source + ((o * inputs + i) * spatial + r) * sizeof(float), sizeof(float));
+                    for (std::int64_t o = 0; o < outputs; ++o)
+                        for (std::int64_t r = 0; r < spatial; ++r)
+                            for (std::int64_t i = 0; i < inputs; ++i) std::memcpy(&reordered[(o * spatial + r) * inputs + i], source + ((o * inputs + i) * spatial + r) * sizeof(float), sizeof(float));
                 }
                 values = reordered.data();
             }
@@ -88,10 +91,11 @@ namespace classifier {
                 p.gpu.m    = reinterpret_cast<float*>(static_cast<std::byte*>(p.storage.data) + 2 * fbytes + bbytes);
                 p.gpu.v    = reinterpret_cast<float*>(static_cast<std::byte*>(p.storage.data) + 3 * fbytes + bbytes);
                 cuda_check(cudaMemset(p.gpu.grad, 0, 3 * fbytes));
-                if (load == NetworkLoad::resume) for (const auto& state : std::array<std::pair<std::string, float*>, 2>{{{"m", p.gpu.m}, {"v", p.gpu.v}}}) {
-                    std::string key = "optimizer." + state.first + "." + p.name;
-                    if (file.header.contains(key)) cuda_check(cudaMemcpy(state.second, file.base + file.header[key]["data_offsets"][0].get<std::size_t>(), count * 4, cudaMemcpyHostToDevice));
-                }
+                if (load == NetworkLoad::resume)
+                    for (const auto& state : std::array<std::pair<std::string, float*>, 2>{{{"m", p.gpu.m}, {"v", p.gpu.v}}}) {
+                        std::string key = "optimizer." + state.first + "." + p.name;
+                        if (file.header.contains(key)) cuda_check(cudaMemcpy(state.second, file.base + file.header[key]["data_offsets"][0].get<std::size_t>(), count * 4, cudaMemcpyHostToDevice));
+                    }
             }
             parameters.emplace(p.name, std::move(p));
         }

@@ -24,7 +24,7 @@ from pathlib import Path
 from gemma_batch import MODEL, SERVER, run_directory
 
 
-PROMPT = "判断图中人物是否穿着深蓝色水手服。"
+PROMPT = "判断图中水手服的胸挡上是否有任何装饰物（包括不限于额外装饰线或饰带，包括白色线条，文字、图案、徽章，不限颜色）。"
 SCHEMA = {
     "type": "object",
     "properties": {
