@@ -2,12 +2,13 @@ module;
 #include <nlohmann/json.hpp>
 
 module genesia.prompt.catalog;
+import genesia.project;
 import genesia.generation.defaults;
 import std;
 
 namespace genesia::prompt {
     Catalog::Catalog() {
-        std::ifstream file{std::filesystem::path{defaults::assets} / "tags/danbooru.csv", std::ios::binary};
+        std::ifstream file{std::filesystem::path{project::assets} / "tags/danbooru.csv", std::ios::binary};
         file.exceptions(std::ios::badbit | std::ios::failbit);
         const std::string csv{std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{}};
         struct Slice {
@@ -61,7 +62,7 @@ namespace genesia::prompt {
             }
             rows.push_back(row);
         }
-        std::ifstream custom_file{std::filesystem::path{defaults::assets} / "tags/custom.json"};
+        std::ifstream custom_file{std::filesystem::path{project::assets} / "tags/custom.json"};
         custom_file.exceptions(std::ios::badbit | std::ios::failbit);
         const auto custom = nlohmann::json::parse(custom_file);
         for (const auto& [key, value] : custom.items()) {

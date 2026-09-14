@@ -1,0 +1,126 @@
+#include "kernel-common.cuh"
+namespace genesia::convnext {
+    __global__ void convert_kernel(compute::TensorView out, compute::TensorView in) {
+        std::size_t i = std::size_t(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i < out.elements()) write(out, i, read(in, i));
+    }
+    __global__ void add_kernel(compute::TensorView out, compute::TensorView a, compute::TensorView b, float scale) {
+        std::size_t i = std::size_t(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i < out.elements()) write(out, i, read(a, i) + scale * read(b, i));
+    }
+    __global__ void gelu_kernel(compute::TensorView out, compute::TensorView x) {
+        std::size_t i = std::size_t(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i < x.elements()) {
+            float v = read(x, i);
+            write(out, i, .5f * v * (1.f + erff(v * .7071067811865475f)));
+        }
+    }
+    __global__ void gelu_dx_kernel(compute::TensorView dx, compute::TensorView dy, compute::TensorView x) {
+        std::size_t i = std::size_t(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i < x.elements()) {
+            float v = read(x, i);
+            write(dx, i, read(dy, i) * (.5f * (1.f + erff(v * .7071067811865475f)) + v * .3989422804014327f * expf(-.5f * v * v)));
+        }
+    }
+    __global__ void mask_kernel(float* mask, RandomState* r, int n, float probability, int tag, bool training) {
+        int i = threadIdx.x;
+        if (i < n) mask[i] = !training || probability == 0 ? 1.f : (uniform(r, i, tag) < probability ? 0.f : rounded(1.f / (1.f - probability)));
+    }
+    __global__ void residual_kernel(compute::TensorView out, compute::TensorView branch, compute::TensorView skip, const float* mask) {
+        std::size_t i = std::size_t(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i < out.elements()) write(out, i, rounded(read(branch, i) * mask[i / (std::size_t(out.h) * out.w * out.c)]) + read(skip, i));
+    }
+    __global__ void residual_dx_kernel(compute::TensorView out, compute::TensorView dy, const float* mask) {
+        std::size_t i = std::size_t(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i < out.elements()) write(out, i, read(dy, i) * mask[i / (std::size_t(out.h) * out.w * out.c)]);
+    }
+    __global__ void pool_kernel(compute::TensorView out, compute::TensorView x) {
+        int c = blockIdx.x * 128 + threadIdx.x, n = blockIdx.y;
+        if (c >= x.c) return;
+        float sum = 0;
+        for (int s = 0; s < x.h * x.w; ++s) sum += read(x, (std::size_t(n) * x.h * x.w + s) * x.c + c);
+        write(out, n * x.c + c, sum / (x.h * x.w));
+    }
+    __global__ void pool_dx_kernel(compute::TensorView dx, compute::TensorView dy) {
+        std::size_t i = std::size_t(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i < dx.elements()) write(dx, i, read(dy, (i / (std::size_t(dx.h) * dx.w * dx.c)) * dx.c + i % dx.c) / (dx.h * dx.w));
+    }
+    __global__ void dropout_kernel(compute::TensorView out, compute::TensorView x, float* mask, RandomState* r, bool training) {
+        int i = blockIdx.x * blockDim.x + threadIdx.x;
+        if (i >= x.elements()) return;
+        float m = !training ? 1.f : (uniform(r, i, 1000) < .1f ? 0.f : 1.f / .9f);
+        mask[i] = m;
+        write(out, i, read(x, i) * m);
+    }
+    __global__ void dropout_dx_kernel(compute::TensorView dx, compute::TensorView dy, const float* mask) {
+        int i = blockIdx.x * blockDim.x + threadIdx.x;
+        if (i < dx.elements()) write(dx, i, read(dy, i) * mask[i]);
+    }
+    __global__ void bias_grad_kernel(compute::TensorView dy, float* db) {
+        int c = blockIdx.x * 128 + threadIdx.x;
+        if (c >= dy.c) return;
+        float sum = 0;
+        for (int r = blockIdx.y; r < dy.n * dy.h * dy.w; r += gridDim.y) sum += read(dy, std::size_t(r) * dy.c + c);
+        atomicAdd(db + c, sum);
+    }
+    __global__ void softmax_kernel(compute::TensorView z, float* scores, int* decisions) {
+        int n         = blockIdx.x;
+        float maximum = -INFINITY, sum = 0;
+        for (int c = 0; c < z.c; ++c) maximum = fmaxf(maximum, read(z, n * z.c + c));
+        for (int c = 0; c < z.c; ++c) sum += expf(read(z, n * z.c + c) - maximum);
+        int predicted = 0;
+        for (int c = 0; c < z.c; ++c) {
+            scores[n * z.c + c] = expf(read(z, n * z.c + c) - maximum) / sum;
+            if (read(z, n * z.c + c) > read(z, n * z.c + predicted)) predicted = c;
+        }
+        decisions[n] = predicted;
+    }
+    __global__ void ce_kernel(compute::TensorView dz, compute::TensorView z, const int* labels, UpdateState* state, int effective) {
+        int n         = blockIdx.x;
+        float maximum = -INFINITY, sum = 0;
+        for (int c = 0; c < z.c; ++c) maximum = fmaxf(maximum, read(z, n * z.c + c));
+        for (int c = 0; c < z.c; ++c) sum += expf(read(z, n * z.c + c) - maximum);
+        for (int c = 0; c < z.c; ++c) write(dz, n * z.c + c, (expf(read(z, n * z.c + c) - maximum) / sum - (c == labels[n])) / effective);
+        atomicAdd(&state->loss, (logf(sum) + maximum - read(z, n * z.c + labels[n])) / effective);
+    }
+    void convert(cudaStream_t s, compute::TensorView o, compute::TensorView x) {
+        convert_kernel<<<(o.elements() + 255) / 256, 256, 0, s>>>(o, x);
+    }
+    void add(cudaStream_t s, compute::TensorView o, compute::TensorView a, compute::TensorView b, float scale) {
+        add_kernel<<<(o.elements() + 255) / 256, 256, 0, s>>>(o, a, b, scale);
+    }
+    void gelu(cudaStream_t s, compute::TensorView o, compute::TensorView x) {
+        gelu_kernel<<<(o.elements() + 255) / 256, 256, 0, s>>>(o, x);
+    }
+    void gelu_backward(cudaStream_t s, compute::TensorView dx, compute::TensorView dy, compute::TensorView x) {
+        gelu_dx_kernel<<<(dx.elements() + 255) / 256, 256, 0, s>>>(dx, dy, x);
+    }
+    void residual(cudaStream_t s, compute::TensorView o, compute::TensorView b, compute::TensorView x, float p, float* mask, RandomState* r, int tag, bool train) {
+        mask_kernel<<<1, 256, 0, s>>>(mask, r, x.n, p, tag, train);
+        residual_kernel<<<(o.elements() + 255) / 256, 256, 0, s>>>(o, b, x, mask);
+    }
+    void residual_backward(cudaStream_t s, compute::TensorView dx, compute::TensorView dy, const float* mask) {
+        residual_dx_kernel<<<(dx.elements() + 255) / 256, 256, 0, s>>>(dx, dy, mask);
+    }
+    void pool(cudaStream_t s, compute::TensorView o, compute::TensorView x) {
+        pool_kernel<<<dim3((x.c + 127) / 128, x.n), 128, 0, s>>>(o, x);
+    }
+    void pool_backward(cudaStream_t s, compute::TensorView dx, compute::TensorView dy) {
+        pool_dx_kernel<<<(dx.elements() + 255) / 256, 256, 0, s>>>(dx, dy);
+    }
+    void dropout(cudaStream_t s, compute::TensorView o, compute::TensorView x, float* mask, RandomState* r, bool train) {
+        dropout_kernel<<<(x.elements() + 255) / 256, 256, 0, s>>>(o, x, mask, r, train);
+    }
+    void dropout_backward(cudaStream_t s, compute::TensorView dx, compute::TensorView dy, const float* mask) {
+        dropout_dx_kernel<<<(dx.elements() + 255) / 256, 256, 0, s>>>(dx, dy, mask);
+    }
+    void bias_backward(cudaStream_t s, compute::TensorView dy, float* db) {
+        bias_grad_kernel<<<dim3((dy.c + 127) / 128, 128), 128, 0, s>>>(dy, db);
+    }
+    void softmax(cudaStream_t s, compute::TensorView z, float* p, int* d) {
+        softmax_kernel<<<z.n, 1, 0, s>>>(z, p, d);
+    }
+    void cross_entropy(cudaStream_t s, compute::TensorView dz, compute::TensorView z, const int* labels, UpdateState* state, int effective) {
+        ce_kernel<<<z.n, 1, 0, s>>>(dz, z, labels, state, effective);
+    }
+} // namespace genesia::convnext

@@ -4,9 +4,11 @@ module;
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 module genesia.generation.output;
+import genesia.io.files;
+import genesia.project;
 
 import std;
-import genesia.dataset;
+import genesia.data.datasets;
 
 namespace genesia {
     namespace {
@@ -41,17 +43,17 @@ namespace genesia {
             const auto source   = record.source.u8string();
             metadata["repaint"] = {{"source", std::string{source.begin(), source.end()}}, {"denoise", record.parameters.denoise}};
         }
-        for (const auto& [name, side, text] : {std::tuple{"positive", &record.prompt.positive, &record.parameters.positive}, std::tuple{"negative", &record.prompt.negative, &record.parameters.negative}}) {
+        for (const auto& [name, side, text] : {std::tuple{"positive", &record.prompt.sides[0], &record.parameters.positive}, std::tuple{"negative", &record.prompt.sides[1], &record.parameters.negative}}) {
             auto& saved     = metadata["prompt"][name];
             saved["text"]   = *text;
             saved["fixed"]  = side->fixed;
             saved["groups"] = nlohmann::json::array();
             for (const auto& group : side->groups) {
                 nlohmann::json tags = nlohmann::json::array();
-                for (const auto tag : group.tags) {
-                    const auto& entry = record.catalog->tags[tag.id];
+                for (const auto& tag : group.tags) {
+                    const auto& entry = tag;
                     auto& saved_tag   = tags.emplace_back(nlohmann::json{{"name", entry.name}, {"weight", tag.weight}});
-                    if (entry.category == -1) saved_tag["text"] = entry.text;
+                    saved_tag["text"] = entry.text;
                 }
                 saved["groups"].push_back({{"enabled", group.enabled}, {"tags", std::move(tags)}});
             }
@@ -64,8 +66,8 @@ namespace genesia {
         const std::unique_ptr<unsigned char, decltype(&std::free)> png{stbi_write_png_to_mem(output.pixels.data(), output.width * 3, output.width, output.height, 3, &length), &std::free};
         if (!png) throw std::runtime_error{"PNG encoding failed"};
 
-        const dataset::Lock files_lock{"image-moves"};
-        const dataset::Lock publication{"raw-publish"};
+        const files::Lock files_lock{"image-moves"};
+        const files::Lock publication{"raw-publish"};
         dataset::Index index;
         index.scan("raw");
         const auto& raw = index.roots.front();
@@ -77,7 +79,7 @@ namespace genesia {
             throw std::runtime_error{message};
         }
         std::uint64_t next_index{1};
-        for (const auto& entry : std::filesystem::directory_iterator{dataset::raw}) {
+        for (const auto& entry : std::filesystem::directory_iterator{project::raw}) {
             const auto filename = entry.path().filename().string();
             if (!filename.starts_with("genesia_") || !filename.ends_with(".png")) continue;
             const std::string_view digits{filename.data() + 8, filename.size() - 12};
@@ -88,7 +90,7 @@ namespace genesia {
         std::filesystem::path path, temporary;
         std::ofstream file;
         for (;;) {
-            path = dataset::raw / std::format("genesia_{:06}.png", next_index++);
+            path = project::raw / std::format("genesia_{:06}.png", next_index++);
             if (std::filesystem::exists(path)) continue;
             temporary = path;
             temporary += ".part";
@@ -120,37 +122,4 @@ namespace genesia {
         return path;
     }
 
-    Record read_record(const std::filesystem::path& path, std::shared_ptr<const prompt::Catalog> catalog) {
-        const auto png = dataset::read_png(path);
-        std::vector<prompt::ArchivedTag> archived;
-        for (const auto& side : png.prompt)
-            for (const auto& group : side.groups)
-                for (const auto& tag : group.tags) {
-                    auto text = tag.text.value_or(tag.name);
-                    if (!tag.text) std::ranges::replace(text, '_', ' ');
-                    const auto id = catalog->resolve(tag.name);
-                    if ((!id || catalog->tags[*id].name != tag.name || catalog->tags[*id].text != text) && !std::ranges::contains(archived, tag.name, &prompt::ArchivedTag::name)) archived.push_back({tag.name, std::move(text)});
-                }
-        if (!archived.empty()) catalog = std::make_shared<prompt::Catalog>(std::move(catalog), archived);
-        Record result;
-        result.path               = path;
-        result.catalog            = std::move(catalog);
-        result.parameters.width   = png.width;
-        result.parameters.height  = png.height;
-        result.parameters.steps   = png.steps;
-        result.parameters.cfg     = png.cfg;
-        result.parameters.denoise = png.denoise;
-        result.seed               = png.seed;
-        result.model              = std::filesystem::path{std::u8string{png.model.begin(), png.model.end()}};
-        result.source             = std::filesystem::path{std::u8string{png.source.begin(), png.source.end()}};
-        for (const auto& [saved, side, text] : {std::tuple{&png.prompt[0], &result.prompt.positive, &result.parameters.positive}, std::tuple{&png.prompt[1], &result.prompt.negative, &result.parameters.negative}}) {
-            *text       = saved->text;
-            side->fixed = saved->fixed;
-            for (const auto& source : saved->groups) {
-                auto& group = side->groups.emplace_back(std::vector<prompt::Tag>{}, source.enabled);
-                for (const auto& tag : source.tags) group.tags.push_back({result.catalog->resolve(tag.name).value(), tag.weight});
-            }
-        }
-        return result;
-    }
 } // namespace genesia

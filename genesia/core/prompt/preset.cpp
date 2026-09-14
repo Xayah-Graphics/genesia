@@ -2,6 +2,7 @@ module;
 #include <nlohmann/json.hpp>
 
 module genesia.prompt.preset;
+import genesia.project;
 import genesia.generation.defaults;
 import std;
 
@@ -29,7 +30,7 @@ namespace genesia::prompt {
     }
 
     Preset read_preset(const std::string_view name, const Catalog& catalog) {
-        return {std::string{name}, read_prompt(std::filesystem::path{defaults::assets} / "prompts" / (std::string{name} + ".json"), catalog)};
+        return {std::string{name}, read_prompt(std::filesystem::path{project::assets} / "prompts" / (std::string{name} + ".json"), catalog)};
     }
 
     void write_preset(const Preset& preset, const Catalog& catalog, const bool replace) {
@@ -44,7 +45,7 @@ namespace genesia::prompt {
                 output["groups"].push_back({{"enabled", group.enabled}, {"tags", std::move(tags)}});
             }
         }
-        std::ofstream file{std::filesystem::path{defaults::assets} / "prompts" / (preset.name + ".json"), std::ios::out | (replace ? std::ios::trunc : std::ios::noreplace)};
+        std::ofstream file{std::filesystem::path{project::assets} / "prompts" / (preset.name + ".json"), std::ios::out | (replace ? std::ios::trunc : std::ios::noreplace)};
         file.exceptions(std::ios::badbit | std::ios::failbit);
         file << json.dump(2) << '\n';
         file.close();
@@ -52,7 +53,7 @@ namespace genesia::prompt {
 
     std::vector<std::string> list_presets() {
         std::vector<std::string> result;
-        for (const auto& entry : std::filesystem::directory_iterator{std::filesystem::path{defaults::assets} / "prompts"})
+        for (const auto& entry : std::filesystem::directory_iterator{std::filesystem::path{project::assets} / "prompts"})
             if (entry.is_regular_file() && entry.path().extension() == ".json") result.push_back(entry.path().stem().string());
         std::ranges::sort(result);
         return result;

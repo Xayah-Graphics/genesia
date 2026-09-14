@@ -1,21 +1,21 @@
 module;
 
 #include <GLFW/glfw3.h>
-#include "../core/sdxl/control.h"
-#include <genesia/cuda.h>
 
 module genesia.editor;
 
 import genesia.editor.platform.window;
-import genesia.editor.ui.renderer;
-import genesia.editor.ui;
+import genesia.editor.graphics.renderer;
+import genesia.editor.workspace;
+import genesia.prompt.preset;
+import genesia.io.files;
 import std;
 
 namespace genesia::editor {
     struct Application final {
         WindowPlatform window{"Genesia", {1920, 1080}};
         Renderer renderer{window};
-        UserInterface ui;
+        Workspace ui;
         bool closing{};
 
         Application(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, std::string dataset);
@@ -32,16 +32,15 @@ namespace genesia::editor {
                 closing = true;
                 if (ui.runtime) ui.runtime->session.shutdown();
             }
-            bool busy{}, done{true}, pending{ui.library.pending.load()};
+            bool busy{}, done{true}, pending{ui.dataset_index.pending.load() || ui.textures.pending.load()};
             std::uint32_t stage{}, step{};
             if (ui.runtime) {
-                auto& session = ui.runtime->session;
-                const std::lock_guard lock{session.mutex};
-                busy = session.active.has_value();
-                done = session.worker_done;
-                pending |= !session.events.empty() || !session.previews.empty();
-                stage = ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{session.control.data()[0].stage}.load();
-                step  = ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{session.control.data()[0].completed}.load();
+                const auto state = ui.runtime->session.snapshot();
+                busy             = state.active.has_value();
+                done             = state.finished;
+                pending |= state.pending;
+                stage = static_cast<std::uint32_t>(state.generation.stage);
+                step  = state.generation.completed;
             }
             if (closing && done && !pending) break;
             const double now     = glfwGetTime();
@@ -66,8 +65,25 @@ namespace genesia::editor {
         }
     }
 
-    void run(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, std::string dataset) {
+    int run(const std::span<const std::string_view> arguments) {
+        std::string name{defaults::preset}, dataset;
+        for (std::size_t i = 0; i < arguments.size(); ++i) {
+            const auto option = arguments[i];
+            if (i + 1 == arguments.size()) throw std::runtime_error{"Missing value for " + std::string{option}};
+            if (option == "--preset") name = arguments[++i];
+            else if (option == "--dataset") dataset = arguments[++i];
+            else throw std::runtime_error{"Unknown Editor option: " + std::string{option}};
+        }
+        if (!dataset.empty()) {
+            const auto path  = files::path(dataset);
+            const auto count = std::distance(path.begin(), path.end());
+            if (path.is_absolute() || count < 1 || count > 2 || std::ranges::any_of(path, [](const auto& part) { return files::utf8(part).starts_with('.'); })) throw std::runtime_error{"Dataset must be ROOT or ROOT/CONCEPT"};
+            dataset = files::utf8(path);
+        }
+        auto catalog = std::make_shared<const prompt::Catalog>();
+        auto preset  = prompt::read_preset(name, *catalog);
         Application application{std::move(preset), std::move(catalog), std::move(dataset)};
         application.run();
+        return 0;
     }
 } // namespace genesia::editor

@@ -11,12 +11,5 @@ export namespace genesia::defaults {
     inline constexpr std::uint64_t seed      = 16494404764960740964ULL;
     inline constexpr bool preview_enabled    = true;
     inline constexpr int preview_interval_ms = 1000;
-#if defined(_WIN32)
-    inline constexpr std::string_view checkpoint = "C:/Users/xayah/Documents/ComfyUI/models/checkpoints/oneObsession_v22.safetensors";
-#elif defined(__linux__)
-    inline constexpr std::string_view checkpoint = "/workspace/models/oneObsession_v22.safetensors";
-#endif
-    inline constexpr std::string_view cache  = GENESIA_CACHE_DIRECTORY;
     inline constexpr std::string_view preset = "default";
-    inline constexpr std::string_view assets = GENESIA_ASSET_DIRECTORY;
 } // namespace genesia::defaults
