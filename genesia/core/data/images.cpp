@@ -56,7 +56,8 @@ namespace genesia {
                 auto& parsed = side->groups.emplace_back(group.at("enabled").get<bool>());
                 for (const auto& tag : group.at("tags").get_ref<const nlohmann::json::array_t&>()) {
                     auto& item = parsed.tags.emplace_back(tag.at("name").get<std::string>(), std::string{}, tag.at("weight").get<float>());
-                    item.text  = tag.at("text");
+                    item.text  = tag.value("text", item.name);
+                    if (!tag.contains("text")) std::ranges::replace(item.text, '_', ' ');
                 }
             }
         }
