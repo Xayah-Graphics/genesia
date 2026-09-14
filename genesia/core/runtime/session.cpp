@@ -23,6 +23,7 @@ namespace genesia::runtime {
                 [&]<typename T>(const T& value) {
                     if constexpr (std::same_as<T, Train>) active->concept_key = value.options.concept_key;
                     else if constexpr (std::same_as<T, Delete>) active->image_sha = value.sha;
+                    else if constexpr (std::same_as<T, Normalize>) active->concept_key = value.root;
                     else if constexpr (!std::same_as<T, Generate>) active->concept_key = value.concept_key;
                 },
                 operation->operation);
@@ -315,6 +316,21 @@ namespace genesia::runtime {
                         observed.clear();
                     }
                     emit(result.error.empty() ? State::complete : State::failed, {}, {result}, result.error);
+                } else if constexpr (std::same_as<T, Normalize>) {
+                    const auto root = files::path(operation.root);
+                    if (root.has_root_path() || root.has_parent_path() || operation.root.empty() || operation.root.front() == '.') throw std::runtime_error{"Normalize requires a root dataset name"};
+                    emit(State::running, {BatchProgress{Stage::scanning}});
+                    update_catalog(catalog.load(operation.root));
+                    const auto result = dataset::normalize(catalog.index, operation.root, interrupted, [&](const dataset::NormalizeStage stage, const std::size_t completed, const std::size_t total) { progress({BatchProgress{stage == dataset::NormalizeStage::renaming ? Stage::moving : Stage::normalizing, completed, total}}); });
+                    update_catalog(catalog.root(operation.root));
+                    for (const auto& [key, info] : catalog.classifiers)
+                        if (info.inspected && info.root.parent_path() == project::directory / root) update_catalog(catalog.describe(key, true));
+                    {
+                        const std::lock_guard lock{mutex};
+                        wanted.clear();
+                        observed.clear();
+                    }
+                    emit(!result.error.empty() ? State::failed : result.stopped ? State::stopped : State::complete, {}, {result}, result.error);
                 } else if constexpr (std::same_as<T, Classify>) {
                     const auto input   = std::filesystem::absolute(operation.input).lexically_normal();
                     const auto text    = files::utf8(input);

@@ -317,7 +317,7 @@ namespace genesia::editor {
         ImGui::PopClipRect();
         ImGui::End();
         if (navigating) {
-            if (workspace.page == Workspace::Page::generation) workspace.select_collection("raw", workspace.generation.record && !workspace.generation.record->path.empty() ? std::optional{workspace.generation.record->path} : std::nullopt);
+            if (workspace.page == Workspace::Page::generation) workspace.select_collection("raw", workspace.generation.saved ? workspace.generation.saved->sha : std::string{});
             else workspace.back();
         } else if (repaint_source) workspace.start_repaint(*repaint_source);
     }

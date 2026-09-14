@@ -20,9 +20,10 @@ namespace genesia::dataset {
     }
     void Index::scan(const std::string_view name) {
         load_cache();
-        const auto folder = project::directory / files::path(name);
-        if (std::ranges::any_of(roots, [&](const Root& root) { return root.all.key == name; })) return;
-        auto& found   = roots.emplace_back();
+        const auto folder   = project::directory / files::path(name);
+        const auto existing = std::ranges::find(roots, name, [](const Root& root) { return root.all.key; });
+        auto& found         = existing == roots.end() ? roots.emplace_back() : *existing;
+        found               = {};
         found.all.key = found.all.name = files::utf8(folder.filename());
         try {
             for (const auto& entry : std::filesystem::directory_iterator{folder})
@@ -95,14 +96,16 @@ namespace genesia::dataset {
         raw.files.insert(std::ranges::lower_bound(raw.files, file, before), std::move(file));
     }
     std::vector<std::string> Index::apply(const std::span<const Move> moves) {
+        std::map<std::filesystem::path, std::filesystem::path> destinations;
+        for (const auto& move : moves) destinations.emplace(move.source, move.destination);
         std::vector<std::string> changed;
         for (auto& root : roots) {
             bool moved{};
-            for (const auto& move : moves) {
-                const auto found = std::ranges::find(root.files, move.source, &File::path);
-                if (found == root.files.end()) continue;
-                found->path = move.destination;
-                moved       = true;
+            for (auto& file : root.files) {
+                const auto found = destinations.find(file.path);
+                if (found == destinations.end()) continue;
+                file.path = found->second;
+                moved     = true;
             }
             if (!moved) continue;
             rebuild(root);

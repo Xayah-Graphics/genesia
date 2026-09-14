@@ -26,10 +26,10 @@ namespace genesia::dataset {
             const bool at_source = std::filesystem::exists(source), at_destination = std::filesystem::exists(destination);
             if (at_source == at_destination) throw std::runtime_error{"Cannot recover image move: " + files::utf8(source) + " -> " + files::utf8(destination)};
             const auto file = index.identify(at_source ? source : destination);
-            if (file.sha != entry->at("sha").get<std::string>() || file.entity != entry->at("entity").get<std::string>()) throw std::runtime_error{"Cannot recover changed image: " + files::utf8(file.path)};
+            if (file.sha != entry->at("sha").get<std::string>()) throw std::runtime_error{"Cannot recover changed image: " + files::utf8(file.path)};
             if (at_destination) {
                 files::move(destination, source);
-                result.paths.push_back({destination, source, file.sha, file.entity});
+                result.paths.push_back({destination, source, file.sha});
                 ++result.restored;
             }
         }
@@ -57,7 +57,7 @@ namespace genesia::dataset {
         nlohmann::json operation{{"status", "applying"}, {"moves", nlohmann::json::array()}, {"created", nlohmann::json::array()}};
         for (const auto& move : moves) {
             if (!reserved.insert(move.destination).second || std::filesystem::exists(move.destination)) throw std::runtime_error{"Destination already exists: " + files::utf8(move.destination)};
-            operation["moves"].push_back({{"source", files::utf8(move.source)}, {"destination", files::utf8(move.destination)}, {"sha", move.sha}, {"entity", move.entity}});
+            operation["moves"].push_back({{"source", files::utf8(move.source)}, {"destination", files::utf8(move.destination)}, {"sha", move.sha}});
             for (auto directory = move.destination.parent_path(); !std::filesystem::exists(directory); directory = directory.parent_path()) directories.insert(directory);
         }
         for (auto path = directories.rbegin(); path != directories.rend(); ++path) operation["created"].push_back(files::utf8(*path));
@@ -84,7 +84,7 @@ namespace genesia::dataset {
             const auto original = files::path(move.at("source").get<std::string>());
             const auto current  = files::path(move.at("destination").get<std::string>());
             if (std::filesystem::exists(original)) throw std::runtime_error{"Undo destination already exists: " + files::utf8(original)};
-            paths.push_back({current, original, move.at("sha"), move.at("entity")});
+            paths.push_back({current, original, move.at("sha")});
         }
         (*operation)["status"] = "undoing";
         files::write_json(journal, state);
@@ -138,6 +138,111 @@ namespace genesia::dataset {
                 result.error += "Images were deleted, but audit undo history could not be updated:\n" + files::utf8(journal) + ": " + error.what();
             }
         }
+        return result;
+    }
+    void recover_normalization(const std::filesystem::path& root) {
+        const auto journal = root / ".genesia" / "normalize.json";
+        if (!std::filesystem::exists(journal)) return;
+        recover_moves(journal);
+        const auto state    = files::read_json(journal);
+        const auto& history = state.at("history");
+        if (history.size() == 2 && history.back().at("status") == "applied") {
+            std::set<std::filesystem::path> audits;
+            for (const auto& move : history.back().at("moves")) {
+                const auto relative = files::path(move.at("destination").get<std::string>()).lexically_relative(root);
+                if (std::distance(relative.begin(), relative.end()) > 1) audits.insert(root / *relative.begin() / ".genesia" / "audit-moves.json");
+            }
+            for (const auto& audit : audits)
+                if (std::filesystem::remove(audit) && std::filesystem::is_empty(audit.parent_path())) std::filesystem::remove(audit.parent_path());
+        } else if (history.front().at("status") == "applied") undo_moves(journal);
+        std::filesystem::remove(journal);
+        if (std::filesystem::is_empty(journal.parent_path())) std::filesystem::remove(journal.parent_path());
+    }
+    NormalizeResult normalize(Index& index, const std::string_view name, const std::atomic_bool& interrupted, const std::function<void(NormalizeStage, std::size_t, std::size_t)>& progress) {
+        const auto folder = project::directory / files::path(name);
+        recover_normalization(folder);
+        index.scan(name);
+        auto& root = *std::ranges::find(index.roots, name, [](const Root& root) { return root.all.key; });
+        NormalizeResult result{.root = std::string{name}, .files = root.files.size(), .error = root.error};
+        if (!result.error.empty()) return result;
+        std::map<std::string, const File*> resources;
+        std::vector<std::pair<File*, const File*>> replacements;
+        for (auto& file : root.files) {
+            const auto [source, added] = resources.emplace(file.sha, &file);
+            if (!added && file.entity != source->second->entity) replacements.emplace_back(&file, source->second);
+        }
+        progress(NormalizeStage::linking, 0, replacements.size());
+        for (const auto [target, source] : replacements) {
+            if (interrupted.load()) {
+                result.stopped = true;
+                break;
+            }
+            try {
+                auto linked    = *source;
+                linked.path    = target->path;
+                auto temporary = target->path;
+                temporary += ".genesia-link";
+                std::filesystem::create_hard_link(source->path, temporary);
+                try {
+                    files::publish(temporary, target->path);
+                } catch (const std::exception& failure) {
+                    std::error_code cleanup;
+                    std::filesystem::remove(temporary, cleanup);
+                    if (cleanup) throw std::runtime_error{std::format("{}\nRemove {}: {}", failure.what(), files::utf8(temporary), cleanup.message())};
+                    throw;
+                }
+                *target = std::move(linked);
+                ++result.linked;
+            } catch (const std::exception& failure) {
+                result.error = failure.what();
+                break;
+            }
+            if (result.linked % 64 == 0) progress(NormalizeStage::linking, result.linked, replacements.size());
+        }
+        index.rebuild(root);
+        progress(NormalizeStage::linking, result.linked, replacements.size());
+        if (!result.error.empty() || result.stopped) return result;
+        if (interrupted.load()) {
+            result.stopped = true;
+            return result;
+        }
+        std::map<std::filesystem::path, std::size_t> numbers;
+        std::vector<Move> renamed, staged, finished;
+        for (const auto& file : root.files) {
+            const auto directory   = file.path.parent_path();
+            const auto destination = directory / std::format("{:05}.png", ++numbers[directory]);
+            if (file.path == destination) continue;
+            auto temporary = file.path;
+            temporary += ".genesia-rename";
+            renamed.push_back({file.path, destination, file.sha});
+            staged.push_back({file.path, temporary, file.sha});
+            finished.push_back({temporary, destination, file.sha});
+        }
+        if (renamed.empty()) return result;
+        const auto journal = folder / ".genesia" / "normalize.json";
+        const auto count   = renamed.size();
+        if (interrupted.load()) {
+            result.stopped = true;
+            return result;
+        }
+        progress(NormalizeStage::renaming, 0, count);
+        try {
+            move_images(std::move(staged), journal);
+            move_images(std::move(finished), journal);
+            result.renamed = std::move(renamed);
+            index.apply(result.renamed);
+        } catch (const std::exception& failure) {
+            result.error = failure.what();
+        }
+        try {
+            recover_normalization(folder);
+        } catch (const std::exception& failure) {
+            if (!result.error.empty()) result.error += '\n';
+            result.error += failure.what();
+            root.error = "Normalization recovery failed: " + result.error;
+            root.ready = false;
+        }
+        progress(NormalizeStage::renaming, result.renamed.size(), count);
         return result;
     }
 } // namespace genesia::dataset

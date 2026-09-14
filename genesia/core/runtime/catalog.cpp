@@ -12,6 +12,7 @@ namespace genesia::runtime {
         CatalogState result;
         for (const auto& name : names) {
             if (std::ranges::any_of(index.roots, [&](const dataset::Root& root) { return root.all.key == name; })) continue;
+            dataset::recover_normalization(project::directory / files::path(name));
             for (const auto& entry : std::filesystem::directory_iterator{project::directory / files::path(name)})
                 if (entry.is_directory() && !files::utf8(entry.path().filename()).starts_with('.')) dataset::recover_moves(entry.path() / ".genesia" / "audit-moves.json");
             index.scan(name);

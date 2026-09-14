@@ -30,7 +30,7 @@ export namespace genesia::dataset {
     };
     struct Move final {
         std::filesystem::path source, destination;
-        std::string sha, entity;
+        std::string sha;
     };
     struct Index final {
         std::vector<Root> roots;

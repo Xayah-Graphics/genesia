@@ -126,7 +126,7 @@ namespace genesia::editor {
             else if (stage == runtime::GenerationStage::sampling) workspace.progress_label = std::format("{} / {}", completed, steps);
             else if (stage == runtime::GenerationStage::decoding || stage == runtime::GenerationStage::transferring || stage == runtime::GenerationStage::complete) workspace.progress_label = "Finishing image";
             else workspace.progress_label = "Preparing";
-            if (!stopping && active_kind != runtime::Kind::generate) workspace.progress_label = std::array{"Generate", "Training", "Inference", "Audit", "Moving image", "Undo", "Classifying folder", "Assigning type", "Deleting image"}[static_cast<int>(active_kind)];
+            if (!stopping && active_kind != runtime::Kind::generate) workspace.progress_label = std::array{"Generate", "Training", "Inference", "Audit", "Moving image", "Undo", "Classifying folder", "Assigning type", "Deleting image", "Normalizing dataset"}[static_cast<int>(active_kind)];
             workspace.progress_time = active ? std::format("{:.1f}s", elapsed) : "";
         } else {
             workspace.progress_alpha = failed ? 0 : std::max(0.0F, workspace.progress_alpha - ImGui::GetIO().DeltaTime / 0.15F);

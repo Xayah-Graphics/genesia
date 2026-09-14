@@ -14,12 +14,14 @@ export namespace genesia::editor {
         };
         std::map<std::string, Texture> entries;
         std::atomic_bool pending{};
+        bool paused{};
         explicit TextureCache(Renderer& renderer);
         ~TextureCache();
         void receive();
         void adopt(const dataset::File& file, const Record& record, std::uint64_t& texture);
         void request(std::vector<dataset::File> files);
         void discard(std::span<const std::filesystem::path> paths);
+        void relocate(std::span<const dataset::Move> moves);
 
     private:
         struct Decoded final {

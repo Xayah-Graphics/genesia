@@ -203,21 +203,18 @@ namespace genesia::editor {
                 const auto index   = collection->images.size() - 1;
                 current_position() = {collection->images[index].sha, index, static_cast<float>(index)};
             }
-            if (locate) {
-                const auto member = std::ranges::find(root->files, *locate, &dataset::File::path);
-                if (member != root->files.end()) {
-                    const auto found = std::ranges::find(collection->images, member->sha, &dataset::File::sha);
-                    if (found != collection->images.end()) {
-                        const auto index   = static_cast<std::size_t>(found - collection->images.begin());
-                        current_position() = {found->sha, index, static_cast<float>(index)};
-                        locate.reset();
-                    }
+            if (!locate_sha.empty()) {
+                const auto found = std::ranges::find(collection->images, locate_sha, &dataset::File::sha);
+                if (found != collection->images.end()) {
+                    const auto index   = static_cast<std::size_t>(found - collection->images.begin());
+                    current_position() = {found->sha, index, static_cast<float>(index)};
+                    locate_sha.clear();
                 }
             }
         }
     }
 
-    void Workspace::select_collection(std::string key, std::optional<std::filesystem::path> target) {
+    void Workspace::select_collection(std::string key, std::string sha) {
         commit_parameters();
         if (!leave_repaint()) return;
         if (page == Page::generation && !prompt_editor.commit(prompt, *catalog)) {
@@ -232,7 +229,7 @@ namespace genesia::editor {
         collection_key = std::move(key);
         choosing_type  = false;
         type_error.clear();
-        locate = std::move(target);
+        locate_sha = std::move(sha);
         synchronize_collection();
         view          = {};
         window.redraw = true;
@@ -243,7 +240,7 @@ namespace genesia::editor {
     }
 
     void Workspace::center_image(const std::size_t index) {
-        locate.reset();
+        locate_sha.clear();
         auto& position    = current_position();
         position.index    = index;
         position.selected = collection->images[index].sha;
@@ -263,7 +260,7 @@ namespace genesia::editor {
         ImageView return_camera = repaint ? repaint->return_camera : view;
         if (!leave_repaint()) return;
         if (page == Page::generation) {
-            select_collection("raw", source.path);
+            select_collection("raw", source.sha);
             if (page != Page::dataset) return;
         }
         auto& edits = repaints[source.sha];
@@ -462,9 +459,20 @@ namespace genesia::editor {
         audit_dirty = false;
     }
     std::uint64_t Workspace::submit_task(runtime::Request request) {
-        auto submitted = runtime.session.submit(std::move(request));
-        const auto id  = submitted.id;
-        session_state  = runtime.session.snapshot();
+        const bool normalizing = std::holds_alternative<runtime::Normalize>(request.operation);
+        if (normalizing) {
+            textures.paused = true;
+            textures.request({});
+        }
+        runtime::TaskStatus submitted;
+        try {
+            submitted = runtime.session.submit(std::move(request));
+        } catch (...) {
+            if (normalizing) textures.paused = false;
+            throw;
+        }
+        const auto id = submitted.id;
+        session_state = runtime.session.snapshot();
         if (submitted.kind != runtime::Kind::erase) activity[{submitted.concept_key, submitted.kind}] = std::move(submitted);
         return id;
     }
@@ -478,12 +486,32 @@ namespace genesia::editor {
             latest       = event;
             if (kind == runtime::Kind::audit || kind == runtime::Kind::fix || kind == runtime::Kind::undo) latest.result = {};
         }
+        if (kind == runtime::Kind::normalize && state >= runtime::State::complete) {
+            if (const auto* normalized = std::get_if<dataset::NormalizeResult>(&event.result.value)) {
+                textures.relocate(normalized->renamed);
+                std::map<std::filesystem::path, const dataset::Move*> destinations;
+                for (const auto& move : normalized->renamed) destinations.emplace(move.source, &move);
+                const auto relocate = [&](dataset::File& file) {
+                    const auto found = destinations.find(file.path);
+                    if (found != destinations.end() && file.sha == found->second->sha) file.path = found->second->destination;
+                };
+                for (auto* output : {&generation, repaint ? &repaint->result : nullptr}) {
+                    if (!output || !output->saved) continue;
+                    relocate(*output->saved);
+                    if (output->record) output->record->path = output->saved->path;
+                }
+                if (repaint) relocate(repaint->source);
+                visible_images.clear();
+                synchronize_collection();
+            }
+            textures.paused = false;
+        }
         if (kind == runtime::Kind::erase && state >= runtime::State::complete) {
             pending_delete.reset();
             if (const auto* deleted = std::get_if<dataset::DeleteResult>(&event.result.value); deleted && !deleted->paths.empty()) {
                 const auto removed = [&](const std::filesystem::path& path) { return std::ranges::contains(deleted->paths, path); };
                 textures.discard(deleted->paths);
-                if (locate && removed(*locate)) locate.reset();
+                if (locate_sha == deleted->sha && root && root->all.key == deleted->root) locate_sha.clear();
                 if (generation.saved && removed(generation.saved->path)) {
                     if (generation.texture) renderer.retire(generation.texture);
                     generation      = {};
@@ -569,7 +597,7 @@ namespace genesia::editor {
     }
 
     void Workspace::observe_inference() {
-        if (pending_delete) {
+        if (pending_delete || textures.paused) {
             runtime.session.observe({});
             return;
         }

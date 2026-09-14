@@ -126,7 +126,7 @@ export namespace genesia::editor {
         const dataset::Root* root{};
         const dataset::Collection* collection{};
         std::map<std::string, Position> positions;
-        std::optional<std::filesystem::path> locate;
+        std::string locate_sha;
         std::optional<dataset::File> pending_delete;
         std::uint64_t seed{defaults::seed};
         bool random_seed{defaults::random_seed};
@@ -148,7 +148,7 @@ export namespace genesia::editor {
         ~Workspace();
         void receive();
         void synchronize_collection();
-        void select_collection(std::string key, std::optional<std::filesystem::path> locate = {});
+        void select_collection(std::string key, std::string sha = {});
         Position& current_position();
         void center_image(std::size_t index);
         void start_repaint(const dataset::File& source);

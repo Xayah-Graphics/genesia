@@ -123,7 +123,15 @@ namespace genesia::editor {
                     }
                 }
             } else if (failure != workspace.library.concept_errors.end()) ImGui::TextWrapped("%s", failure->second.c_str());
-            else if (workspace.collection_key == workspace.root->all.key) ImGui::TextDisabled("%zu concepts", workspace.root->concepts.size());
+            else if (workspace.collection_key == workspace.root->all.key) {
+                ImGui::TextDisabled("%zu concepts", workspace.root->concepts.size());
+                ImGui::Spacing();
+                ImGui::BeginDisabled(workspace.session_state.active.has_value());
+                if (ImGui::Button("Normalize Dataset", {-FLT_MIN, 0})) workspace.submit_task({runtime::Normalize{workspace.collection_key}});
+                ImGui::EndDisabled();
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Merge identical PNG copies into hard links, then number each folder's images\n00001.png, 00002.png, ... by modification time. Dot directories are excluded.\nImage bytes stay unchanged. Renamed concepts lose their old audit undo history.\nRenaming changes training fingerprints; existing models remain available.");
+                operation_activity(workspace, {runtime::Kind::normalize}, workspace.collection_key);
+            }
             if (!workspace.root->ready) ImGui::TextColored({0.95F, 0.49F, 0.42F, 1}, "Index error / details below");
         } else ImGui::TextDisabled(workspace.library.ready ? "Choose a dataset" : "Indexing...");
         ImGui::Spacing();
@@ -267,10 +275,10 @@ namespace genesia::editor {
             if (found != workspace.activity.end() && (!task || found->second.id > task->id)) task = &found->second;
         }
         if (!task) return;
-        ImGui::TextDisabled("%s", runtime::states[std::size_t(task->state)].data());
         const auto* batch = std::get_if<runtime::BatchProgress>(&task->progress.value);
+        ImGui::TextDisabled("%s", task->state < runtime::State::complete && task->stopping ? "Stopping..." : task->state < runtime::State::complete && batch ? runtime::stages[std::size_t(batch->stage)].data() : runtime::states[std::size_t(task->state)].data());
         if (task->state < runtime::State::complete) {
-            if (batch) {
+            if (batch && batch->total) {
                 ImGui::ProgressBar(float(batch->completed) / batch->total, {-1, 3 * workspace.renderer.dpi}, "");
                 ImGui::Text("%zu / %zu", batch->completed, batch->total);
             }
@@ -278,6 +286,11 @@ namespace genesia::editor {
             if (!moving && ImGui::Button("Stop", {-FLT_MIN, 0})) workspace.runtime.session.cancel(task->id);
         }
         if (!task->error.empty()) ImGui::TextWrapped("%s", task->error.c_str());
+        if (const auto* normalized = std::get_if<dataset::NormalizeResult>(&task->result.value)) {
+            ImGui::TextWrapped("%zu PNG entries checked", normalized->files);
+            ImGui::TextWrapped("%zu copies replaced with hard links", normalized->linked);
+            ImGui::TextWrapped("%zu images renamed", normalized->renamed.size());
+        }
         if (const auto* classified = std::get_if<classification::Classification>(&task->result.value))
             for (const auto& [label, count] : classified->classes) ImGui::TextWrapped("%s / %zu images", label.c_str(), count);
     }

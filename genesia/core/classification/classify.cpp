@@ -37,7 +37,7 @@ namespace genesia::classification {
         for (const auto& image : images) {
             if (interrupted.load()) throw runtime::Stopped{};
             const auto result = predictions.infer(descriptor, image);
-            moves.push_back({image.path, root / files::path(result.label) / image.path.filename(), image.sha, image.entity});
+            moves.push_back({image.path, root / files::path(result.label) / image.path.filename(), image.sha});
             ++counts[result.label];
             progress({runtime::BatchProgress{runtime::Stage::classifying, moves.size(), images.size()}});
         }

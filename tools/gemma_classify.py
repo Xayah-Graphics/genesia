@@ -39,7 +39,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("directory", type=Path, help="Candidate image directory (not recursive)")
     parser.add_argument("--prompt", default=PROMPT, help="Requirement to check (default: PROMPT in this script)")
-    parser.add_argument("--think", action=argparse.BooleanOptionalAction, default=True, help="Enable thinking (default: on)")
+    parser.add_argument("--think", action=argparse.BooleanOptionalAction, default=False, help="Enable thinking (default: off)")
     parser.add_argument("--server", default=SERVER)
     parser.add_argument("--model", default=MODEL)
     parser.add_argument("--max-tokens", type=int, help="Output budget including thinking (default: 1024 off, 4096 on)")

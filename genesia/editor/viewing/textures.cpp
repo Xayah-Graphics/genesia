@@ -61,8 +61,8 @@ namespace genesia::editor {
         for (const auto& file : files) {
             if (!pinned.insert(file.sha).second) continue;
             const auto cached = entries.find(file.sha);
-            if (cached == entries.end()) missing.push_back(file);
-            else cached->second.touched = ++clock;
+            if (cached != entries.end()) cached->second.touched = ++clock;
+            else if (!paused) missing.push_back(file);
         }
         while (texture_bytes > 512ULL * 1024 * 1024) {
             auto oldest = entries.end();
@@ -98,19 +98,43 @@ namespace genesia::editor {
         condition.notify_all();
     }
 
+    void TextureCache::relocate(const std::span<const dataset::Move> moves) {
+        std::map<std::filesystem::path, const dataset::Move*> destinations;
+        for (const auto& move : moves) destinations.emplace(move.source, &move);
+        for (auto entry = entries.begin(); entry != entries.end();) {
+            auto& cached     = entry->second;
+            const auto found = destinations.find(cached.file.path);
+            if (found != destinations.end() && entry->first == found->second->sha) {
+                cached.file.path = cached.record.path = found->second->destination;
+                if (!cached.error.empty()) {
+                    entry = entries.erase(entry);
+                    continue;
+                }
+            }
+            ++entry;
+        }
+        {
+            const std::lock_guard lock{mutex};
+            requested.clear();
+            results.clear();
+            pending = false;
+        }
+        condition.notify_all();
+    }
+
     void TextureCache::read() {
-        std::set<std::filesystem::path> delivered;
+        std::vector<dataset::File> delivered;
         for (;;) {
             dataset::File task;
             {
                 std::unique_lock lock{mutex};
                 condition.wait(lock, [&] {
                     if (closing) return true;
-                    std::erase_if(delivered, [&](const auto& path) { return !std::ranges::contains(requested, path, &dataset::File::path); });
-                    return results.size() < 2 && std::ranges::any_of(requested, [&](const auto& file) { return !delivered.contains(file.path); });
+                    std::erase_if(delivered, [&](const auto& file) { return !std::ranges::contains(requested, file); });
+                    return results.size() < 2 && std::ranges::any_of(requested, [&](const auto& file) { return !std::ranges::contains(delivered, file); });
                 });
                 if (closing) break;
-                task = *std::ranges::find_if(requested, [&](const auto& file) { return !delivered.contains(file.path); });
+                task = *std::ranges::find_if(requested, [&](const auto& file) { return !std::ranges::contains(delivered, file); });
             }
             Decoded result{task};
             try {
@@ -121,8 +145,8 @@ namespace genesia::editor {
             }
             {
                 const std::lock_guard lock{mutex};
-                if (!std::ranges::contains(requested, task.path, &dataset::File::path)) continue;
-                delivered.insert(task.path);
+                if (!std::ranges::contains(requested, task)) continue;
+                delivered.push_back(task);
                 results.push_back(std::move(result));
                 pending = true;
             }

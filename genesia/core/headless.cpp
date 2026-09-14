@@ -28,7 +28,7 @@ namespace genesia::headless {
                     } else if constexpr (std::same_as<T, runtime::Train>) json["target"] = value.options.steps;
                     else if constexpr (std::same_as<T, runtime::Classify>) json["input"] = files::utf8(value.input);
                     else if constexpr (std::same_as<T, runtime::Fix>) json["category"] = value.category;
-                    else if constexpr (std::same_as<T, runtime::Delete>) {
+                    else if constexpr (std::same_as<T, runtime::Delete> || std::same_as<T, runtime::Normalize>) {
                         json.erase("concept");
                         json["dataset"] = value.root;
                     }
@@ -60,7 +60,8 @@ namespace genesia::headless {
                         std::vector<std::string> paths;
                         for (const auto& path : value.paths) paths.push_back(files::utf8(path));
                         json["result"] = {{"dataset", value.root}, {"sha", value.sha}, {"deleted", paths.size()}, {"paths", paths}};
-                    } else if constexpr (!std::same_as<T, std::monostate>) json["result"] = value;
+                    } else if constexpr (std::same_as<T, dataset::NormalizeResult>) json["result"] = {{"dataset", value.root}, {"files", value.files}, {"linked", value.linked}, {"renamed", value.renamed.size()}};
+                    else if constexpr (!std::same_as<T, std::monostate>) json["result"] = value;
                 },
                 task.result.value);
             return json;
@@ -82,6 +83,7 @@ genesia audit-fix ROOT/CONCEPT --sha SHA --to CATEGORY
 genesia audit-undo ROOT/CONCEPT
 genesia classify ROOT/CONCEPT --input DIRECTORY
 genesia delete ROOT --sha SHA
+genesia normalize ROOT
 
 Training config: physical_batch, effective_batch, head_only_steps, warmup_steps,
 head_only_lr, backbone_lr, head_lr, weight_decay, clip_norm, seed,
@@ -91,6 +93,8 @@ The type locks permanently when the first training record is created.
 Data or configuration changes require explicit --restart. Images and type are retained.
 Classification moves direct PNG images into DIRECTORY/predicted-class/original-name.
 Delete permanently removes all links to the image in ROOT, including its concepts.
+Normalize replaces identical PNG copies in ROOT with hard links and numbers each folder's
+direct images as 00001.png, 00002.png, ... by modification time. Dot directories are skipped.
 All generation outputs are saved into the project data/raw directory.
 Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
                 GENESIA_VERSION);
@@ -101,7 +105,7 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
         runtime::Request request;
         std::size_t begin = 1;
         if (!generating) {
-            if (arguments.size() < 2) throw std::runtime_error{command == "delete" ? "Specify ROOT" : "Specify ROOT/CONCEPT"};
+            if (arguments.size() < 2) throw std::runtime_error{command == "delete" || command == "normalize" ? "Specify ROOT" : "Specify ROOT/CONCEPT"};
             const std::string key{arguments[1]};
             begin = 2;
             if (command == "train") request.operation = runtime::Train{{.concept_key = key}};
@@ -112,6 +116,7 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
             else if (command == "classify") request.operation = runtime::Classify{key};
             else if (command == "concept") request.operation = runtime::Assign{key};
             else if (command == "delete") request.operation = runtime::Delete{key};
+            else if (command == "normalize") request.operation = runtime::Normalize{key};
             else throw std::runtime_error{"Unknown command: " + std::string{command}};
         }
         int count{1};

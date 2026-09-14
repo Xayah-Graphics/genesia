@@ -46,7 +46,7 @@ namespace genesia::classification {
         if (source.classes[sample->label] == category) throw std::runtime_error{"Image already belongs to this category"};
         const auto old_class = source.root / files::path(source.classes[sample->label]);
         std::vector<dataset::Move> moves;
-        for (const auto& path : sample->paths) moves.push_back({path, source.root / files::path(category) / path.lexically_relative(old_class), sample->file.sha, sample->file.entity});
+        for (const auto& path : sample->paths) moves.push_back({path, source.root / files::path(category) / path.lexically_relative(old_class), sample->file.sha});
         return dataset::move_images(std::move(moves), source.root / ".genesia" / "audit-moves.json");
     }
     dataset::MoveResult undo(const training::TrainingData& source) {

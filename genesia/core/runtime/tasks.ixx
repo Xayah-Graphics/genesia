@@ -51,17 +51,20 @@ export namespace genesia::runtime {
     struct Delete final {
         std::string root, sha;
     };
-    enum class Kind { generate, train, infer, audit, fix, undo, classify, assign, erase };
-    inline constexpr std::array<std::string_view, 9> kinds{"generate", "train", "infer", "audit", "fix", "undo", "classify", "assign", "delete"};
+    struct Normalize final {
+        std::string root;
+    };
+    enum class Kind { generate, train, infer, audit, fix, undo, classify, assign, erase, normalize };
+    inline constexpr std::array<std::string_view, 10> kinds{"generate", "train", "infer", "audit", "fix", "undo", "classify", "assign", "delete", "normalize"};
     struct Request final {
-        std::variant<Generate, Train, Infer, Audit, Fix, Undo, Classify, Assign, Delete> operation;
+        std::variant<Generate, Train, Infer, Audit, Fix, Undo, Classify, Assign, Delete, Normalize> operation;
     };
     struct Generated final {
         std::filesystem::path path;
         std::uint64_t seed{};
     };
     struct Result final {
-        std::variant<std::monostate, Generated, training::State, classification::Result, classification::Audit, dataset::MoveResult, classification::Classification, dataset::Concept, dataset::DeleteResult> value;
+        std::variant<std::monostate, Generated, training::State, classification::Result, classification::Audit, dataset::MoveResult, classification::Classification, dataset::Concept, dataset::DeleteResult, dataset::NormalizeResult> value;
     };
     struct TaskStatus final {
         std::uint64_t id{};

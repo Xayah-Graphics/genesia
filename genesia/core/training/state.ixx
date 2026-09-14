@@ -7,7 +7,7 @@ export namespace genesia::training {
         int physical_batch{4}, effective_batch{64}, head_only_steps{25}, warmup_steps{10};
         float head_only_lr{.001f}, backbone_lr{.00003f}, head_lr{.0003f}, weight_decay{.01f}, clip_norm{1};
         std::uint64_t seed{42};
-        int eval_interval{25}, save_interval{25}, log_interval{5};
+        int eval_interval{400}, save_interval{400}, log_interval{5};
         bool operator==(const Config&) const = default;
     };
     struct ClassMetric final {
