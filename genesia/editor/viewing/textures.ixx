@@ -7,7 +7,7 @@ export namespace genesia::editor {
     struct TextureCache final {
         struct Texture final {
             dataset::File file;
-            Record record;
+            std::optional<Record> record;
             std::uint64_t texture{}, touched{};
             std::size_t bytes{};
             std::string error;
@@ -27,7 +27,7 @@ export namespace genesia::editor {
         struct Decoded final {
             dataset::File file;
             Image image;
-            Record record;
+            std::optional<Record> record;
             std::string error;
         };
         Renderer& renderer;

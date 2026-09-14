@@ -15,6 +15,5 @@ export namespace genesia::dataset {
     ConceptType parse_concept_type(std::string_view name);
     void to_json(nlohmann::json& json, const Concept& value);
     Concept read_concept(std::string_view key);
-    Concept assign_type(std::string_view key, ConceptType type);
 
 } // namespace genesia::dataset

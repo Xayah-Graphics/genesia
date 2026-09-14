@@ -24,6 +24,7 @@ export namespace genesia::dataset {
         Collection all;
         std::vector<Collection> concepts;
         std::vector<File> files;
+        std::vector<std::filesystem::path> directories;
         std::vector<std::vector<std::filesystem::path>> conflicts;
         std::string error;
         bool ready{};
@@ -32,12 +33,14 @@ export namespace genesia::dataset {
         std::filesystem::path source, destination;
         std::string sha;
     };
+    std::string lora_issue(const Root& root, std::string_view key);
+    Concept assign_type(const Root& root, std::string_view key, ConceptType type);
     struct Index final {
         std::vector<Root> roots;
         std::uint64_t next_output{1};
         void flush();
         void scan(std::string_view name);
-        File identify(const std::filesystem::path& path, const Record* record = nullptr);
+        File identify(const std::filesystem::path& path, std::optional<std::array<int, 2>> dimensions = {});
         void insert(File file);
         std::vector<std::string> apply(std::span<const Move> moves);
         void rebuild(Root& root);

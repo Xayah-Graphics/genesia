@@ -105,7 +105,8 @@ namespace genesia::editor {
             auto& cached     = entry->second;
             const auto found = destinations.find(cached.file.path);
             if (found != destinations.end() && entry->first == found->second->sha) {
-                cached.file.path = cached.record.path = found->second->destination;
+                cached.file.path = found->second->destination;
+                if (cached.record) cached.record->path = cached.file.path;
                 if (!cached.error.empty()) {
                     entry = entries.erase(entry);
                     continue;
@@ -138,7 +139,7 @@ namespace genesia::editor {
             }
             Decoded result{task};
             try {
-                result.record = read_record(task.path);
+                result.record = read_image_info(task.path).record;
                 result.image  = read_image(task.path);
             } catch (const std::exception& error) {
                 result.error = std::format("{}: {}", task.path.string(), error.what());

@@ -28,6 +28,8 @@ namespace genesia::headless {
                     } else if constexpr (std::same_as<T, runtime::Train>) json["target"] = value.options.steps;
                     else if constexpr (std::same_as<T, runtime::Classify>) json["input"] = files::utf8(value.input);
                     else if constexpr (std::same_as<T, runtime::Fix>) json["category"] = value.category;
+                    else if constexpr (std::same_as<T, runtime::Caption>) json["folder"] = value.folder;
+                    else if constexpr (std::same_as<T, runtime::Export>) json["output"] = files::utf8(value.output);
                     else if constexpr (std::same_as<T, runtime::Delete> || std::same_as<T, runtime::Normalize>) {
                         json.erase("concept");
                         json["dataset"] = value.root;
@@ -61,6 +63,7 @@ namespace genesia::headless {
                         for (const auto& path : value.paths) paths.push_back(files::utf8(path));
                         json["result"] = {{"dataset", value.root}, {"sha", value.sha}, {"deleted", paths.size()}, {"paths", paths}};
                     } else if constexpr (std::same_as<T, dataset::NormalizeResult>) json["result"] = {{"dataset", value.root}, {"files", value.files}, {"linked", value.linked}, {"renamed", value.renamed.size()}};
+                    else if constexpr (std::same_as<T, caption::Exported>) json["result"] = {{"path", files::utf8(value.path)}, {"images", value.images}};
                     else if constexpr (!std::same_as<T, std::monostate>) json["result"] = value;
                 },
                 task.result.value);
@@ -84,11 +87,19 @@ genesia audit-undo ROOT/CONCEPT
 genesia classify ROOT/CONCEPT --input DIRECTORY
 genesia delete ROOT --sha SHA
 genesia normalize ROOT
+genesia caption ROOT/CONCEPT [--folder RELATIVE_DIRECTORY] [--tags "tag one, tag two"]
+genesia export ROOT/CONCEPT --output NEW_DIRECTORY
 
 Training config: physical_batch, effective_batch, head_only_steps, warmup_steps,
 head_only_lr, backbone_lr, head_lr, weight_decay, clip_norm, seed,
 eval_interval, save_interval, log_interval.
-Assign a concept type before training. LoRA can be assigned but cannot train yet.
+Assign a concept type before training. LoRA concepts manage captions and export for external training.
+LoRA concepts require exactly one path per image SHA, including hard links.
+Caption reads or replaces a folder's own tags. Effective captions start with the concept folder name
+as the trigger word, followed by tags from the selected folder up to the concept root.
+The default caption folder is the concept itself. --tags "" clears its own tags.
+Export copies PNG images and writes full inherited captions into a new directory outside data.
+Every directory, including the concept root and empty directories, needs its own tags.
 The type locks permanently when the first training record is created.
 Data or configuration changes require explicit --restart. Images and type are retained.
 Classification moves direct PNG images into DIRECTORY/predicted-class/original-name.
@@ -96,6 +107,8 @@ Delete permanently removes all links to the image in ROOT, including its concept
 Normalize replaces identical PNG copies in ROOT with hard links and numbers each folder's
 direct images as 00001.png, 00002.png, ... by modification time. Dot directories are skipped.
 All generation outputs are saved into the project data/raw directory.
+Dataset PNG images do not require a Genesia generation record.
+Repaint without a generation record requires --preset or --prompt-file.
 Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
                 GENESIA_VERSION);
             return 0;
@@ -117,6 +130,8 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
             else if (command == "concept") request.operation = runtime::Assign{key};
             else if (command == "delete") request.operation = runtime::Delete{key};
             else if (command == "normalize") request.operation = runtime::Normalize{key};
+            else if (command == "caption") request.operation = runtime::Caption{key};
+            else if (command == "export") request.operation = runtime::Export{key};
             else throw std::runtime_error{"Unknown command: " + std::string{command}};
         }
         int count{1};
@@ -168,6 +183,9 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
             else if (option == "--sha" && command == "audit-fix") std::get<runtime::Fix>(request.operation).sha = argument();
             else if (option == "--sha" && command == "delete") std::get<runtime::Delete>(request.operation).sha = argument();
             else if (option == "--to" && command == "audit-fix") std::get<runtime::Fix>(request.operation).category = argument();
+            else if (option == "--folder" && command == "caption") std::get<runtime::Caption>(request.operation).folder = files::utf8(files::path(argument()).lexically_normal());
+            else if (option == "--tags" && command == "caption") std::get<runtime::Caption>(request.operation).tags = caption::parse(argument());
+            else if (option == "--output" && command == "export") std::get<runtime::Export>(request.operation).output = files::path(argument());
             else throw std::runtime_error{"Unknown option for this command: " + std::string{option}};
         }
         if (count <= 0) throw std::runtime_error{"Count must be positive"};
@@ -175,18 +193,23 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
         if (repaint && (source.empty() || !denoise || *denoise < 0 || *denoise > 1)) throw std::runtime_error{"Repaint requires --source and --denoise in [0,1]"};
         if (command == "train" && !steps_set) throw std::runtime_error{"Training requires --steps"};
         if (command == "concept" && !type_set) throw std::runtime_error{"Specify --type none, classifier or lora"};
+        if (command == "export" && std::get<runtime::Export>(request.operation).output.empty()) throw std::runtime_error{"Specify --output NEW_DIRECTORY"};
         if (generating) {
             auto& operation   = std::get<runtime::Generate>(request.operation);
             operation.catalog = std::make_shared<const prompt::Catalog>();
             if (repaint) {
-                source               = std::filesystem::absolute(source).lexically_normal();
-                const auto record    = read_record(source);
-                auto resolved        = prompt::resolve(record.prompt, operation.catalog);
-                operation.parameters = record.parameters;
-                operation.prompt     = std::move(resolved.prompt);
-                operation.catalog    = std::move(resolved.catalog);
+                source           = std::filesystem::absolute(source).lexically_normal();
+                const auto image = read_image_info(source);
+                if (image.record) {
+                    auto resolved        = prompt::resolve(image.record->prompt, operation.catalog);
+                    operation.parameters = image.record->parameters;
+                    operation.prompt     = std::move(resolved.prompt);
+                    operation.catalog    = std::move(resolved.catalog);
+                } else if (!named_preset && prompt_file.empty()) throw std::runtime_error{"Repaint of a PNG without a generation record requires --preset or --prompt-file"};
+                operation.parameters.width  = image.width;
+                operation.parameters.height = image.height;
                 dataset::Index index;
-                operation.source             = runtime::RepaintSource{index.identify(source).sha, source};
+                operation.source             = runtime::RepaintSource{index.identify(source, std::array{image.width, image.height}).sha, source};
                 operation.parameters.denoise = *denoise;
             }
             if (!repaint || named_preset || !prompt_file.empty()) operation.prompt = prompt_file.empty() ? prompt::read_preset(name, *operation.catalog).prompt : prompt::read_prompt(prompt_file, *operation.catalog);

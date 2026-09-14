@@ -1,17 +1,11 @@
 module;
-#include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 module genesia.editor.panels.sidebars;
 import genesia.editor.widgets.controls;
 import genesia.editor.widgets.tags;
-import genesia.io.files;
 import genesia.editor.panels.datasets;
-import genesia.runtime.session;
-import genesia.runtime.catalog;
-import genesia.project;
 import genesia.prompt.preset;
-import genesia.editor.graphics.bridge;
 import std;
 namespace genesia::editor {
     void preset_dialogs(Workspace& workspace, const float scale) {
@@ -190,7 +184,7 @@ namespace genesia::editor {
                 } else if (image.record) {
                     const auto resolved = prompt::resolve(image.record->prompt, workspace.catalog);
                     show_prompt(resolved.prompt, *resolved.catalog, scale);
-                } else ImGui::TextDisabled(image.file ? "Loading prompt..." : "No image selected.");
+                } else ImGui::TextDisabled(image.texture ? "No generation record." : image.file ? "Loading image..." : "No image selected.");
             }
             ImGui::EndChild();
             ImGui::PopStyleVar();

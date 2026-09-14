@@ -11,6 +11,34 @@ import std;
 import genesia.io.files;
 
 namespace genesia::dataset {
+    std::string lora_issue(const Root& root, const std::string_view key) {
+        const auto folder = project::directory / files::path(key);
+        std::map<std::string, std::vector<std::filesystem::path>> resources;
+        for (const auto& file : root.files) {
+            const auto relative = file.path.lexically_relative(folder);
+            if (!relative.empty() && *relative.begin() != "..") resources[file.sha].push_back(file.path);
+        }
+        std::size_t count{};
+        std::string paths;
+        for (const auto& [sha, members] : resources) {
+            if (members.size() < 2) continue;
+            ++count;
+            paths += "\n\nSHA " + sha;
+            for (const auto& path : members) paths += "\n" + files::utf8(path);
+        }
+        return count ? std::format("{} duplicate image groups in LoRA concept {}. Each SHA must have exactly one path, including hard links.{}", count, key, paths) : "";
+    }
+    Concept assign_type(const Root& root, const std::string_view key, const ConceptType type) {
+        auto result = read_concept(key);
+        if (result.locked) throw std::runtime_error{"Concept type is locked by its training history: " + result.key};
+        if (type == ConceptType::lora) {
+            const auto issue = lora_issue(root, result.key);
+            if (!issue.empty()) throw std::runtime_error{issue};
+        }
+        result.type = type;
+        files::write_json(result.path / ".genesia" / "concept.json", result);
+        return result;
+    }
     void Index::flush() {
         if (!dirty) return;
         nlohmann::json files = nlohmann::json::object();
@@ -33,6 +61,7 @@ namespace genesia::dataset {
                 const auto& entry = *iterator;
                 if (entry.is_directory()) {
                     if (files::utf8(entry.path().filename()).starts_with('.')) iterator.disable_recursion_pending();
+                    else found.directories.push_back(entry.path());
                     continue;
                 }
                 auto extension = entry.path().extension().string();
@@ -54,7 +83,7 @@ namespace genesia::dataset {
             found.error = std::format("{}: {}", files::utf8(folder), error.what());
         }
     }
-    File Index::identify(const std::filesystem::path& path, const Record* record) {
+    File Index::identify(const std::filesystem::path& path, std::optional<std::array<int, 2>> dimensions) {
         load_cache();
         File result;
         result.path = path;
@@ -79,10 +108,13 @@ namespace genesia::dataset {
 #endif
         auto entry = cache.find(result.entity);
         if (entry == cache.end() || entry->second.modified != result.modified || entry->second.bytes != result.bytes) {
-            dirty          = true;
-            auto sha       = files::digest(path);
-            const auto png = record ? *record : read_record(path);
-            entry          = cache.insert_or_assign(result.entity, Cached{result.modified, result.bytes, std::move(sha), png.parameters.width, png.parameters.height}).first;
+            dirty    = true;
+            auto sha = files::digest(path);
+            if (!dimensions) {
+                const auto image = read_image_info(path);
+                dimensions       = std::array{image.width, image.height};
+            }
+            entry = cache.insert_or_assign(result.entity, Cached{result.modified, result.bytes, std::move(sha), (*dimensions)[0], (*dimensions)[1]}).first;
         }
         result.sha    = entry->second.sha;
         result.width  = entry->second.width;
@@ -119,6 +151,8 @@ namespace genesia::dataset {
         for (auto& collection : root.concepts) collection.images.clear();
         const auto folder = project::directory / files::path(root.all.key);
         for (const auto& file : root.files) {
+            for (auto parent = file.path.parent_path(); parent != folder; parent = parent.parent_path())
+                if (!std::ranges::contains(root.directories, parent)) root.directories.push_back(parent);
             const auto relative = file.path.lexically_relative(folder);
             if (std::distance(relative.begin(), relative.end()) < 2) continue;
             const auto name = files::utf8(*relative.begin());

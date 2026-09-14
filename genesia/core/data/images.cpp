@@ -9,15 +9,14 @@ import genesia.io.files;
 import std;
 
 namespace genesia {
-    Record read_record(const std::filesystem::path& path) {
+    ImageInfo read_image_info(const std::filesystem::path& path) {
         std::ifstream file{path, std::ios::binary};
         file.exceptions(std::ios::badbit | std::ios::failbit);
         std::array<unsigned char, 8> signature;
         file.read(reinterpret_cast<char*>(signature.data()), signature.size());
         if (signature != std::array<unsigned char, 8>{137, 80, 78, 71, 13, 10, 26, 10}) throw std::runtime_error{std::format("Not a PNG: {}", path.string())};
-        Record result;
-        result.path = path;
-        nlohmann::json metadata;
+        ImageInfo image;
+        std::optional<nlohmann::json> stored;
         for (;;) {
             std::uint32_t length;
             std::array<char, 4> type;
@@ -29,20 +28,25 @@ namespace genesia {
             if (chunk == "IHDR") {
                 std::array<std::uint32_t, 2> dimensions;
                 file.read(reinterpret_cast<char*>(dimensions.data()), 8);
-                result.parameters.width  = static_cast<int>(std::byteswap(dimensions[0]));
-                result.parameters.height = static_cast<int>(std::byteswap(dimensions[1]));
+                image.width  = static_cast<int>(std::byteswap(dimensions[0]));
+                image.height = static_cast<int>(std::byteswap(dimensions[1]));
                 file.seekg(length - 8, std::ios::cur);
-            } else if (chunk == "iTXt") {
+            } else if (chunk == "iTXt" || chunk == "tEXt" || chunk == "zTXt") {
                 std::string text(length, '\0');
                 file.read(text.data(), text.size());
-                if (text.starts_with(std::string_view{"genesia\0", 8})) {
-                    if (!text.starts_with(std::string_view{"genesia\0\0\0\0\0", 12})) throw std::runtime_error{"Unsupported Genesia PNG metadata encoding"};
-                    metadata = nlohmann::json::parse(text.begin() + 12, text.end());
+                if (std::string_view{text}.substr(0, text.find('\0')) == "genesia") {
+                    if (chunk != "iTXt" || !text.starts_with(std::string_view{"genesia\0\0\0\0\0", 12})) throw std::runtime_error{"Unsupported Genesia PNG metadata encoding"};
+                    stored = nlohmann::json::parse(text.begin() + 12, text.end());
                 }
             } else file.seekg(length, std::ios::cur);
             file.seekg(4, std::ios::cur);
         }
-        if (metadata.is_null()) throw std::runtime_error{std::format("Missing Genesia PNG metadata: {}", path.string())};
+        if (!stored) return image;
+        const auto& metadata     = *stored;
+        auto& result             = image.record.emplace();
+        result.path              = path;
+        result.parameters.width  = image.width;
+        result.parameters.height = image.height;
         if (metadata.at("version") != 1) throw std::runtime_error{"Unsupported Genesia PNG metadata version"};
         result.model            = files::path(metadata.at("model").get<std::string>());
         result.seed             = metadata.at("seed");
@@ -67,7 +71,7 @@ namespace genesia {
         }
         result.parameters.positive = result.prompt.sides[0].text;
         result.parameters.negative = result.prompt.sides[1].text;
-        return result;
+        return image;
     }
 
 

@@ -54,17 +54,25 @@ export namespace genesia::runtime {
     struct Normalize final {
         std::string root;
     };
-    enum class Kind { generate, train, infer, audit, fix, undo, classify, assign, erase, normalize };
-    inline constexpr std::array<std::string_view, 10> kinds{"generate", "train", "infer", "audit", "fix", "undo", "classify", "assign", "delete", "normalize"};
+    struct Caption final {
+        std::string concept_key, folder{"."};
+        std::optional<std::vector<std::string>> tags;
+    };
+    struct Export final {
+        std::string concept_key;
+        std::filesystem::path output;
+    };
+    enum class Kind { generate, train, infer, audit, fix, undo, classify, assign, erase, normalize, caption, export_dataset };
+    inline constexpr std::array<std::string_view, 12> kinds{"generate", "train", "infer", "audit", "fix", "undo", "classify", "assign", "delete", "normalize", "caption", "export"};
     struct Request final {
-        std::variant<Generate, Train, Infer, Audit, Fix, Undo, Classify, Assign, Delete, Normalize> operation;
+        std::variant<Generate, Train, Infer, Audit, Fix, Undo, Classify, Assign, Delete, Normalize, Caption, Export> operation;
     };
     struct Generated final {
         std::filesystem::path path;
         std::uint64_t seed{};
     };
     struct Result final {
-        std::variant<std::monostate, Generated, training::State, classification::Result, classification::Audit, dataset::MoveResult, classification::Classification, dataset::Concept, dataset::DeleteResult, dataset::NormalizeResult> value;
+        std::variant<std::monostate, Generated, training::State, classification::Result, classification::Audit, dataset::MoveResult, classification::Classification, dataset::Concept, dataset::DeleteResult, dataset::NormalizeResult, caption::Result, caption::Exported> value;
     };
     struct TaskStatus final {
         std::uint64_t id{};

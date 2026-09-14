@@ -9,3 +9,4 @@ build*
 AGENTS.md
 TODO.md
 /.genesia/
+/exports/

@@ -29,13 +29,4 @@ namespace genesia::dataset {
         } else if (std::filesystem::exists(state) && !std::filesystem::is_empty(state)) throw std::runtime_error{"Concept state has no type manifest: " + result.key};
         return result;
     }
-    Concept assign_type(const std::string_view key, const ConceptType type) {
-        const auto normalized = files::utf8(files::path(key));
-        auto result           = read_concept(normalized);
-        if (result.locked) throw std::runtime_error{"Concept type is locked by its training history: " + result.key};
-        result.type = type;
-        files::write_json(result.path / ".genesia" / "concept.json", result);
-        return result;
-    }
-
 } // namespace genesia::dataset

@@ -8,6 +8,7 @@ import genesia.editor.platform.window;
 import genesia.editor.graphics.interop;
 import genesia.editor.graphics.renderer;
 import genesia.editor.widgets.tags;
+import genesia.editor.widgets.captions;
 import genesia.editor.graphics.bridge;
 import genesia.editor.viewing.textures;
 import genesia.runtime.catalog;
@@ -20,7 +21,7 @@ export namespace genesia::editor {
         struct RepaintDraft final {
             prompt::Resolved document;
             PromptEditor editor;
-            RepaintDraft(const Record& source, std::shared_ptr<const prompt::Catalog> catalog);
+            RepaintDraft(const std::optional<Record>& source, std::shared_ptr<const prompt::Catalog> catalog);
         };
         struct TrainingDraft final {
             int steps{400};
@@ -31,7 +32,7 @@ export namespace genesia::editor {
             explicit TrainingDraft(const training::TrainingData& source);
         };
         enum class Page { generation, dataset, audit };
-        enum class ConceptTool { none, train, audit, classify };
+        enum class ConceptTool { none, train, audit, classify, tags, export_dataset };
         enum class View { browse, inspect, repaint, comparison, source, result };
         enum class Role { image, source, result };
         enum class ImageAction { none, click, repaint };
@@ -108,6 +109,11 @@ export namespace genesia::editor {
         std::string type_error;
         std::map<std::string, TrainingDraft> training_drafts;
         std::map<std::string, std::array<char, 2048>> classify_paths;
+        std::map<std::string, std::string> export_paths;
+        CaptionEditor caption_editor;
+        std::function<void()> caption_continuation;
+        std::string caption_folder{"."};
+        dataset::Collection folder_collection;
         classification::Audit audit_report;
         classification::Cache prediction_cache;
         runtime::Snapshot session_state;
@@ -149,6 +155,8 @@ export namespace genesia::editor {
         void receive();
         void synchronize_collection();
         void select_collection(std::string key, std::string sha = {});
+        void select_tool(ConceptTool tool);
+        bool save_caption(std::function<void()> continuation = {});
         Position& current_position();
         void center_image(std::size_t index);
         void start_repaint(const dataset::File& source);

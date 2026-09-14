@@ -6,6 +6,7 @@ module genesia.editor.viewing.canvas;
 import genesia.editor.widgets.controls;
 import genesia.editor.widgets.tags;
 import genesia.io.files;
+import genesia.data.captions;
 import genesia.runtime.session;
 import genesia.runtime.catalog;
 import genesia.project;
@@ -135,13 +136,38 @@ namespace genesia::editor {
         }
         draw->PopClipRect();
         const auto results = image.texture ? image_results(workspace, image) : std::vector<Workspace::ImageResult>{};
-        if (!results.empty()) {
-            const float left    = std::max(origin.x, minimum.x);
-            const float right   = std::min(origin.x + size.x, maximum.x);
-            const float top     = std::max(origin.y, minimum.y);
-            const float bottom  = std::min(origin.y + size.y, maximum.y);
-            const float padding = 12 * scale;
-            float height{}, width{};
+        std::string caption_text;
+        if (image.texture && image.file && !image.preview && workspace.page != Workspace::Page::generation) {
+            const auto source = workspace.library.captions.find(workspace.collection_key);
+            if (source != workspace.library.captions.end()) {
+                const auto relative = image.file->path.lexically_relative(project::directory / files::path(source->first));
+                if (!relative.empty() && *relative.begin() != "..") {
+                    const auto folder = relative.has_parent_path() ? files::utf8(relative.parent_path()) : ".";
+                    caption_text      = caption::compose(caption::resolve(source->second.document, source->second.key, folder));
+                }
+            }
+        }
+        if (!caption_text.empty() || !results.empty()) {
+            const float left       = std::max(origin.x, minimum.x);
+            const float right      = std::min(origin.x + size.x, maximum.x);
+            const float top        = std::max(origin.y, minimum.y);
+            const float bottom     = std::min(origin.y + size.y, maximum.y);
+            const float padding    = 12 * scale;
+            const float text_width = right - left - 2 * padding - 8 * scale;
+            if (text_width <= 0 || bottom <= top) return action;
+            std::array<std::string_view, 2> caption_lines;
+            std::size_t line_count{};
+            if (!caption_text.empty()) {
+                const auto* begin           = caption_text.data();
+                const auto* end             = begin + caption_text.size();
+                const auto* wrap            = ImGui::GetFont()->CalcWordWrapPosition(ImGui::GetFontSize(), begin, end, text_width);
+                caption_lines[line_count++] = {begin, wrap};
+                while (wrap != end && *wrap == ' ') ++wrap;
+                if (wrap != end) caption_lines[line_count++] = {wrap, end};
+            }
+            const float caption_height = line_count ? line_count * (ImGui::GetFontSize() + 4 * scale) + 4 * scale : 0;
+            float height               = caption_height;
+            float width                = ImGui::CalcTextSize(caption_text.c_str()).x;
             for (const auto& entry : results) {
                 height += ImGui::GetFontSize() + 8 * scale;
                 width = std::max(width, ImGui::CalcTextSize(entry.summary.c_str()).x);
@@ -158,6 +184,17 @@ namespace genesia::editor {
             const auto shade = ImGui::GetColorU32(ImVec4{0.025F, 0.03F, 0.04F, 0.62F});
             const auto clear = ImGui::GetColorU32(ImVec4{0.025F, 0.03F, 0.04F, 0});
             draw->AddRectFilledMultiColor({position.x - 6 * scale, position.y - 4 * scale}, {text_right + 6 * scale, bottom - padding + 4 * scale}, shade, clear, clear, shade);
+            if (line_count) {
+                for (std::size_t i = 0; i < line_count; ++i) control_text(caption_lines[i], {position.x + 4 * scale, position.y + 4 * scale + i * (ImGui::GetFontSize() + 4 * scale)}, text_right, {0.96F, 0.80F, 0.55F, 1}, scale);
+                if (hovered && !workspace.view.dragging && ImGui::IsMouseHoveringRect(position, {text_right, position.y + caption_height})) {
+                    ImGui::BeginTooltip();
+                    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + std::min(600 * scale, ImGui::GetMainViewport()->WorkSize.x - 32 * scale));
+                    ImGui::TextUnformatted(caption_text.c_str());
+                    ImGui::PopTextWrapPos();
+                    ImGui::EndTooltip();
+                }
+                position.y += caption_height;
+            }
             for (const auto& entry : results) {
                 const float row_height = ImGui::GetFontSize() + 8 * scale + (entry.annotation.empty() ? 0 : ImGui::GetFontSize() + 4 * scale);
                 const auto ink         = entry.failed ? ImVec4{0.95F, 0.49F, 0.42F, 1} : ImGui::GetStyleColorVec4(ImGuiCol_Text);
@@ -192,6 +229,7 @@ namespace genesia::editor {
         ImGui::PushClipRect(origin, {origin.x + available.x, origin.y + available.y}, true);
         std::vector<dataset::File> wanted;
         std::optional<dataset::File> repaint_source;
+        const bool dataset_ready = workspace.collection && workspace.root && workspace.root->ready;
         if (workspace.page == Workspace::Page::generation) {
             if (workspace.generation.saved) wanted.push_back(*workspace.generation.saved);
             const auto image = workspace.resolve_output(workspace.generation);
@@ -211,16 +249,7 @@ namespace genesia::editor {
                 draw->AddCircle({center.x, center.y - 88 * scale}, 14 * scale, IM_COL32(145, 142, 225, 180), 32, 1.5F * scale);
                 draw->AddCircleFilled({center.x + 14 * scale, center.y - 100 * scale}, 3 * scale, IM_COL32(184, 182, 250, 255));
             }
-        } else if (!workspace.collection || !workspace.root || !workspace.root->ready) {
-            ImGui::SetCursorScreenPos({origin.x + 16 * scale, (top_strip_height + 24) * scale});
-            if (!workspace.library.ready) ImGui::TextDisabled("Indexing datasets...");
-            else if (!workspace.collection || !workspace.root) ImGui::TextWrapped("Dataset does not exist: %s", workspace.collection_key.c_str());
-            else {
-                ImGui::TextColored({0.95F, 0.49F, 0.42F, 1}, "Dataset needs attention");
-                if (!workspace.root->error.empty()) ImGui::TextWrapped("%s", workspace.root->error.c_str());
-                if (!workspace.root->conflicts.empty()) ImGui::TextWrapped("Identical images are stored as independent files. Open the dataset sidebar to see all conflict paths.");
-            }
-        } else if (workspace.repaint) {
+        } else if (dataset_ready && workspace.repaint) {
             wanted.push_back(workspace.repaint->source);
             if (workspace.repaint->result.saved) wanted.push_back(*workspace.repaint->result.saved);
             const auto source = workspace.resolve_image(workspace.repaint->source, Workspace::Role::source);
@@ -247,10 +276,7 @@ namespace genesia::editor {
                 const auto image = workspace.viewing == Workspace::View::result ? result : source;
                 if (image_panel(workspace, "##RepaintImage", image, origin, available, scale, true) == Workspace::ImageAction::repaint) repaint_source = image.file;
             }
-        } else if (workspace.collection->images.empty()) {
-            ImGui::SetCursorScreenPos({origin.x + 16 * scale, (top_strip_height + 24) * scale});
-            ImGui::TextDisabled("This dataset is empty.");
-        } else {
+        } else if (dataset_ready && !workspace.collection->images.empty()) {
             auto& position = workspace.current_position();
             if (workspace.viewing == Workspace::View::inspect) {
                 const auto& file = workspace.collection->images[position.index];

@@ -1,5 +1,6 @@
 export module genesia.runtime.catalog;
 export import genesia.data.datasets;
+export import genesia.data.captions;
 export import genesia.training.samples;
 import std;
 export namespace genesia::runtime {
@@ -7,6 +8,7 @@ export namespace genesia::runtime {
         std::vector<dataset::Root> roots;
         std::map<std::string, dataset::Concept> concepts;
         std::map<std::string, training::TrainingData> classifiers;
+        std::map<std::string, caption::Dataset> captions;
         std::map<std::string, std::string> concept_errors;
         bool ready{};
     };

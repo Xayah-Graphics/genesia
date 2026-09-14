@@ -83,6 +83,7 @@ target_sources(genesia_core
         genesia/core/compute/inference.cpp
         genesia/core/compute/plans.cpp
         genesia/core/data/concepts.cpp
+        genesia/core/data/captions.cpp
         genesia/core/data/datasets.cpp
         genesia/core/data/images.cpp
         genesia/core/data/transactions.cpp
@@ -126,6 +127,7 @@ target_sources(genesia_core
         genesia/core/compute/inference.ixx
         genesia/core/compute/plans.ixx
         genesia/core/data/concepts.ixx
+        genesia/core/data/captions.ixx
         genesia/core/data/datasets.ixx
         genesia/core/data/images.ixx
         genesia/core/data/transactions.ixx
@@ -213,6 +215,7 @@ if (GENESIA_BUILD_UI)
             genesia/editor/viewing/textures.cpp
             genesia/editor/widgets/controls.cpp
             genesia/editor/widgets/tag-editor.cpp
+            genesia/editor/widgets/captions.cpp
             genesia/editor/workspace.cpp
             PUBLIC FILE_SET cxx_modules TYPE CXX_MODULES FILES
             genesia/editor/editor.ixx
@@ -231,6 +234,7 @@ if (GENESIA_BUILD_UI)
             genesia/editor/viewing/textures.ixx
             genesia/editor/widgets/controls.ixx
             genesia/editor/widgets/tag-editor.ixx
+            genesia/editor/widgets/captions.ixx
             genesia/editor/workspace.ixx
     )
     target_compile_definitions(

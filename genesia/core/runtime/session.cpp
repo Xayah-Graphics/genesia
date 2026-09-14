@@ -77,7 +77,7 @@ namespace genesia::runtime {
             if (!active || active->id != id) return;
             const auto kind   = active->kind;
             const auto* batch = std::get_if<BatchProgress>(&active->progress.value);
-            if (kind == Kind::fix || kind == Kind::undo || kind == Kind::assign || kind == Kind::erase || (batch && batch->stage == Stage::moving)) return;
+            if (kind == Kind::fix || kind == Kind::undo || kind == Kind::assign || kind == Kind::erase || kind == Kind::caption || (batch && batch->stage == Stage::moving)) return;
             interrupted      = true;
             active->stopping = true;
             if (kind == Kind::generate) engine = generation;
@@ -105,7 +105,7 @@ namespace genesia::runtime {
             result.active   = active;
             result.idle     = !active && !loading && !inferring && wanted.empty() && inspect_key.empty();
             result.finished = worker_done;
-            result.pending  = !delivery.events.empty() || !delivery.previews.empty() || delivery.catalog.ready || !delivery.catalog.roots.empty() || !delivery.catalog.concepts.empty() || !delivery.catalog.classifiers.empty() || !delivery.catalog.concept_errors.empty();
+            result.pending  = !delivery.events.empty() || !delivery.previews.empty() || delivery.catalog.ready || !delivery.catalog.roots.empty() || !delivery.catalog.concepts.empty() || !delivery.catalog.classifiers.empty() || !delivery.catalog.captions.empty() || !delivery.catalog.concept_errors.empty();
             result.error    = error;
             engine          = generation;
         }
@@ -150,6 +150,7 @@ namespace genesia::runtime {
             }
             for (auto& [key, value] : update.concepts) delivery.catalog.concepts[key] = std::move(value);
             for (auto& [key, value] : update.classifiers) delivery.catalog.classifiers[key] = std::move(value);
+            for (auto& [key, value] : update.captions) delivery.catalog.captions[key] = std::move(value);
             for (auto& [key, value] : update.concept_errors) delivery.catalog.concept_errors[key] = std::move(value);
             delivery.catalog.ready |= update.ready;
         }
@@ -325,6 +326,8 @@ namespace genesia::runtime {
                     update_catalog(catalog.root(operation.root));
                     for (const auto& [key, info] : catalog.classifiers)
                         if (info.inspected && info.root.parent_path() == project::directory / root) update_catalog(catalog.describe(key, true));
+                    for (const auto& collection : std::ranges::find(catalog.index.roots, operation.root, [](const dataset::Root& value) { return value.all.key; })->concepts)
+                        if (dataset::read_concept(collection.key).type == dataset::ConceptType::lora) update_catalog(catalog.describe(collection.key, true));
                     {
                         const std::lock_guard lock{mutex};
                         wanted.clear();
@@ -349,9 +352,23 @@ namespace genesia::runtime {
                     }();
                     update_catalog(catalog.load(files::utf8(*files::path(key).begin())));
                     if constexpr (std::same_as<T, Assign>) {
-                        const auto result = dataset::assign_type(key, operation.type);
+                        const auto& root  = *std::ranges::find(catalog.index.roots, files::utf8(*files::path(key).begin()), [](const dataset::Root& value) { return value.all.key; });
+                        const auto result = dataset::assign_type(root, key, operation.type);
                         update_catalog(catalog.describe(key));
                         emit(State::complete, {}, {result});
+                    } else if constexpr (std::same_as<T, Caption> || std::same_as<T, Export>) {
+                        const auto assigned = dataset::read_concept(key);
+                        if (assigned.type != dataset::ConceptType::lora) throw std::runtime_error{"Assign the LoRA type before managing captions or exporting: " + key};
+                        const auto& root  = *std::ranges::find(catalog.index.roots, files::utf8(*files::path(key).begin()), [](const dataset::Root& value) { return value.all.key; });
+                        const auto source = caption::inspect(assigned, root);
+                        if constexpr (std::same_as<T, Caption>) {
+                            const auto result = caption::edit(source, operation.folder, operation.tags);
+                            if (operation.tags) update_catalog(catalog.describe(key));
+                            emit(State::complete, {}, {result});
+                        } else {
+                            const auto result = caption::export_dataset(source, root, operation.output, interrupted, [&](const std::size_t completed, const std::size_t total) { progress({BatchProgress{Stage::exporting, completed, total}}); });
+                            emit(State::complete, {}, {result});
+                        }
                     } else {
                         const auto source = catalog.inspect(key);
                         if constexpr (std::same_as<T, Train>) {

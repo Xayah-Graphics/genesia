@@ -11,5 +11,7 @@ export namespace genesia::editor {
     void operation_activity(Workspace& workspace, std::initializer_list<runtime::Kind> kinds, std::string_view key);
     void training_controls(Workspace& workspace, const training::TrainingData& source, float scale);
     void classify_controls(Workspace& workspace, const training::TrainingData& source);
+    void caption_controls(Workspace& workspace, const caption::Dataset& source, float scale);
+    void export_controls(Workspace& workspace, const caption::Dataset& source);
     void audit_controls(Workspace& workspace, const training::TrainingData& source);
 } // namespace genesia::editor

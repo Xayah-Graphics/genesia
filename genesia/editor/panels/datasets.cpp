@@ -2,6 +2,7 @@ module;
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <misc/cpp/imgui_stdlib.h>
 module genesia.editor.panels.datasets;
 import genesia.editor.widgets.controls;
 import genesia.editor.widgets.tags;
@@ -15,15 +16,17 @@ import std;
 namespace genesia::editor {
     void dataset_controls(Workspace& workspace, const float scale) {
         if (workspace.collection && workspace.root) {
-            const auto title = ImGui::GetCursorScreenPos();
+            const auto concept_item = std::ranges::find(workspace.root->concepts, workspace.collection_key, &dataset::Collection::key);
+            const auto& selected    = concept_item == workspace.root->concepts.end() ? workspace.root->all : *concept_item;
+            const auto title        = ImGui::GetCursorScreenPos();
             const ImVec2 title_size{ImGui::GetContentRegionAvail().x, ImGui::GetTextLineHeight()};
             ImGui::Dummy(title_size);
-            ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(), title, {title.x + title_size.x, title.y + title_size.y}, title.x + title_size.x, workspace.collection->name.c_str(), nullptr, nullptr);
+            ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(), title, {title.x + title_size.x, title.y + title_size.y}, title.x + title_size.x, selected.name.c_str(), nullptr, nullptr);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", workspace.collection_key.c_str());
-            if (workspace.collection_key == workspace.root->all.key) ImGui::TextDisabled("%zu images", workspace.collection->images.size());
+            if (workspace.collection_key == workspace.root->all.key) ImGui::TextDisabled("%zu images", selected.images.size());
             else {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-                ImGui::TextWrapped("%s / %zu images", workspace.root->all.name.c_str(), workspace.collection->images.size());
+                ImGui::TextWrapped("%s / %zu images", workspace.root->all.name.c_str(), selected.images.size());
                 ImGui::PopStyleColor();
             }
             const auto metadata = workspace.library.concepts.find(workspace.collection_key);
@@ -51,54 +54,49 @@ namespace genesia::editor {
                                 workspace.type_error.clear();
                                 break;
                             }
-                            try {
-                                workspace.submit_task({runtime::Assign{workspace.collection_key, static_cast<dataset::ConceptType>(i)}});
-                                workspace.training_drafts.erase(workspace.collection_key);
-                                workspace.concept_tool  = Workspace::ConceptTool::none;
-                                workspace.choosing_type = false;
-                                workspace.type_error.clear();
-                            } catch (const std::exception& error) {
-                                workspace.type_error = error.what();
-                            }
+                            const auto assign = [&workspace, type = static_cast<dataset::ConceptType>(i)] {
+                                try {
+                                    workspace.submit_task({runtime::Assign{workspace.collection_key, type}});
+                                    workspace.training_drafts.erase(workspace.collection_key);
+                                    workspace.concept_tool  = Workspace::ConceptTool::none;
+                                    workspace.choosing_type = false;
+                                    workspace.type_error.clear();
+                                } catch (const std::exception& error) {
+                                    workspace.type_error = error.what();
+                                }
+                            };
+                            if (workspace.save_caption(assign)) assign();
                             break;
                         }
                 }
                 if (!workspace.type_error.empty()) ImGui::TextWrapped("%s", workspace.type_error.c_str());
                 if (failure != workspace.library.concept_errors.end()) ImGui::TextWrapped("%s", failure->second.c_str());
-                else if (assigned.type == dataset::ConceptType::lora) {
-                    ImGui::TextWrapped("LoRA training is not available yet.");
-                    ImGui::BeginDisabled();
-                    ImGui::Button("Train LoRA", {-FLT_MIN, 0});
-                    ImGui::EndDisabled();
-                } else if (assigned.type == dataset::ConceptType::classifier) {
-                    const auto info = workspace.library.classifiers.find(workspace.collection_key);
-                    if (info == workspace.library.classifiers.end()) ImGui::TextDisabled("Reading classifier data...");
+                else if (assigned.type != dataset::ConceptType::none) {
+                    const bool lora       = assigned.type == dataset::ConceptType::lora;
+                    const auto captions   = workspace.library.captions.find(workspace.collection_key);
+                    const auto classifier = workspace.library.classifiers.find(workspace.collection_key);
+                    const bool available  = lora ? captions != workspace.library.captions.end() : classifier != workspace.library.classifiers.end();
+                    if (!available) ImGui::TextDisabled("Reading concept data...");
                     else {
-                        const auto& source   = info->second;
-                        const bool published = source.model.has_value();
-                        const bool active    = std::ranges::contains(workspace.activated, workspace.collection_key);
+                        const bool published = !lora && classifier->second.model.has_value();
                         if (!workspace.choosing_type && workspace.type_error.empty()) ImGui::SameLine(0, 8 * scale);
-                        if (published) ImGui::TextColored(color, "%s", active ? "Active" : "Model available");
+                        if (lora) ImGui::TextDisabled("External training");
+                        else if (published) ImGui::TextColored(color, "%s", std::ranges::contains(workspace.activated, workspace.collection_key) ? "Active" : "Model available");
                         else ImGui::TextDisabled("No published model");
-                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", published ? "Middle-click this concept in the dataset list to activate or deactivate its model." : "A model becomes available after training reaches its target and finishes saving.");
-                        const bool audit_available    = published;
-                        const bool classify_available = published;
-                        const int buttons             = 1 + int(audit_available) + int(classify_available);
-                        const float gap               = 4 * scale;
-                        const float width             = (ImGui::GetContentRegionAvail().x - (buttons - 1) * gap) / buttons;
+                        if (!lora && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", published ? "Middle-click this concept in the dataset list to activate or deactivate its model." : "A model becomes available after training reaches its target and finishes saving.");
+                        const int buttons = lora ? 2 : published ? 3 : 1;
+                        const float gap   = 4 * scale;
+                        const float width = (ImGui::GetContentRegionAvail().x - (buttons - 1) * gap) / buttons;
                         ImGui::Spacing();
-                        for (const auto [tool, label] : {std::pair{Workspace::ConceptTool::train, "Train"}, std::pair{Workspace::ConceptTool::audit, "Audit"}, std::pair{Workspace::ConceptTool::classify, "Classify"}}) {
-                            if ((tool == Workspace::ConceptTool::audit && !audit_available) || (tool == Workspace::ConceptTool::classify && !classify_available)) continue;
-                            if (tool != Workspace::ConceptTool::train) ImGui::SameLine(0, gap);
+                        int column{};
+                        for (const auto [tool, label] : {std::pair{Workspace::ConceptTool::train, "Train"}, std::pair{Workspace::ConceptTool::audit, "Audit"}, std::pair{Workspace::ConceptTool::classify, "Classify"}, std::pair{Workspace::ConceptTool::tags, "Tags"}, std::pair{Workspace::ConceptTool::export_dataset, "Export"}}) {
+                            if (lora != (tool == Workspace::ConceptTool::tags || tool == Workspace::ConceptTool::export_dataset)) continue;
+                            if (!lora && !published && tool != Workspace::ConceptTool::train) continue;
+                            if (column++) ImGui::SameLine(0, gap);
                             const bool current = workspace.concept_tool == tool;
                             ImGui::PushStyleColor(ImGuiCol_Button, {color.x, color.y, color.z, current ? 0.08F : 0});
                             ImGui::PushStyleColor(ImGuiCol_Text, current ? ImGui::GetStyleColorVec4(ImGuiCol_Text) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-                            if (ImGui::Button(label, {width, 30 * scale})) {
-                                if (tool == Workspace::ConceptTool::audit && (workspace.page != Workspace::Page::audit || workspace.repaint)) {
-                                    workspace.open_audit(workspace.collection_key);
-                                    if (workspace.page == Workspace::Page::audit && !workspace.repaint) workspace.concept_tool = Workspace::ConceptTool::audit;
-                                } else workspace.concept_tool = current ? Workspace::ConceptTool::none : tool;
-                            }
+                            if (ImGui::Button(label, {width, 30 * scale})) workspace.select_tool(tool);
                             ImGui::PopStyleColor(2);
                             if (workspace.concept_tool == tool) {
                                 const auto minimum = ImGui::GetItemRectMin();
@@ -109,12 +107,17 @@ namespace genesia::editor {
                         if (workspace.concept_tool != Workspace::ConceptTool::none) {
                             ImGui::PushID(workspace.collection_key.c_str());
                             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {4 * scale, 6 * scale});
-                            ImGui::SetNextWindowSizeConstraints({0, 0}, {FLT_MAX, std::max(1.0F, ImGui::GetContentRegionAvail().y * 0.45F)});
-                            if (ImGui::BeginChild("##ConceptTool", {0, 0}, ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoBackground)) {
-                                if (!source.inspected && workspace.concept_tool != Workspace::ConceptTool::classify) ImGui::TextDisabled("Reading concept samples...");
-                                else if (workspace.concept_tool == Workspace::ConceptTool::train) training_controls(workspace, source, scale);
-                                else if (workspace.concept_tool == Workspace::ConceptTool::audit) audit_controls(workspace, source);
-                                else classify_controls(workspace, source);
+                            const bool tags    = lora && workspace.concept_tool == Workspace::ConceptTool::tags;
+                            const float height = std::max(1.0F, ImGui::GetContentRegionAvail().y * 0.45F);
+                            ImGui::SetNextWindowSizeConstraints({0, 0}, {FLT_MAX, height});
+                            if (ImGui::BeginChild("##ConceptTool", {0, tags ? height : 0}, ImGuiChildFlags_AlwaysUseWindowPadding | (tags ? ImGuiChildFlags_None : ImGuiChildFlags_AutoResizeY), ImGuiWindowFlags_NoBackground | (tags ? ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse : 0))) {
+                                if (lora) {
+                                    if (workspace.concept_tool == Workspace::ConceptTool::tags) caption_controls(workspace, captions->second, scale);
+                                    else export_controls(workspace, captions->second);
+                                } else if (!classifier->second.inspected && workspace.concept_tool != Workspace::ConceptTool::classify) ImGui::TextDisabled("Reading concept samples...");
+                                else if (workspace.concept_tool == Workspace::ConceptTool::train) training_controls(workspace, classifier->second, scale);
+                                else if (workspace.concept_tool == Workspace::ConceptTool::audit) audit_controls(workspace, classifier->second);
+                                else classify_controls(workspace, classifier->second);
                             }
                             ImGui::EndChild();
                             ImGui::PopStyleVar();
@@ -133,7 +136,8 @@ namespace genesia::editor {
                 operation_activity(workspace, {runtime::Kind::normalize}, workspace.collection_key);
             }
             if (!workspace.root->ready) ImGui::TextColored({0.95F, 0.49F, 0.42F, 1}, "Index error / details below");
-        } else ImGui::TextDisabled(workspace.library.ready ? "Choose a dataset" : "Indexing...");
+        } else if (workspace.library.ready && workspace.page != Workspace::Page::generation) ImGui::TextWrapped("Dataset does not exist: %s", workspace.collection_key.c_str());
+        else ImGui::TextDisabled(workspace.library.ready ? "Choose a dataset" : "Indexing...");
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
@@ -180,29 +184,31 @@ namespace genesia::editor {
             if (open) {
                 for (const auto& item : entry.concepts) {
                     ImGui::PushID(item.key.c_str());
-                    const auto metadata  = workspace.library.concepts.find(item.key);
-                    const auto info      = workspace.library.classifiers.find(item.key);
-                    const auto failure   = workspace.library.concept_errors.find(item.key);
-                    const bool published = info != workspace.library.classifiers.end() && info->second.model.has_value();
-                    const bool enabled   = std::ranges::contains(workspace.activated, item.key);
-                    const auto origin    = ImGui::GetCursorScreenPos();
-                    const float width    = ImGui::GetContentRegionAvail().x;
-                    const float height   = ImGui::GetTextLineHeight() + 8 * scale;
+                    const auto metadata     = workspace.library.concepts.find(item.key);
+                    const auto info         = workspace.library.classifiers.find(item.key);
+                    const auto failure      = workspace.library.concept_errors.find(item.key);
+                    const auto caption_data = workspace.library.captions.find(item.key);
+                    const bool lora_invalid = caption_data != workspace.library.captions.end() && !caption_data->second.issue.empty();
+                    const bool published    = info != workspace.library.classifiers.end() && info->second.model.has_value();
+                    const bool enabled      = std::ranges::contains(workspace.activated, item.key);
+                    const auto origin       = ImGui::GetCursorScreenPos();
+                    const float width       = ImGui::GetContentRegionAvail().x;
+                    const float height      = ImGui::GetTextLineHeight() + 8 * scale;
+                    auto* draw              = ImGui::GetWindowDrawList();
+                    const ImVec2 minimum{origin.x, origin.y};
+                    const ImVec2 maximum{std::min(origin.x + width, draw->GetClipRectMax().x), origin.y + height};
                     if (ImGui::Selectable("##Concept", workspace.collection_key == item.key, ImGuiSelectableFlags_None, {width, height})) selected = item.key;
                     const bool hovered = ImGui::IsItemHovered();
                     if (published && ImGui::IsItemClicked(ImGuiMouseButton_Middle)) {
                         if (enabled) std::erase(workspace.activated, item.key);
                         else workspace.activated.push_back(item.key);
                     }
-                    auto* draw = ImGui::GetWindowDrawList();
-                    const ImVec2 minimum{origin.x, origin.y};
-                    const ImVec2 maximum{std::min(origin.x + width, draw->GetClipRectMax().x), origin.y + height};
                     const float y    = origin.y + 4 * scale;
                     const auto count = std::to_string(item.images.size());
                     float right      = maximum.x - 6 * scale - ImGui::CalcTextSize(count.c_str()).x;
                     draw->AddText({right, y}, ImGui::GetColorU32(ImGuiCol_TextDisabled), count.c_str());
                     right -= 8 * scale;
-                    if (failure != workspace.library.concept_errors.end()) {
+                    if (failure != workspace.library.concept_errors.end() || lora_invalid) {
                         right -= ImGui::CalcTextSize("!").x;
                         draw->AddText({right, y}, ImGui::GetColorU32(ImVec4{0.95F, 0.49F, 0.42F, 1}), "!");
                         right -= 8 * scale;
@@ -245,6 +251,7 @@ namespace genesia::editor {
                             }
                         }
                         if (failure != workspace.library.concept_errors.end()) ImGui::TextColored({0.95F, 0.49F, 0.42F, 1}, "%s", failure->second.c_str());
+                        if (lora_invalid) ImGui::TextColored({0.95F, 0.49F, 0.42F, 1}, "Duplicate images in LoRA concept");
                         ImGui::PopTextWrapPos();
                         ImGui::EndTooltip();
                     }
@@ -373,7 +380,7 @@ namespace genesia::editor {
         ImGui::PushStyleColor(ImGuiCol_Header, {0, 0, 0, 0});
         if (ImGui::CollapsingHeader("Categories & checks")) {
             for (std::size_t i = 0; i < counts.size(); ++i) ImGui::TextWrapped("%s / %zu images", source.classes[i].c_str(), counts[i]);
-            ImGui::TextWrapped("Training checks metadata, original sizes, labels and independent train / validation groups before loading the model.");
+            ImGui::TextWrapped("Training checks original sizes, labels and independent train / validation groups before loading the model. Generation records are optional.");
         }
         if (ImGui::CollapsingHeader("Parameters")) {
             ImGui::BeginDisabled(busy);
@@ -460,6 +467,235 @@ namespace genesia::editor {
         ImGui::EndDisabled();
         ImGui::EndDisabled();
         operation_activity(workspace, {runtime::Kind::classify}, source.key);
+    }
+
+    void caption_controls(Workspace& workspace, const caption::Dataset& source, const float scale) {
+        auto& editor        = workspace.caption_editor;
+        const auto identity = source.key + "/" + workspace.caption_folder;
+        const auto found    = source.document.folders.find(workspace.caption_folder);
+        const auto text     = found == source.document.folders.end() ? std::string{} : caption::compose(found->second);
+        const bool changed  = editor.key != identity;
+        if (changed) editor = {.key = identity, .input = text, .saved = text};
+        else if (!editor.task && editor.input == editor.saved) editor.input = editor.saved = text;
+        const auto& folder = workspace.caption_folder;
+        const auto red     = ImVec4{0.98F, 0.34F, 0.32F, 1};
+        const auto status  = std::format("{} / {} directories complete{}", source.folders.size() - source.missing_tags.size(), source.folders.size(), source.missing_tags.empty() ? std::string{} : std::format(" / {} missing tags", source.missing_tags.size()));
+        ImGui::PushStyleColor(ImGuiCol_Text, source.missing_tags.empty() ? ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled) : red);
+        ImGui::TextWrapped("%s", status.c_str());
+        ImGui::PopStyleColor();
+        const auto available    = ImGui::GetContentRegionAvail();
+        const bool horizontal   = available.x >= 560 * scale;
+        const float gap         = 12 * scale;
+        const float tree_width  = horizontal ? (available.x - gap) * 0.40F : available.x;
+        const float tree_height = std::max(1.0F, horizontal ? available.y : (available.y - gap) * 0.45F);
+        std::optional<std::string> selected;
+        if (ImGui::BeginChild("##CaptionTree", {tree_width, tree_height}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground)) {
+            const bool reveal = ImGui::IsWindowAppearing();
+            std::map<std::string, std::vector<const caption::Folder*>> children;
+            std::map<std::string, std::size_t> missing_descendants;
+            for (const auto& directory : source.folders) {
+                if (directory.path == ".") continue;
+                const auto path = files::path(directory.path);
+                children[path.has_parent_path() ? files::utf8(path.parent_path()) : "."].push_back(&directory);
+            }
+            for (const auto& missing : source.missing_tags) {
+                auto path = files::path(missing);
+                while (path != ".") {
+                    path = path.has_parent_path() ? path.parent_path() : std::filesystem::path{"."};
+                    ++missing_descendants[files::utf8(path)];
+                }
+            }
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {4 * scale, 4 * scale});
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0, 2 * scale});
+            const auto draw_directory = [&](this auto&& draw_directory, const caption::Folder& directory) -> void {
+                ImGui::PushID(directory.path.c_str());
+                const auto descendants = children.find(directory.path);
+                const bool branch      = descendants != children.end();
+                const bool missing     = source.missing_tags.contains(directory.path);
+                const bool current     = directory.path == folder;
+                const auto position    = ImGui::GetCursorScreenPos();
+                const float width      = ImGui::GetContentRegionAvail().x;
+                const float height     = ImGui::GetTextLineHeight() + 8 * scale;
+                auto* draw             = ImGui::GetWindowDrawList();
+                if (missing) draw->AddRectFilled(position, {position.x + width, position.y + height}, ImGui::GetColorU32(ImVec4{red.x, red.y, red.z, 0.10F}), 3 * scale);
+                const bool ancestor = directory.path == "." || folder.starts_with(directory.path + "/");
+                ImGui::SetNextItemOpen(true, reveal && ancestor ? ImGuiCond_Always : ImGuiCond_Once);
+                ImGui::PushStyleColor(ImGuiCol_Text, missing ? red : ImGui::GetStyleColorVec4(ImGuiCol_Text));
+                ImGui::PushStyleColor(ImGuiCol_HeaderHovered, missing ? ImVec4{red.x, red.y, red.z, 0.18F} : ImVec4{0.92F, 0.69F, 0.36F, 0.10F});
+                const bool open = ImGui::TreeNodeEx("##Directory", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding | ImGuiTreeNodeFlags_NoTreePushOnOpen | (branch ? 0 : ImGuiTreeNodeFlags_Leaf), "");
+                if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) selected = directory.path;
+                const bool hovered = ImGui::IsItemHovered();
+                if (current && reveal) ImGui::SetScrollHereY(0.5F);
+                const float y         = position.y + 4 * scale;
+                float right           = std::min(position.x + width, draw->GetClipRectMax().x) - 4 * scale;
+                const auto incomplete = missing_descendants.find(directory.path);
+                if (incomplete != missing_descendants.end()) {
+                    const auto count = std::format("{} below", incomplete->second);
+                    right -= ImGui::CalcTextSize(count.c_str()).x;
+                    draw->AddText({right, y}, ImGui::GetColorU32(red), count.c_str());
+                    right -= 6 * scale;
+                }
+                if (missing) {
+                    right -= ImGui::CalcTextSize("!").x;
+                    draw->AddText({right, y}, ImGui::GetColorU32(red), "!");
+                    right -= 6 * scale;
+                }
+                if (!directory.total) {
+                    right -= ImGui::CalcTextSize("empty").x;
+                    draw->AddText({right, y}, ImGui::GetColorU32(ImGuiCol_TextDisabled), "empty");
+                    right -= 6 * scale;
+                }
+                const float left        = position.x + ImGui::GetTreeNodeToLabelSpacing();
+                const auto label        = files::utf8(files::path(directory.path == "." ? source.key : directory.path).filename());
+                const auto own_tags     = missing ? std::string{} : caption::compose(source.document.folders.at(directory.path));
+                const float label_right = own_tags.empty() ? std::max(left, right) : left + std::min(ImGui::CalcTextSize(label.data(), label.data() + label.size()).x, std::max(0.0F, (right - left - 8 * scale) * 0.5F));
+                ImGui::RenderTextEllipsis(draw, {left, y}, {label_right, y + ImGui::GetFontSize()}, label_right, label.data(), label.data() + label.size(), nullptr);
+                const float tags_left = label_right + 8 * scale;
+                if (!own_tags.empty() && tags_left < right) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                    ImGui::RenderTextEllipsis(draw, {tags_left, y}, {right, y + ImGui::GetFontSize()}, right, own_tags.data(), own_tags.data() + own_tags.size(), nullptr);
+                    ImGui::PopStyleColor();
+                }
+                if (current) draw->AddRectFilled({position.x, position.y + 2 * scale}, {position.x + 2 * scale, position.y + height - 2 * scale}, ImGui::GetColorU32(ImVec4{0.96F, 0.76F, 0.42F, 1}), scale);
+                ImGui::PopStyleColor(2);
+                if (hovered) {
+                    ImGui::BeginTooltip();
+                    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 420 * scale);
+                    ImGui::TextUnformatted((source.key + (directory.path == "." ? "" : "/" + directory.path)).c_str());
+                    if (missing) ImGui::TextColored(red, "This directory needs its own tags, even when empty.");
+                    else ImGui::TextWrapped("%s", own_tags.c_str());
+                    if (incomplete != missing_descendants.end()) ImGui::TextColored(red, "%zu descendant directories still need tags.", incomplete->second);
+                    ImGui::PopTextWrapPos();
+                    ImGui::EndTooltip();
+                }
+                if (open && branch) {
+                    ImGui::Indent(14 * scale);
+                    for (const auto* child : descendants->second) draw_directory(*child);
+                    ImGui::Unindent(14 * scale);
+                    const float guide = position.x + 7 * scale;
+                    draw->AddLine({guide, position.y + height}, {guide, ImGui::GetCursorScreenPos().y - 2 * scale}, ImGui::GetColorU32(ImVec4{0.70F, 0.72F, 0.75F, 0.16F}), scale);
+                }
+                ImGui::PopID();
+            };
+            draw_directory(*std::ranges::find(source.folders, std::string_view{"."}, &caption::Folder::path));
+            ImGui::PopStyleVar(2);
+        }
+        ImGui::EndChild();
+        if (selected && *selected != folder) {
+            workspace.select_collection(source.key + (*selected == "." ? "" : "/" + *selected));
+            if (workspace.caption_editor.key != identity) return;
+        }
+        if (horizontal) ImGui::SameLine(0, gap);
+        else ImGui::SetCursorPosY(ImGui::GetCursorPosY() + gap - ImGui::GetStyle().ItemSpacing.y);
+        const float edit_height = std::max(1.0F, horizontal ? available.y : available.y - tree_height - gap);
+        if (changed) ImGui::SetNextWindowScroll({0, 0});
+        if (ImGui::BeginChild("##CaptionDetails", {0, edit_height}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground)) {
+            ImGui::TextWrapped("%s", folder == "." ? "Concept root" : folder.c_str());
+            const auto directory = std::ranges::find(source.folders, folder, &caption::Folder::path);
+            ImGui::TextDisabled("%zu direct / %zu including descendants", directory->direct, directory->total);
+            if (folder != ".") {
+                const auto path      = files::path(folder);
+                const auto inherited = caption::compose(caption::resolve(source.document, source.key, path.has_parent_path() ? files::utf8(path.parent_path()) : "."));
+                ImGui::Spacing();
+                ImGui::TextDisabled("Trigger + inherited tags");
+                const auto position = ImGui::GetCursorScreenPos();
+                const float width   = ImGui::GetContentRegionAvail().x;
+                const auto* begin   = inherited.data();
+                const auto* end     = begin + inherited.size();
+                const auto* wrap    = ImGui::GetFont()->CalcWordWrapPosition(ImGui::GetFontSize(), begin, end, width);
+                const float height  = ImGui::GetTextLineHeight();
+                ImGui::Dummy({width, height * (wrap == end ? 1 : 2)});
+                auto* draw = ImGui::GetWindowDrawList();
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::RenderTextEllipsis(draw, position, {position.x + width, position.y + height}, position.x + width, begin, wrap, nullptr);
+                while (wrap != end && *wrap == ' ') ++wrap;
+                if (wrap != end) ImGui::RenderTextEllipsis(draw, {position.x, position.y + height}, {position.x + width, position.y + height * 2}, position.x + width, wrap, end, nullptr);
+                ImGui::PopStyleColor();
+                if (ImGui::IsItemHovered()) {
+                    ImGui::BeginTooltip();
+                    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 480 * scale);
+                    ImGui::TextUnformatted(inherited.c_str());
+                    ImGui::PopTextWrapPos();
+                    ImGui::EndTooltip();
+                }
+            }
+            ImGui::Spacing();
+            ImGui::TextDisabled("This directory's tags");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Comma-separated tags. Enter or leave the editor to save.\nEsc discards unsaved changes. The concept folder name is the trigger word, followed by tags from this directory up to the concept root.");
+            if (editor.task || editor.saved_at > 0 && workspace.frame_time < editor.saved_at + 2) {
+                ImGui::SameLine();
+                ImGui::TextDisabled(editor.task ? "Saving..." : "Saved");
+                if (!editor.task) workspace.refresh_at = std::min(workspace.refresh_at, editor.saved_at + 2);
+            }
+            ImGui::BeginDisabled(workspace.session_state.active.has_value());
+            if (editor.draw(workspace.tag_search, scale)) workspace.save_caption();
+            ImGui::EndDisabled();
+            if (!editor.error.empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, {0.95F, 0.49F, 0.42F, 1});
+                ImGui::TextWrapped("%s", editor.error.c_str());
+                ImGui::PopStyleColor();
+            }
+            if (!source.issue.empty()) {
+                ImGui::TextColored({0.95F, 0.49F, 0.42F, 1}, "Duplicate images / export unavailable");
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", source.issue.c_str());
+            }
+        }
+        ImGui::EndChild();
+    }
+
+    void export_controls(Workspace& workspace, const caption::Dataset& source) {
+        auto& path = workspace.export_paths.try_emplace(source.key, files::utf8(project::directory.parent_path() / "exports" / "lora" / files::path(source.key))).first->second;
+        ImGui::Spacing();
+        ImGui::TextDisabled("Export entire concept");
+        ImGui::TextWrapped("%s", source.key.c_str());
+        ImGui::TextDisabled("New output directory");
+        ImGui::SetNextItemWidth(-1);
+        ImGui::InputText("##ExportPath", &path);
+        ImGui::TextWrapped("Independent PNG copies with complete .txt captions. Source images stay unchanged.");
+        if (!source.issue.empty()) {
+            ImGui::TextColored({0.95F, 0.49F, 0.42F, 1}, "Duplicate images / export unavailable");
+            if (ImGui::TreeNodeEx("Conflict paths", ImGuiTreeNodeFlags_NoTreePushOnOpen)) ImGui::TextWrapped("%s", source.issue.c_str());
+        }
+        if (!source.missing_tags.empty()) {
+            ImGui::TextColored({0.98F, 0.34F, 0.32F, 1}, "%zu directories need their own tags", source.missing_tags.size());
+            ImGui::TextWrapped("Inherited tags do not count. Empty directories also need their own tags.");
+            for (const auto& folder : source.missing_tags) {
+                const auto label = folder == "." ? std::string{"Concept root"} : folder;
+                ImGui::PushID(folder.c_str());
+                const auto position = ImGui::GetCursorScreenPos();
+                const float width   = ImGui::GetContentRegionAvail().x;
+                const bool clicked  = ImGui::Selectable("##MissingDirectory");
+                ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(), position, {position.x + width, position.y + ImGui::GetTextLineHeight()}, position.x + width, label.data(), label.data() + label.size(), nullptr);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", label.c_str());
+                ImGui::PopID();
+                if (clicked) {
+                    const auto open = [&workspace, key = source.key, folder] {
+                        workspace.select_collection(key + (folder == "." ? "" : "/" + folder));
+                        if (workspace.collection_key == key && workspace.caption_folder == folder && !workspace.repaint) workspace.concept_tool = Workspace::ConceptTool::tags;
+                    };
+                    if (workspace.save_caption(open)) open();
+                    break;
+                }
+            }
+        }
+        const auto total = std::ranges::find(source.folders, std::string_view{"."}, &caption::Folder::path)->total;
+        ImGui::BeginDisabled(workspace.session_state.active.has_value() || !source.issue.empty() || !source.missing_tags.empty() || !workspace.root->ready || total == 0 || path.empty());
+        if (ImGui::Button("Export", {-FLT_MIN, 0})) {
+            try {
+                workspace.submit_task({runtime::Export{source.key, files::path(path)}});
+            } catch (const std::exception& failure) {
+                workspace.type_error = failure.what();
+            }
+        }
+        ImGui::EndDisabled();
+        operation_activity(workspace, {runtime::Kind::export_dataset}, source.key);
+        const auto exported = workspace.activity.find({source.key, runtime::Kind::export_dataset});
+        if (exported != workspace.activity.end())
+            if (const auto* result = std::get_if<caption::Exported>(&exported->second.result.value)) {
+                ImGui::TextWrapped("%zu images exported", result->images);
+                ImGui::TextWrapped("%s", files::utf8(result->path).c_str());
+                if (ImGui::SmallButton("Copy output path")) ImGui::SetClipboardText(files::utf8(result->path).c_str());
+            }
     }
 
     void audit_controls(Workspace& workspace, const training::TrainingData& source) {

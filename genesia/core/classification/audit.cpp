@@ -3,7 +3,6 @@ import genesia.models.registry;
 import genesia.training.samples;
 import genesia.data.transactions;
 import genesia.io.files;
-import genesia.io.hash;
 import std;
 namespace genesia::classification {
     Audit view(const training::TrainingData& source, Cache& cache, const std::string_view category) {
@@ -45,8 +44,22 @@ namespace genesia::classification {
         if (sample == source.samples.end()) throw std::runtime_error{"Image is no longer in this concept"};
         if (source.classes[sample->label] == category) throw std::runtime_error{"Image already belongs to this category"};
         const auto old_class = source.root / files::path(source.classes[sample->label]);
+        std::map<std::filesystem::path, std::size_t> numbers;
+        for (const auto& existing : source.samples) {
+            if (source.classes[existing.label] != category) continue;
+            for (const auto& path : existing.paths) {
+                const auto name = files::utf8(path.stem());
+                if (name.size() != 5) continue;
+                std::size_t number{};
+                const auto parsed = std::from_chars(name.data(), name.data() + name.size(), number);
+                if (parsed.ec == std::errc{} && parsed.ptr == name.data() + name.size()) numbers[path.parent_path()] = std::max(numbers[path.parent_path()], number);
+            }
+        }
         std::vector<dataset::Move> moves;
-        for (const auto& path : sample->paths) moves.push_back({path, source.root / files::path(category) / path.lexically_relative(old_class), sample->file.sha});
+        for (const auto& path : sample->paths) {
+            const auto directory = (source.root / files::path(category) / path.lexically_relative(old_class)).parent_path();
+            moves.push_back({path, directory / std::format("{:05}.png", ++numbers[directory]), sample->file.sha});
+        }
         return dataset::move_images(std::move(moves), source.root / ".genesia" / "audit-moves.json");
     }
     dataset::MoveResult undo(const training::TrainingData& source) {

@@ -11,7 +11,11 @@ export namespace genesia {
         prompt::Document prompt;
         std::filesystem::path source;
     };
-    Record read_record(const std::filesystem::path& path);
+    struct ImageInfo final {
+        int width{}, height{};
+        std::optional<Record> record;
+    };
+    ImageInfo read_image_info(const std::filesystem::path& path);
     struct Image final {
         int width{};
         int height{};

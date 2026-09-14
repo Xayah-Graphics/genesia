@@ -41,6 +41,25 @@ namespace genesia::classification {
             ++counts[result.label];
             progress({runtime::BatchProgress{runtime::Stage::classifying, moves.size(), images.size()}});
         }
+        if (!relative.empty() && *relative.begin() != "..") {
+            auto changed = *std::ranges::find(index.roots, files::utf8(*relative.begin()), [](const dataset::Root& value) { return value.all.key; });
+            std::set<std::string> affected;
+            for (const auto& move : moves) {
+                const auto file        = std::ranges::find(changed.files, move.source, &dataset::File::path);
+                file->path             = move.destination;
+                const auto destination = move.destination.lexically_relative(project::directory);
+                if (std::distance(destination.begin(), destination.end()) < 3) continue;
+                auto part       = destination.begin();
+                const auto name = *part++;
+                affected.insert(files::utf8(name / *part));
+            }
+            for (const auto& key : affected) {
+                if (!std::filesystem::is_directory(project::directory / files::path(key))) continue;
+                if (dataset::read_concept(key).type != dataset::ConceptType::lora) continue;
+                const auto issue = dataset::lora_issue(changed, key);
+                if (!issue.empty()) throw std::runtime_error{issue};
+            }
+        }
         progress({runtime::BatchProgress{runtime::Stage::moving, images.size(), images.size()}});
         if (interrupted.load()) throw runtime::Stopped{};
         return {root, dataset::move_images(std::move(moves), journal), std::move(counts)};

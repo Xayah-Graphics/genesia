@@ -20,7 +20,8 @@ import genesia.io.files;
 
 namespace genesia::editor {
 
-    Workspace::RepaintDraft::RepaintDraft(const Record& source, std::shared_ptr<const prompt::Catalog> catalog) : document{prompt::resolve(source.prompt, std::move(catalog))} {
+    Workspace::RepaintDraft::RepaintDraft(const std::optional<Record>& source, std::shared_ptr<const prompt::Catalog> catalog) : document{std::move(catalog)} {
+        if (source) document = prompt::resolve(source->prompt, document.catalog);
         editor.tracking = true;
         editor.reset(document.prompt);
     }
@@ -90,9 +91,19 @@ namespace genesia::editor {
         for (auto& [key, info] : changed.concepts) {
             library.concept_errors.erase(key);
             if (info.type != dataset::ConceptType::classifier) library.classifiers.erase(key);
+            if (info.type != dataset::ConceptType::lora) {
+                library.captions.erase(key);
+                if (key == collection_key) {
+                    caption_folder = ".";
+                    caption_editor = {};
+                    if (concept_tool == ConceptTool::tags || concept_tool == ConceptTool::export_dataset) concept_tool = ConceptTool::none;
+                }
+            }
+            if (key == collection_key && info.type == dataset::ConceptType::lora && concept_tool == ConceptTool::none) concept_tool = ConceptTool::tags;
             library.concepts[key] = std::move(info);
         }
         for (auto& [key, info] : changed.classifiers) library.classifiers[key] = std::move(info);
+        for (auto& [key, info] : changed.captions) library.captions[key] = std::move(info);
         for (auto& [key, error] : changed.concept_errors) library.concept_errors[key] = std::move(error);
         library.ready |= changed.ready;
         {
@@ -125,6 +136,7 @@ namespace genesia::editor {
             if (found == library.classifiers.end() || !found->second.model) std::erase(activated, key);
         }
         if (!audit_key.empty() && (changed.classifiers.contains(audit_key) || changed.concepts.contains(audit_key))) rebuild_audit();
+        if (!changed_roots.empty()) folder_collection = {};
         synchronize_collection();
         {
             auto& session  = runtime.session;
@@ -196,8 +208,27 @@ namespace genesia::editor {
                     collection = &candidate;
                 }
         }
+        if (page == Page::dataset && root && collection && library.captions.contains(collection_key) && caption_folder != ".") {
+            const auto key = collection_key + "/" + caption_folder;
+            if (folder_collection.key != key) {
+                folder_collection    = {.key = key, .name = collection->name};
+                const auto directory = project::directory / files::path(key);
+                std::set<std::string> included;
+                for (const auto& file : root->files) {
+                    const auto relative = file.path.lexically_relative(directory);
+                    if (!relative.empty() && *relative.begin() != ".." && included.insert(file.sha).second) folder_collection.images.push_back(file);
+                }
+                auto& position      = positions[key];
+                const auto selected = std::ranges::find(folder_collection.images, position.selected, &dataset::File::sha);
+                if (folder_collection.images.empty()) position = {};
+                else if (!position.selected.empty()) {
+                    const auto index = selected == folder_collection.images.end() ? std::min(position.index, folder_collection.images.size() - 1) : std::size_t(selected - folder_collection.images.begin());
+                    position         = {folder_collection.images[index].sha, index, static_cast<float>(index)};
+                }
+            }
+            collection = &folder_collection;
+        }
         if (page == Page::audit) collection = &audit_collection;
-        if (library.ready && page == Page::dataset && !collection) action_error = "Dataset does not exist: " + collection_key;
         if (collection && root && root->ready && !collection->images.empty()) {
             if (current_position().selected.empty()) {
                 const auto index   = collection->images.size() - 1;
@@ -215,6 +246,7 @@ namespace genesia::editor {
     }
 
     void Workspace::select_collection(std::string key, std::string sha) {
+        if (!save_caption([this, key, sha] { select_collection(key, sha); })) return;
         commit_parameters();
         if (!leave_repaint()) return;
         if (page == Page::generation && !prompt_editor.commit(prompt, *catalog)) {
@@ -226,8 +258,20 @@ namespace genesia::editor {
         page    = Page::dataset;
         viewing = View::browse;
         if (concept_tool == ConceptTool::audit) concept_tool = ConceptTool::none;
-        collection_key = std::move(key);
-        choosing_type  = false;
+        caption_folder  = ".";
+        const auto path = files::path(key);
+        if (std::distance(path.begin(), path.end()) > 2) {
+            auto part               = path.begin();
+            const auto first        = *part++;
+            const auto concept_path = first / *part;
+            caption_folder          = files::utf8(path.lexically_relative(concept_path));
+            key                     = files::utf8(concept_path);
+        }
+        if (collection_key != key) concept_tool = library.captions.contains(key) ? ConceptTool::tags : ConceptTool::none;
+        caption_editor    = {};
+        collection_key    = std::move(key);
+        folder_collection = {};
+        choosing_type     = false;
         type_error.clear();
         locate_sha = std::move(sha);
         synchronize_collection();
@@ -235,8 +279,41 @@ namespace genesia::editor {
         window.redraw = true;
     }
 
+    void Workspace::select_tool(const ConceptTool tool) {
+        if (!save_caption([this, tool] { select_tool(tool); })) return;
+        if (tool == ConceptTool::audit && (page != Page::audit || repaint)) {
+            open_audit(collection_key);
+            if (page == Page::audit && !repaint) concept_tool = ConceptTool::audit;
+        } else concept_tool = concept_tool == tool ? ConceptTool::none : tool;
+    }
+
+    bool Workspace::save_caption(std::function<void()> continuation) {
+        if (caption_editor.task) {
+            if (continuation) caption_continuation = std::move(continuation);
+            return false;
+        }
+        if (caption_editor.input == caption_editor.saved) return true;
+        try {
+            auto tags = caption::parse(caption_editor.input);
+            if (caption::compose(tags) == caption_editor.saved) {
+                caption_editor.input = caption_editor.saved;
+                caption_editor.error.clear();
+                return true;
+            }
+            caption_editor.task  = submit_task({runtime::Caption{collection_key, caption_folder, std::move(tags)}});
+            caption_continuation = std::move(continuation);
+            caption_editor.error.clear();
+        } catch (const std::exception& failure) {
+            caption_editor.error = failure.what();
+            caption_editor.focus = true;
+            concept_tool         = ConceptTool::tags;
+            dataset_sidebar.open = true;
+        }
+        return false;
+    }
+
     Workspace::Position& Workspace::current_position() {
-        return page == Page::audit ? audit_position : positions[collection_key];
+        return page == Page::audit ? audit_position : positions[caption_folder == "." ? collection_key : collection_key + "/" + caption_folder];
     }
 
     void Workspace::center_image(const std::size_t index) {
@@ -288,6 +365,7 @@ namespace genesia::editor {
     }
 
     void Workspace::back() {
+        if (!save_caption([this] { back(); })) return;
         commit_parameters();
         if (viewing == View::source || viewing == View::result) {
             viewing = View::comparison;
@@ -323,7 +401,7 @@ namespace genesia::editor {
         const auto cached = textures.entries.find(file.sha);
         if (cached != textures.entries.end() && cached->second.error.empty()) {
             picture.texture = cached->second.texture;
-            picture.record  = &cached->second.record;
+            picture.record  = cached->second.record ? &*cached->second.record : nullptr;
         }
         return picture;
     }
@@ -459,16 +537,17 @@ namespace genesia::editor {
         audit_dirty = false;
     }
     std::uint64_t Workspace::submit_task(runtime::Request request) {
-        const bool normalizing = std::holds_alternative<runtime::Normalize>(request.operation);
-        if (normalizing) {
+        const bool relocating = std::holds_alternative<runtime::Normalize>(request.operation) || std::holds_alternative<runtime::Fix>(request.operation) || std::holds_alternative<runtime::Undo>(request.operation);
+        if (relocating) {
             textures.paused = true;
             textures.request({});
+            runtime.session.observe({});
         }
         runtime::TaskStatus submitted;
         try {
             submitted = runtime.session.submit(std::move(request));
         } catch (...) {
-            if (normalizing) textures.paused = false;
+            if (relocating) textures.paused = false;
             throw;
         }
         const auto id = submitted.id;
@@ -486,11 +565,31 @@ namespace genesia::editor {
             latest       = event;
             if (kind == runtime::Kind::audit || kind == runtime::Kind::fix || kind == runtime::Kind::undo) latest.result = {};
         }
-        if (kind == runtime::Kind::normalize && state >= runtime::State::complete) {
-            if (const auto* normalized = std::get_if<dataset::NormalizeResult>(&event.result.value)) {
-                textures.relocate(normalized->renamed);
+        if (kind == runtime::Kind::caption && caption_editor.task == id && state >= runtime::State::complete) {
+            caption_editor.task.reset();
+            if (state == runtime::State::complete) {
+                caption_editor.saved    = caption::compose(std::get<caption::Result>(event.result.value).tags);
+                caption_editor.input    = caption_editor.saved;
+                caption_editor.saved_at = glfwGetTime();
+                caption_editor.error.clear();
+                auto continuation = std::exchange(caption_continuation, {});
+                if (continuation) continuation();
+            } else {
+                caption_editor.error = event.error;
+                caption_editor.focus = true;
+                caption_continuation = {};
+                concept_tool         = ConceptTool::tags;
+                dataset_sidebar.open = true;
+            }
+        }
+        if ((kind == runtime::Kind::normalize || kind == runtime::Kind::fix || kind == runtime::Kind::undo) && state >= runtime::State::complete) {
+            std::span<const dataset::Move> moves;
+            if (const auto* normalized = std::get_if<dataset::NormalizeResult>(&event.result.value)) moves = normalized->renamed;
+            else if (const auto* moved = std::get_if<dataset::MoveResult>(&event.result.value)) moves = moved->paths;
+            textures.relocate(moves);
+            if (!moves.empty()) {
                 std::map<std::filesystem::path, const dataset::Move*> destinations;
-                for (const auto& move : normalized->renamed) destinations.emplace(move.source, &move);
+                for (const auto& move : moves) destinations.emplace(move.source, &move);
                 const auto relocate = [&](dataset::File& file) {
                     const auto found = destinations.find(file.path);
                     if (found != destinations.end() && file.sha == found->second->sha) file.path = found->second->destination;
@@ -620,10 +719,10 @@ namespace genesia::editor {
         const float scale         = renderer.dpi;
         const auto size           = ImGui::GetIO().DisplaySize;
         const float interpolation = std::min(1.0F, ImGui::GetIO().DeltaTime / 0.045F);
-        for (auto [panel, maximum, fraction] : {std::tuple{&dataset_sidebar, 300.0F, 0.24F}, std::tuple{&prompt_sidebar, 800.0F, 0.40F}}) {
+        for (auto* panel : {&dataset_sidebar, &prompt_sidebar}) {
             panel->amount = std::lerp(panel->amount, float(panel->open), interpolation);
             if (std::abs(panel->amount - float(panel->open)) < 0.01F) panel->amount = float(panel->open);
-            panel->width = std::min(maximum * scale, size.x * fraction);
+            panel->width = std::min(800.0F * scale, size.x * 0.40F);
         }
         canvas_origin = {dataset_sidebar.width * dataset_sidebar.amount, 0};
         canvas_size   = {std::max(1.0F, size.x - dataset_sidebar.width * dataset_sidebar.amount - prompt_sidebar.width * prompt_sidebar.amount), size.y};

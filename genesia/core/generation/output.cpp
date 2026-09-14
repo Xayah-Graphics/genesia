@@ -81,7 +81,7 @@ namespace genesia {
             file.write(reinterpret_cast<const char*>(png.get() + 33), length - 33);
             file.close();
             // Only complete files become dataset members.
-            resource            = index.identify(temporary, &record);
+            resource            = index.identify(temporary, std::array{output.width, output.height});
             const auto existing = std::ranges::find(raw.all.images, resource.sha, &dataset::File::sha);
             std::filesystem::create_hard_link(existing == raw.all.images.end() ? temporary : existing->path, path);
             if (existing != raw.all.images.end()) resource = *existing;
