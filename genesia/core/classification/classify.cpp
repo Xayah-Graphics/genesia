@@ -31,7 +31,7 @@ namespace genesia::classification {
         }
         if (images.empty()) throw std::runtime_error{"No PNG images directly inside " + text};
         std::ranges::sort(images, {}, &dataset::File::path);
-        const auto descriptor = models::resolve(key);
+        const auto descriptor = models::resolve(key, dataset::ConceptType::classifier);
         std::vector<dataset::Move> moves;
         std::map<std::string, std::size_t> counts;
         for (const auto& image : images) {

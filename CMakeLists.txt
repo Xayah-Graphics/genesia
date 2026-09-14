@@ -101,6 +101,7 @@ target_sources(genesia_core
         genesia/core/models/convnext/spatial.cu
         genesia/core/models/registry.cpp
         genesia/core/models/sdxl/kernels.cu
+        genesia/core/models/sdxl/lora.cpp
         genesia/core/models/sdxl/preview.cpp
         genesia/core/models/sdxl/sdxl.cpp
         genesia/core/models/sdxl/text.cpp
@@ -141,6 +142,7 @@ target_sources(genesia_core
         genesia/core/io/safetensors.ixx
         genesia/core/models/convnext/network.ixx
         genesia/core/models/registry.ixx
+        genesia/core/models/sdxl/lora.ixx
         genesia/core/models/sdxl/preview.ixx
         genesia/core/models/sdxl/sdxl.ixx
         genesia/core/models/sdxl/text.ixx

@@ -10,13 +10,25 @@ namespace genesia::runtime {
         worker.join();
     }
     TaskStatus Session::submit(Request request) {
-        auto operation = std::make_shared<const Request>(std::move(request));
         TaskStatus initial;
         {
             const std::lock_guard lock{mutex};
             if (closing) throw std::runtime_error{"Genesia is closing"};
             if (!error.empty()) throw std::runtime_error{error};
             if (active || loading) throw std::runtime_error{"Finish the current operation first"};
+            if (auto* generate = std::get_if<Generate>(&request.operation)) {
+                auto& loras = generate->parameters.loras;
+                std::erase_if(loras, [](const auto& lora) { return lora.weight == 0; });
+                std::ranges::sort(loras, {}, &generation::Lora::concept_key);
+                std::string previous;
+                for (auto& lora : loras) {
+                    if (!std::isfinite(lora.weight) || previous == lora.concept_key) throw std::runtime_error{"Invalid or repeated LoRA selection: " + lora.concept_key};
+                    const auto model = models::resolve(lora.concept_key, dataset::ConceptType::lora);
+                    lora.sha = model.sha;
+                    previous = lora.concept_key;
+                }
+            }
+            auto operation = std::make_shared<const Request>(std::move(request));
             const auto id = next_id++;
             active        = TaskStatus{.id = id, .kind = Kind(operation->operation.index()), .started = std::chrono::steady_clock::now(), .request = operation};
             std::visit(
@@ -77,7 +89,7 @@ namespace genesia::runtime {
             if (!active || active->id != id) return;
             const auto kind   = active->kind;
             const auto* batch = std::get_if<BatchProgress>(&active->progress.value);
-            if (kind == Kind::fix || kind == Kind::undo || kind == Kind::assign || kind == Kind::erase || kind == Kind::caption || (batch && batch->stage == Stage::moving)) return;
+            if (kind == Kind::fix || kind == Kind::undo || kind == Kind::assign || kind == Kind::erase || kind == Kind::caption || kind == Kind::lora || (batch && batch->stage == Stage::moving)) return;
             interrupted      = true;
             active->stopping = true;
             if (kind == Kind::generate) engine = generation;
@@ -151,6 +163,7 @@ namespace genesia::runtime {
             for (auto& [key, value] : update.concepts) delivery.catalog.concepts[key] = std::move(value);
             for (auto& [key, value] : update.classifiers) delivery.catalog.classifiers[key] = std::move(value);
             for (auto& [key, value] : update.captions) delivery.catalog.captions[key] = std::move(value);
+            for (auto& [key, value] : update.loras) delivery.catalog.loras[key] = std::move(value);
             for (auto& [key, value] : update.concept_errors) delivery.catalog.concept_errors[key] = std::move(value);
             delivery.catalog.ready |= update.ready;
         }
@@ -356,6 +369,13 @@ namespace genesia::runtime {
                         const auto result = dataset::assign_type(root, key, operation.type);
                         update_catalog(catalog.describe(key));
                         emit(State::complete, {}, {result});
+                    } else if constexpr (std::same_as<T, LoraModel>) {
+                        const auto assigned = dataset::read_concept(key);
+                        if (assigned.type != dataset::ConceptType::lora) throw std::runtime_error{"Expected a LoRA concept: " + key};
+                        if (operation.remove) models::unpublish(key);
+                        else if (!operation.input.empty()) models::import_lora(key, operation.input);
+                        update_catalog(catalog.describe(key));
+                        emit(State::complete, {}, {LoraModelResult{models::find(key)}});
                     } else if constexpr (std::same_as<T, Caption> || std::same_as<T, Export>) {
                         const auto assigned = dataset::read_concept(key);
                         if (assigned.type != dataset::ConceptType::lora) throw std::runtime_error{"Assign the LoRA type before managing captions or exporting: " + key};
@@ -404,7 +424,7 @@ namespace genesia::runtime {
             if (!predictions) predictions = std::make_unique<classification::Predictions>();
             if (!request.descriptor) {
                 const auto loaded  = std::ranges::find(predictions->pipeline.models, request.concept_key, [](const classification::LoadedClassifier& model) { return model.descriptor.id; });
-                request.descriptor = loaded == predictions->pipeline.models.end() ? models::resolve(request.concept_key) : loaded->descriptor;
+                request.descriptor = loaded == predictions->pipeline.models.end() ? models::resolve(request.concept_key, dataset::ConceptType::classifier) : loaded->descriptor;
             }
             if (!request.file) request.file = catalog.index.identify(request.input);
             result.model_sha = request.descriptor->sha;

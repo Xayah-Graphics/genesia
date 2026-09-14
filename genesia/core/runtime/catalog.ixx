@@ -9,6 +9,7 @@ export namespace genesia::runtime {
         std::map<std::string, dataset::Concept> concepts;
         std::map<std::string, training::TrainingData> classifiers;
         std::map<std::string, caption::Dataset> captions;
+        std::map<std::string, std::optional<models::Descriptor>> loras;
         std::map<std::string, std::string> concept_errors;
         bool ready{};
     };

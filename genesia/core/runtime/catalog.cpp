@@ -21,6 +21,7 @@ namespace genesia::runtime {
             result.concepts.merge(loaded.concepts);
             result.classifiers.merge(loaded.classifiers);
             result.captions.merge(loaded.captions);
+            result.loras.merge(loaded.loras);
             result.concept_errors.merge(loaded.concept_errors);
         }
         result.ready = !selected;
@@ -34,6 +35,7 @@ namespace genesia::runtime {
             const auto assigned   = dataset::read_concept(key);
             result.concepts[name] = assigned;
             if (assigned.type == dataset::ConceptType::lora) {
+                result.loras[name] = models::find(key);
                 const auto& root      = *std::ranges::find(index.roots, files::utf8(*files::path(key).begin()), [](const dataset::Root& value) { return value.all.key; });
                 result.captions[name] = caption::inspect(assigned, root);
             }
@@ -72,6 +74,7 @@ namespace genesia::runtime {
             result.concepts.merge(info.concepts);
             result.classifiers.merge(info.classifiers);
             result.captions.merge(info.captions);
+            result.loras.merge(info.loras);
             result.concept_errors.merge(info.concept_errors);
         }
         return result;

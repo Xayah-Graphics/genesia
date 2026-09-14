@@ -25,6 +25,7 @@ namespace genesia::headless {
                         json["seed"]   = value.seed;
                         json["width"]  = value.parameters.width;
                         json["height"] = value.parameters.height;
+                        json["loras"]  = value.parameters.loras;
                     } else if constexpr (std::same_as<T, runtime::Train>) json["target"] = value.options.steps;
                     else if constexpr (std::same_as<T, runtime::Classify>) json["input"] = files::utf8(value.input);
                     else if constexpr (std::same_as<T, runtime::Fix>) json["category"] = value.category;
@@ -64,6 +65,9 @@ namespace genesia::headless {
                         json["result"] = {{"dataset", value.root}, {"sha", value.sha}, {"deleted", paths.size()}, {"paths", paths}};
                     } else if constexpr (std::same_as<T, dataset::NormalizeResult>) json["result"] = {{"dataset", value.root}, {"files", value.files}, {"linked", value.linked}, {"renamed", value.renamed.size()}};
                     else if constexpr (std::same_as<T, caption::Exported>) json["result"] = {{"path", files::utf8(value.path)}, {"images", value.images}};
+                    else if constexpr (std::same_as<T, runtime::LoraModelResult>) {
+                        json["result"] = value.model ? nlohmann::json{{"concept", value.model->id}, {"sha", value.model->sha}, {"name", value.model->name}, {"path", files::utf8(value.model->path)}} : nlohmann::json{};
+                    }
                     else if constexpr (!std::same_as<T, std::monostate>) json["result"] = value;
                 },
                 task.result.value);
@@ -76,9 +80,12 @@ namespace genesia::headless {
 genesia --gui [--preset NAME] [--dataset ROOT[/CONCEPT]]
 genesia generate [--preset NAME | --prompt-file FILE] [--count N] [--seed SEED]
                  [--width N] [--height N] [--steps N] [--cfg VALUE] [--activate ROOT/CONCEPT ...]
+                 [--lora ROOT/CONCEPT WEIGHT ...]
 genesia repaint --source PNG --denoise VALUE [--preset NAME | --prompt-file FILE]
                 [--count N] [--seed SEED] [--steps N] [--cfg VALUE] [--activate ROOT/CONCEPT ...]
+                [--lora ROOT/CONCEPT WEIGHT ...]
 genesia concept ROOT/CONCEPT --type none|classifier|lora
+genesia lora ROOT/CONCEPT [--import MODEL.safetensors | --remove]
 genesia train ROOT/CONCEPT --steps N [--config FILE] [--restart]
 genesia infer ROOT/CONCEPT --input PNG
 genesia audit ROOT/CONCEPT [--category NAME] [--refresh]
@@ -94,6 +101,9 @@ Training config: physical_batch, effective_batch, head_only_steps, warmup_steps,
 head_only_lr, backbone_lr, head_lr, weight_decay, clip_norm, seed,
 eval_interval, save_interval, log_interval.
 Assign a concept type before training. LoRA concepts manage captions and export for external training.
+LoRA import copies one standard SDXL UNet KOHYA_LORA model into the concept and permanently locks its type.
+Generate and repaint accept repeated --lora ROOT/CONCEPT WEIGHT options. Trigger words are not added.
+Import replaces the managed model; --remove deletes it without unlocking the type. External files are retained.
 LoRA concepts require exactly one path per image SHA, including hard links.
 Caption reads or replaces a folder's own tags. Effective captions start with the concept folder name
 as the trigger word, followed by tags from the selected folder up to the concept root.
@@ -132,6 +142,7 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
             else if (command == "normalize") request.operation = runtime::Normalize{key};
             else if (command == "caption") request.operation = runtime::Caption{key};
             else if (command == "export") request.operation = runtime::Export{key};
+            else if (command == "lora") request.operation = runtime::LoraModel{key};
             else throw std::runtime_error{"Unknown command: " + std::string{command}};
         }
         int count{1};
@@ -139,6 +150,7 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
         std::optional<int> width, height, steps;
         std::optional<float> cfg, denoise;
         std::vector<std::string> activated;
+        std::vector<generation::Lora> loras;
         std::filesystem::path source, prompt_file, config_file;
         std::string name{defaults::preset}, category;
         bool named_preset{}, steps_set{}, type_set{};
@@ -163,6 +175,11 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
             else if (option == "--height" && command == "generate") number(height.emplace());
             else if (option == "--steps" && generating) number(steps.emplace());
             else if (option == "--cfg" && generating) number(cfg.emplace());
+            else if (option == "--lora" && generating) {
+                auto& lora = loras.emplace_back();
+                lora.concept_key = argument();
+                number(lora.weight);
+            }
             else if (option == "--source" && repaint) source = files::path(argument());
             else if (option == "--denoise" && repaint) number(denoise.emplace());
             else if (option == "--activate" && generating) {
@@ -186,6 +203,8 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
             else if (option == "--folder" && command == "caption") std::get<runtime::Caption>(request.operation).folder = files::utf8(files::path(argument()).lexically_normal());
             else if (option == "--tags" && command == "caption") std::get<runtime::Caption>(request.operation).tags = caption::parse(argument());
             else if (option == "--output" && command == "export") std::get<runtime::Export>(request.operation).output = files::path(argument());
+            else if (option == "--import" && command == "lora") std::get<runtime::LoraModel>(request.operation).input = files::path(argument());
+            else if (option == "--remove" && command == "lora") std::get<runtime::LoraModel>(request.operation).remove = true;
             else throw std::runtime_error{"Unknown option for this command: " + std::string{option}};
         }
         if (count <= 0) throw std::runtime_error{"Count must be positive"};
@@ -194,6 +213,7 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
         if (command == "train" && !steps_set) throw std::runtime_error{"Training requires --steps"};
         if (command == "concept" && !type_set) throw std::runtime_error{"Specify --type none, classifier or lora"};
         if (command == "export" && std::get<runtime::Export>(request.operation).output.empty()) throw std::runtime_error{"Specify --output NEW_DIRECTORY"};
+        if (command == "lora" && std::get<runtime::LoraModel>(request.operation).remove && !std::get<runtime::LoraModel>(request.operation).input.empty()) throw std::runtime_error{"Choose --import or --remove"};
         if (generating) {
             auto& operation   = std::get<runtime::Generate>(request.operation);
             operation.catalog = std::make_shared<const prompt::Catalog>();
@@ -219,6 +239,7 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
             if (height) operation.parameters.height = *height;
             if (steps) operation.parameters.steps = *steps;
             if (cfg) operation.parameters.cfg = *cfg;
+            operation.parameters.loras = std::move(loras);
         } else if (command == "train" && !config_file.empty()) {
             auto& options       = std::get<runtime::Train>(request.operation).options;
             const auto assigned = dataset::read_concept(options.concept_key);

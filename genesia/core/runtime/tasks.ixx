@@ -62,17 +62,25 @@ export namespace genesia::runtime {
         std::string concept_key;
         std::filesystem::path output;
     };
-    enum class Kind { generate, train, infer, audit, fix, undo, classify, assign, erase, normalize, caption, export_dataset };
-    inline constexpr std::array<std::string_view, 12> kinds{"generate", "train", "infer", "audit", "fix", "undo", "classify", "assign", "delete", "normalize", "caption", "export"};
+    struct LoraModel final {
+        std::string concept_key;
+        std::filesystem::path input;
+        bool remove{};
+    };
+    struct LoraModelResult final {
+        std::optional<models::Descriptor> model;
+    };
+    enum class Kind { generate, train, infer, audit, fix, undo, classify, assign, erase, normalize, caption, export_dataset, lora };
+    inline constexpr std::array<std::string_view, 13> kinds{"generate", "train", "infer", "audit", "fix", "undo", "classify", "assign", "delete", "normalize", "caption", "export", "lora"};
     struct Request final {
-        std::variant<Generate, Train, Infer, Audit, Fix, Undo, Classify, Assign, Delete, Normalize, Caption, Export> operation;
+        std::variant<Generate, Train, Infer, Audit, Fix, Undo, Classify, Assign, Delete, Normalize, Caption, Export, LoraModel> operation;
     };
     struct Generated final {
         std::filesystem::path path;
         std::uint64_t seed{};
     };
     struct Result final {
-        std::variant<std::monostate, Generated, training::State, classification::Result, classification::Audit, dataset::MoveResult, classification::Classification, dataset::Concept, dataset::DeleteResult, dataset::NormalizeResult, caption::Result, caption::Exported> value;
+        std::variant<std::monostate, Generated, training::State, classification::Result, classification::Audit, dataset::MoveResult, classification::Classification, dataset::Concept, dataset::DeleteResult, dataset::NormalizeResult, caption::Result, caption::Exported, LoraModelResult> value;
     };
     struct TaskStatus final {
         std::uint64_t id{};

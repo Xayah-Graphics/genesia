@@ -29,6 +29,7 @@ export namespace genesia::sdxl {
     struct Model final {
         Model(::cuda::stream_ref stream, const std::filesystem::path& checkpoint, const std::filesystem::path& cache_directory);
         void encode(ImageInput& image);
+        void apply_loras(std::span<const generation::Lora> loras);
 
     private:
         friend struct Inference;

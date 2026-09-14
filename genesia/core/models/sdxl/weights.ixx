@@ -7,10 +7,20 @@ export module genesia.models.sdxl.weights;
 import genesia.io.safetensors;
 import std;
 import genesia.compute.inference;
+import genesia.generation.settings;
 
 export namespace genesia::sdxl {
     struct Weights final {
         std::deque<::cuda::device_buffer<std::byte>> storage;
+        struct Target final {
+            compute::TensorView view;
+            bool convolution{};
+        };
+        std::map<std::string, Target> targets;
+        std::vector<generation::Lora> applied;
+        void apply(const std::filesystem::path& checkpoint, std::span<const generation::Lora> loras, compute::InferenceRuntime& runtime);
+    private:
+        std::set<std::string> patched;
     };
 
     struct Checkpoint final {
@@ -29,5 +39,6 @@ export namespace genesia::sdxl {
     private:
         files::SafeFile file;
         Weights& weights;
+        void load(const std::string& name, compute::TensorView destination, bool convolution = false, bool transpose = false);
     };
 } // namespace genesia::sdxl

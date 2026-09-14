@@ -13,5 +13,6 @@ export namespace genesia::editor {
     void classify_controls(Workspace& workspace, const training::TrainingData& source);
     void caption_controls(Workspace& workspace, const caption::Dataset& source, float scale);
     void export_controls(Workspace& workspace, const caption::Dataset& source);
+    void model_controls(Workspace& workspace);
     void audit_controls(Workspace& workspace, const training::TrainingData& source);
 } // namespace genesia::editor

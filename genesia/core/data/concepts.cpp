@@ -25,7 +25,7 @@ namespace genesia::dataset {
             if (value.at("version") != 2) throw std::runtime_error{"Old or unsupported concept state: " + result.key + ". Remove the old training artifacts before assigning a type."};
             result.type   = parse_concept_type(value.at("type").get_ref<const std::string&>());
             result.locked = value.at("locked").get<bool>();
-            if (result.type == ConceptType::none && result.locked) throw std::runtime_error{"An unassigned concept cannot have a locked training type: " + result.key};
+            if (result.type == ConceptType::none && result.locked) throw std::runtime_error{"An unassigned concept cannot have a locked type: " + result.key};
         } else if (std::filesystem::exists(state) && !std::filesystem::is_empty(state)) throw std::runtime_error{"Concept state has no type manifest: " + result.key};
         return result;
     }

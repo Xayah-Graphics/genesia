@@ -44,7 +44,7 @@ namespace genesia::editor {
                 ImGui::PopStyleVar();
                 ImGui::PopStyleColor(2);
                 ImGui::EndDisabled();
-                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", assigned.locked ? "Type is permanently locked by training history. Restart keeps this type." : busy ? "Finish the current operation before changing its type." : "Choose this concept's purpose. Assigning a type does not start training.");
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", assigned.locked ? "Type is permanently locked by training or an imported model." : busy ? "Finish the current operation before changing its type." : "Choose this concept's purpose. Assigning a type does not start training.");
                 if (assigned.locked || busy) workspace.choosing_type = false;
                 if (workspace.choosing_type) {
                     for (std::size_t i = 0; i < names.size(); ++i)
@@ -78,19 +78,20 @@ namespace genesia::editor {
                     const bool available  = lora ? captions != workspace.library.captions.end() : classifier != workspace.library.classifiers.end();
                     if (!available) ImGui::TextDisabled("Reading concept data...");
                     else {
-                        const bool published = !lora && classifier->second.model.has_value();
+                        const auto registered = workspace.library.loras.find(workspace.collection_key);
+                        const bool published = lora ? registered != workspace.library.loras.end() && registered->second.has_value() : classifier->second.model.has_value();
+                        const bool active = lora ? workspace.lora_controls[workspace.collection_key].active : std::ranges::contains(workspace.activated, workspace.collection_key);
                         if (!workspace.choosing_type && workspace.type_error.empty()) ImGui::SameLine(0, 8 * scale);
-                        if (lora) ImGui::TextDisabled("External training");
-                        else if (published) ImGui::TextColored(color, "%s", std::ranges::contains(workspace.activated, workspace.collection_key) ? "Active" : "Model available");
-                        else ImGui::TextDisabled("No published model");
-                        if (!lora && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", published ? "Middle-click this concept in the dataset list to activate or deactivate its model." : "A model becomes available after training reaches its target and finishes saving.");
-                        const int buttons = lora ? 2 : published ? 3 : 1;
+                        if (published) ImGui::TextColored(color, "%s", active ? "Active" : "Model available");
+                        else ImGui::TextDisabled("%s", lora ? "No imported model" : "No published model");
+                        if (published && ImGui::IsItemHovered()) ImGui::SetTooltip("Middle-click this concept in the dataset list to activate or deactivate its model.");
+                        const int buttons = lora || published ? 3 : 1;
                         const float gap   = 4 * scale;
                         const float width = (ImGui::GetContentRegionAvail().x - (buttons - 1) * gap) / buttons;
                         ImGui::Spacing();
                         int column{};
-                        for (const auto [tool, label] : {std::pair{Workspace::ConceptTool::train, "Train"}, std::pair{Workspace::ConceptTool::audit, "Audit"}, std::pair{Workspace::ConceptTool::classify, "Classify"}, std::pair{Workspace::ConceptTool::tags, "Tags"}, std::pair{Workspace::ConceptTool::export_dataset, "Export"}}) {
-                            if (lora != (tool == Workspace::ConceptTool::tags || tool == Workspace::ConceptTool::export_dataset)) continue;
+                        for (const auto [tool, label] : {std::pair{Workspace::ConceptTool::train, "Train"}, std::pair{Workspace::ConceptTool::audit, "Audit"}, std::pair{Workspace::ConceptTool::classify, "Classify"}, std::pair{Workspace::ConceptTool::tags, "Tags"}, std::pair{Workspace::ConceptTool::export_dataset, "Export"}, std::pair{Workspace::ConceptTool::model, "Model"}}) {
+                            if (lora != (tool == Workspace::ConceptTool::tags || tool == Workspace::ConceptTool::export_dataset || tool == Workspace::ConceptTool::model)) continue;
                             if (!lora && !published && tool != Workspace::ConceptTool::train) continue;
                             if (column++) ImGui::SameLine(0, gap);
                             const bool current = workspace.concept_tool == tool;
@@ -112,7 +113,8 @@ namespace genesia::editor {
                             ImGui::SetNextWindowSizeConstraints({0, 0}, {FLT_MAX, height});
                             if (ImGui::BeginChild("##ConceptTool", {0, tags ? height : 0}, ImGuiChildFlags_AlwaysUseWindowPadding | (tags ? ImGuiChildFlags_None : ImGuiChildFlags_AutoResizeY), ImGuiWindowFlags_NoBackground | (tags ? ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse : 0))) {
                                 if (lora) {
-                                    if (workspace.concept_tool == Workspace::ConceptTool::tags) caption_controls(workspace, captions->second, scale);
+                                    if (workspace.concept_tool == Workspace::ConceptTool::model) model_controls(workspace);
+                                    else if (workspace.concept_tool == Workspace::ConceptTool::tags) caption_controls(workspace, captions->second, scale);
                                     else export_controls(workspace, captions->second);
                                 } else if (!classifier->second.inspected && workspace.concept_tool != Workspace::ConceptTool::classify) ImGui::TextDisabled("Reading concept samples...");
                                 else if (workspace.concept_tool == Workspace::ConceptTool::train) training_controls(workspace, classifier->second, scale);
@@ -189,8 +191,10 @@ namespace genesia::editor {
                     const auto failure      = workspace.library.concept_errors.find(item.key);
                     const auto caption_data = workspace.library.captions.find(item.key);
                     const bool lora_invalid = caption_data != workspace.library.captions.end() && !caption_data->second.issue.empty();
-                    const bool published    = info != workspace.library.classifiers.end() && info->second.model.has_value();
-                    const bool enabled      = std::ranges::contains(workspace.activated, item.key);
+                    const bool lora_type    = metadata != workspace.library.concepts.end() && metadata->second.type == dataset::ConceptType::lora;
+                    const auto lora_model   = workspace.library.loras.find(item.key);
+                    const bool published    = lora_type ? lora_model != workspace.library.loras.end() && lora_model->second.has_value() : info != workspace.library.classifiers.end() && info->second.model.has_value();
+                    const bool enabled      = lora_type ? workspace.lora_controls[item.key].active : std::ranges::contains(workspace.activated, item.key);
                     const auto origin       = ImGui::GetCursorScreenPos();
                     const float width       = ImGui::GetContentRegionAvail().x;
                     const float height      = ImGui::GetTextLineHeight() + 8 * scale;
@@ -200,7 +204,8 @@ namespace genesia::editor {
                     if (ImGui::Selectable("##Concept", workspace.collection_key == item.key, ImGuiSelectableFlags_None, {width, height})) selected = item.key;
                     const bool hovered = ImGui::IsItemHovered();
                     if (published && ImGui::IsItemClicked(ImGuiMouseButton_Middle)) {
-                        if (enabled) std::erase(workspace.activated, item.key);
+                        if (lora_type) workspace.lora_controls[item.key].active = !enabled;
+                        else if (enabled) std::erase(workspace.activated, item.key);
                         else workspace.activated.push_back(item.key);
                     }
                     const float y    = origin.y + 4 * scale;
@@ -289,8 +294,8 @@ namespace genesia::editor {
                 ImGui::ProgressBar(float(batch->completed) / batch->total, {-1, 3 * workspace.renderer.dpi}, "");
                 ImGui::Text("%zu / %zu", batch->completed, batch->total);
             }
-            const bool moving = task->kind == runtime::Kind::fix || task->kind == runtime::Kind::undo || task->kind == runtime::Kind::assign || (batch && batch->stage == runtime::Stage::moving);
-            if (!moving && ImGui::Button("Stop", {-FLT_MIN, 0})) workspace.runtime.session.cancel(task->id);
+            const bool committing = task->kind == runtime::Kind::fix || task->kind == runtime::Kind::undo || task->kind == runtime::Kind::assign || task->kind == runtime::Kind::lora || (batch && batch->stage == runtime::Stage::moving);
+            if (!committing && ImGui::Button("Stop", {-FLT_MIN, 0})) workspace.runtime.session.cancel(task->id);
         }
         if (!task->error.empty()) ImGui::TextWrapped("%s", task->error.c_str());
         if (const auto* normalized = std::get_if<dataset::NormalizeResult>(&task->result.value)) {
@@ -696,6 +701,34 @@ namespace genesia::editor {
                 ImGui::TextWrapped("%s", files::utf8(result->path).c_str());
                 if (ImGui::SmallButton("Copy output path")) ImGui::SetClipboardText(files::utf8(result->path).c_str());
             }
+    }
+
+    void model_controls(Workspace& workspace) {
+        const auto& key = workspace.collection_key;
+        auto& controls = workspace.lora_controls[key];
+        const auto registered = workspace.library.loras.find(key);
+        const auto* model = registered != workspace.library.loras.end() && registered->second ? &*registered->second : nullptr;
+        if (model) {
+            ImGui::TextWrapped("%s", model->name.c_str());
+            ImGui::TextDisabled("SHA %.12s", model->sha.c_str());
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", model->sha.c_str());
+            ImGui::TextUnformatted("Strength");
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            ImGui::InputFloat("##LoraWeight", &controls.weight, 0.05F, 0.1F, "%.2f");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("LoRA strength for the next submission. 0 disables it; 1 uses its original strength.");
+            ImGui::TextDisabled("%s", controls.active ? "Active / middle-click concept to deactivate" : "Middle-click concept to activate");
+        }
+        ImGui::Spacing();
+        ImGui::TextDisabled("Drop a .safetensors file here or paste its path");
+        ImGui::BeginDisabled(workspace.session_state.active.has_value());
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::InputTextWithHint("##LoraPath", "Model path", controls.path.data(), controls.path.size());
+        ImGui::BeginDisabled(controls.path[0] == '\0');
+        if (ImGui::Button(model ? "Replace model" : "Import model", {-FLT_MIN, 0})) workspace.submit_task({runtime::LoraModel{key, files::path(controls.path.data())}});
+        ImGui::EndDisabled();
+        if (model && ImGui::Button("Remove model", {-FLT_MIN, 0})) workspace.submit_task({runtime::LoraModel{key, {}, true}});
+        ImGui::EndDisabled();
+        operation_activity(workspace, {runtime::Kind::lora}, key);
     }
 
     void audit_controls(Workspace& workspace, const training::TrainingData& source) {

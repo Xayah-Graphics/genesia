@@ -123,6 +123,11 @@ namespace genesia::compute {
         matmul(result, layer.weight, input, shape, 1.0F, layer.bias, residual);
     }
 
+    void InferenceRuntime::add_product(const TensorView output, const TensorView up, const TensorView down, const float scale) {
+        const MatmulShape shape{up.w, down.c, up.c, down.c, up.c, Scalar::f32, Scalar::f32, false, false, true};
+        matmul(output, down, up, shape, scale, {}, output);
+    }
+
     void InferenceRuntime::geglu(const TensorView output, const TensorView input, const Linear& layer) {
         const int rows  = input.n * input.h * input.w;
         const int width = input.c;

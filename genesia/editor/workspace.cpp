@@ -93,10 +93,12 @@ namespace genesia::editor {
             if (info.type != dataset::ConceptType::classifier) library.classifiers.erase(key);
             if (info.type != dataset::ConceptType::lora) {
                 library.captions.erase(key);
+                library.loras.erase(key);
+                lora_controls.erase(key);
                 if (key == collection_key) {
                     caption_folder = ".";
                     caption_editor = {};
-                    if (concept_tool == ConceptTool::tags || concept_tool == ConceptTool::export_dataset) concept_tool = ConceptTool::none;
+                    if (concept_tool == ConceptTool::tags || concept_tool == ConceptTool::export_dataset || concept_tool == ConceptTool::model) concept_tool = ConceptTool::none;
                 }
             }
             if (key == collection_key && info.type == dataset::ConceptType::lora && concept_tool == ConceptTool::none) concept_tool = ConceptTool::tags;
@@ -104,6 +106,10 @@ namespace genesia::editor {
         }
         for (auto& [key, info] : changed.classifiers) library.classifiers[key] = std::move(info);
         for (auto& [key, info] : changed.captions) library.captions[key] = std::move(info);
+        for (auto& [key, info] : changed.loras) {
+            if (!info) lora_controls[key].active = false;
+            library.loras[key] = std::move(info);
+        }
         for (auto& [key, error] : changed.concept_errors) library.concept_errors[key] = std::move(error);
         library.ready |= changed.ready;
         {
@@ -488,6 +494,9 @@ namespace genesia::editor {
         }
         parameters.positive = prompt::compose(*prompt_catalog, submitted.positive);
         parameters.negative = prompt::compose(*prompt_catalog, submitted.negative);
+        parameters.loras.clear();
+        for (const auto& [key, controls] : lora_controls)
+            if (controls.active) parameters.loras.push_back({key, {}, controls.weight});
         if (random_seed) {
             std::random_device random;
             seed = std::uniform_int_distribution<std::uint64_t>{}(random);
@@ -728,12 +737,11 @@ namespace genesia::editor {
         canvas_size   = {std::max(1.0F, size.x - dataset_sidebar.width * dataset_sidebar.amount - prompt_sidebar.width * prompt_sidebar.amount), size.y};
         if (!window.dropped.empty()) {
             const auto info = library.classifiers.find(collection_key);
-            if (!dataset_sidebar.open || concept_tool != ConceptTool::classify || info == library.classifiers.end() || !info->second.model) action_error = "Open Classify at the top of the Dataset panel before dropping a folder.";
-            else if (session_state.active) action_error = "Finish the current operation first.";
-            else if (window.dropped.size() != 1) action_error = "Drop one directory at a time.";
-            else {
-                submit_task({runtime::Classify{collection_key, window.dropped.front()}});
-            }
+            if (session_state.active) action_error = "Finish the current operation first.";
+            else if (window.dropped.size() != 1) action_error = "Drop one item at a time.";
+            else if (dataset_sidebar.open && concept_tool == ConceptTool::model && library.loras.contains(collection_key)) submit_task({runtime::LoraModel{collection_key, window.dropped.front()}});
+            else if (dataset_sidebar.open && concept_tool == ConceptTool::classify && info != library.classifiers.end() && info->second.model) submit_task({runtime::Classify{collection_key, window.dropped.front()}});
+            else action_error = "Open Model to import a LoRA file, or Classify to classify a folder.";
             window.dropped.clear();
         }
         std::string error = action_error;

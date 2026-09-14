@@ -32,7 +32,7 @@ export namespace genesia::editor {
             explicit TrainingDraft(const training::TrainingData& source);
         };
         enum class Page { generation, dataset, audit };
-        enum class ConceptTool { none, train, audit, classify, tags, export_dataset };
+        enum class ConceptTool { none, train, audit, classify, tags, export_dataset, model };
         enum class View { browse, inspect, repaint, comparison, source, result };
         enum class Role { image, source, result };
         enum class ImageAction { none, click, repaint };
@@ -101,6 +101,12 @@ export namespace genesia::editor {
         Output generation;
         std::optional<Repaint> repaint;
         std::vector<std::string> activated;
+        struct LoraControls final {
+            std::array<char, 2048> path{};
+            float weight{1};
+            bool active{};
+        };
+        std::map<std::string, LoraControls> lora_controls;
         std::map<std::string, std::string> prediction_errors;
         std::vector<dataset::File> visible_images;
         std::string audit_key, audit_category;

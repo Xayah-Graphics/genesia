@@ -52,6 +52,7 @@ namespace genesia {
         result.seed             = metadata.at("seed");
         result.parameters.steps = metadata.at("steps");
         result.parameters.cfg   = metadata.at("cfg");
+        if (metadata.contains("loras")) metadata.at("loras").get_to(result.parameters.loras);
         for (const auto& [name, side] : {std::pair{"positive", &result.prompt.sides[0]}, std::pair{"negative", &result.prompt.sides[1]}}) {
             const auto& saved = metadata.at("prompt").at(name);
             side->text        = saved.at("text");

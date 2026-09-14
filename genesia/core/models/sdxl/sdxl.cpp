@@ -42,6 +42,10 @@ namespace genesia::sdxl {
         stream.sync();
     }
 
+    void Model::apply_loras(const std::span<const generation::Lora> loras) {
+        weights.apply(checkpoint, loras, runtime);
+    }
+
     Model::Network::Network(Checkpoint&& checkpoint) : clip_l{checkpoint, false}, clip_g{checkpoint, true}, unet{checkpoint}, vae{checkpoint} {}
 
     Output::Output(const ::cuda::stream_ref stream, const int w, const int h) : pixels{stream, ::cuda::pinned_default_memory_pool(), std::size_t(w) * h * 3, ::cuda::no_init}, width{w}, height{h}, stream{stream} {}

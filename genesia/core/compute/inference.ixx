@@ -79,6 +79,7 @@ export namespace genesia::compute {
         void begin_preparation();
         ::cuda::device_buffer<std::byte> finish_preparation();
         void linear(TensorView output, TensorView input, const Linear& layer, TensorView residual = {});
+        void add_product(TensorView output, TensorView up, TensorView down, float scale);
         void geglu(TensorView output, TensorView input, const Linear& layer);
         void convolution(TensorView output, TensorView input, const Conv& layer, TensorView residual = {});
         void layer_norm(TensorView output, TensorView input, const Norm& layer);

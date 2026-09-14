@@ -30,7 +30,7 @@ namespace genesia::dataset {
     }
     Concept assign_type(const Root& root, const std::string_view key, const ConceptType type) {
         auto result = read_concept(key);
-        if (result.locked) throw std::runtime_error{"Concept type is locked by its training history: " + result.key};
+        if (result.locked) throw std::runtime_error{"Concept type is locked by training or an imported model: " + result.key};
         if (type == ConceptType::lora) {
             const auto issue = lora_issue(root, result.key);
             if (!issue.empty()) throw std::runtime_error{issue};

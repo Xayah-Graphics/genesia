@@ -36,6 +36,13 @@ namespace genesia::generation {
         const auto source_id = request.source ? std::optional{request.source->sha} : std::nullopt;
         if (!inference || inference->parameters != request.parameters || source_id != prepared_image) {
             inference.reset();
+            ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].stage}.store(static_cast<std::uint32_t>(sdxl::Stage::preparing));
+            try {
+                model->apply_loras(request.parameters.loras);
+            } catch (...) {
+                release();
+                throw;
+            }
             if (request.source) {
                 if (source_id != encoded_image) {
                     const auto pixels = read_image(request.source->path);
