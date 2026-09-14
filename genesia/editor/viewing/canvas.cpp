@@ -309,6 +309,10 @@ namespace genesia::editor {
         workspace.visible_images.clear();
         for (const auto& file : wanted)
             if (!std::ranges::contains(workspace.visible_images, file.sha, &dataset::File::sha)) workspace.visible_images.push_back(file);
+        if (workspace.pending_delete) {
+            const auto root = *workspace.pending_delete->path.lexically_relative(project::directory).begin();
+            std::erase_if(wanted, [&](const dataset::File& file) { return file.sha == workspace.pending_delete->sha && *file.path.lexically_relative(project::directory).begin() == root; });
+        }
         workspace.textures.request(std::move(wanted));
         ImGui::PopClipRect();
         ImGui::End();

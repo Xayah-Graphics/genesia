@@ -22,6 +22,7 @@ namespace genesia::runtime {
             std::visit(
                 [&]<typename T>(const T& value) {
                     if constexpr (std::same_as<T, Train>) active->concept_key = value.options.concept_key;
+                    else if constexpr (std::same_as<T, Delete>) active->image_sha = value.sha;
                     else if constexpr (!std::same_as<T, Generate>) active->concept_key = value.concept_key;
                 },
                 operation->operation);
@@ -75,7 +76,7 @@ namespace genesia::runtime {
             if (!active || active->id != id) return;
             const auto kind   = active->kind;
             const auto* batch = std::get_if<BatchProgress>(&active->progress.value);
-            if (kind == Kind::fix || kind == Kind::undo || kind == Kind::assign || (batch && batch->stage == Stage::moving)) return;
+            if (kind == Kind::fix || kind == Kind::undo || kind == Kind::assign || kind == Kind::erase || (batch && batch->stage == Stage::moving)) return;
             interrupted      = true;
             active->stopping = true;
             if (kind == Kind::generate) engine = generation;
@@ -296,6 +297,24 @@ namespace genesia::runtime {
                 } else if constexpr (std::same_as<T, Infer>) {
                     auto result = infer(operation);
                     emit(result.state, {}, std::move(result.result), std::move(result.error));
+                } else if constexpr (std::same_as<T, Delete>) {
+                    const auto root = files::path(operation.root);
+                    if (root.has_parent_path() || operation.root.empty() || operation.root.front() == '.') throw std::runtime_error{"Delete requires a root dataset name"};
+                    update_catalog(catalog.load(operation.root));
+                    const auto result = dataset::delete_image(catalog.index, operation.root, operation.sha);
+                    if (!result.paths.empty()) {
+                        update_catalog(catalog.root(operation.root));
+                        std::set<std::string> concepts;
+                        for (const auto& path : result.paths) {
+                            const auto relative = path.lexically_relative(project::directory / root);
+                            if (std::distance(relative.begin(), relative.end()) > 1) concepts.insert(files::utf8(root / *relative.begin()));
+                        }
+                        for (const auto& key : concepts) update_catalog(catalog.describe(key, true));
+                        const std::lock_guard lock{mutex};
+                        std::erase_if(wanted, [&](const Infer& image) { return image.file && std::ranges::contains(result.paths, image.file->path); });
+                        observed.clear();
+                    }
+                    emit(result.error.empty() ? State::complete : State::failed, {}, {result}, result.error);
                 } else if constexpr (std::same_as<T, Classify>) {
                     const auto input   = std::filesystem::absolute(operation.input).lexically_normal();
                     const auto text    = files::utf8(input);

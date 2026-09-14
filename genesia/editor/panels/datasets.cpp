@@ -37,7 +37,7 @@ namespace genesia::editor {
                 ImGui::PushStyleColor(ImGuiCol_Text, color);
                 ImGui::PushStyleColor(ImGuiCol_Button, {color.x, color.y, color.z, workspace.choosing_type ? 0.22F : 0.10F});
                 ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 5 * scale);
-                if (ImGui::SmallButton(std::format("{}{}###ConceptType", names[static_cast<std::size_t>(assigned.type)], assigned.locked ? "" : "  v").c_str())) workspace.choosing_type = !workspace.choosing_type;
+                if (ImGui::SmallButton(std::format("{}###ConceptType", names[static_cast<std::size_t>(assigned.type)]).c_str())) workspace.choosing_type = !workspace.choosing_type;
                 ImGui::PopStyleVar();
                 ImGui::PopStyleColor(2);
                 ImGui::EndDisabled();

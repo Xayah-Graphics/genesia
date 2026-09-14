@@ -48,17 +48,20 @@ export namespace genesia::runtime {
         std::string concept_key;
         dataset::ConceptType type;
     };
-    enum class Kind { generate, train, infer, audit, fix, undo, classify, assign };
-    inline constexpr std::array<std::string_view, 8> kinds{"generate", "train", "infer", "audit", "fix", "undo", "classify", "assign"};
+    struct Delete final {
+        std::string root, sha;
+    };
+    enum class Kind { generate, train, infer, audit, fix, undo, classify, assign, erase };
+    inline constexpr std::array<std::string_view, 9> kinds{"generate", "train", "infer", "audit", "fix", "undo", "classify", "assign", "delete"};
     struct Request final {
-        std::variant<Generate, Train, Infer, Audit, Fix, Undo, Classify, Assign> operation;
+        std::variant<Generate, Train, Infer, Audit, Fix, Undo, Classify, Assign, Delete> operation;
     };
     struct Generated final {
         std::filesystem::path path;
         std::uint64_t seed{};
     };
     struct Result final {
-        std::variant<std::monostate, Generated, training::State, classification::Result, classification::Audit, dataset::MoveResult, classification::Classification, dataset::Concept> value;
+        std::variant<std::monostate, Generated, training::State, classification::Result, classification::Audit, dataset::MoveResult, classification::Classification, dataset::Concept, dataset::DeleteResult> value;
     };
     struct TaskStatus final {
         std::uint64_t id{};

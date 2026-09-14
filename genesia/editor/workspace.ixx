@@ -127,6 +127,7 @@ export namespace genesia::editor {
         const dataset::Collection* collection{};
         std::map<std::string, Position> positions;
         std::optional<std::filesystem::path> locate;
+        std::optional<dataset::File> pending_delete;
         std::uint64_t seed{defaults::seed};
         bool random_seed{defaults::random_seed};
         Sidebar dataset_sidebar, prompt_sidebar;

@@ -17,7 +17,9 @@ export namespace genesia::editor {
         explicit TextureCache(Renderer& renderer);
         ~TextureCache();
         void receive();
+        void adopt(const dataset::File& file, const Record& record, std::uint64_t& texture);
         void request(std::vector<dataset::File> files);
+        void discard(std::span<const std::filesystem::path> paths);
 
     private:
         struct Decoded final {

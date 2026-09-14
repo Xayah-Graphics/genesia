@@ -12,7 +12,7 @@ namespace genesia::classification {
     namespace {
         // Windows exposes the new name before MoveFileEx closes its rename handle.
         std::mutex cache_files;
-    }
+    } // namespace
 
     void to_json(nlohmann::json& json, const Result& result) {
         json = {{"id", result.id}, {"model_sha", result.model_sha}, {"image_sha", result.image_sha}, {"label", result.label}, {"classes", result.classes}, {"scores", result.scores}};

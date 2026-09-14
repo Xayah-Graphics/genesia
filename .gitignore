@@ -5,6 +5,7 @@ build*
 /install/
 /data/
 /assets/classifier/
+/assets/prompts/
 AGENTS.md
 TODO.md
 /.genesia/

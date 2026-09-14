@@ -95,7 +95,6 @@ namespace genesia::editor {
         for (auto& [key, info] : changed.classifiers) library.classifiers[key] = std::move(info);
         for (auto& [key, error] : changed.concept_errors) library.concept_errors[key] = std::move(error);
         library.ready |= changed.ready;
-        textures.receive();
         {
             for (const auto& key : changed_roots) {
                 const auto& entry = *std::ranges::find(library.roots, key, [](const dataset::Root& root) { return root.all.key; });
@@ -103,13 +102,21 @@ namespace genesia::editor {
                 for (auto& candidate : entry.concepts) collections.push_back(&candidate);
                 for (const auto* candidate : collections) {
                     const auto remembered = positions.find(candidate->key);
-                    if (remembered == positions.end() || candidate->images.empty()) continue;
+                    if (remembered == positions.end()) continue;
                     auto& position      = remembered->second;
                     const auto selected = std::ranges::find(candidate->images, position.selected, &dataset::File::sha);
-                    const auto index    = selected == candidate->images.end() ? std::min(position.index, candidate->images.size() - 1) : static_cast<std::size_t>(selected - candidate->images.begin());
-                    position.scroll     = std::clamp(position.scroll + static_cast<float>(index) - position.index, 0.0F, static_cast<float>(candidate->images.size() - 1));
-                    position.index      = index;
-                    position.selected   = candidate->images[index].sha;
+                    if (selected == candidate->images.end() && candidate->key == collection_key && page == Page::dataset && !repaint) {
+                        view = {};
+                        if (candidate->images.empty()) viewing = View::browse;
+                    }
+                    if (candidate->images.empty()) {
+                        position = {};
+                        continue;
+                    }
+                    const auto index  = selected == candidate->images.end() ? std::min(position.index, candidate->images.size() - 1) : static_cast<std::size_t>(selected - candidate->images.begin());
+                    position.scroll   = std::clamp(position.scroll + static_cast<float>(index) - position.index, 0.0F, static_cast<float>(candidate->images.size() - 1));
+                    position.index    = index;
+                    position.selected = candidate->images[index].sha;
                 }
             }
         }
@@ -161,22 +168,18 @@ namespace genesia::editor {
                         output->record  = std::move(event.record);
                         output->preview = false;
                     } else renderer.discard(*source.timeline, presentation->ready);
-                } else {
-                    if (output) {
-                        output->record  = std::move(event.record);
-                        output->preview = false;
-                        output->saved   = std::move(event.file);
+                } else if (output) {
+                    if (output->texture) {
+                        if (output->preview) renderer.retire(std::exchange(output->texture, 0));
+                        else textures.adopt(*event.file, event.record, output->texture);
                     }
+                    output->record  = std::move(event.record);
+                    output->preview = false;
+                    output->saved   = std::move(event.file);
                 }
             }
         }
-        for (auto* output : {&generation, repaint ? &repaint->result : nullptr}) {
-            if (!output || !output->record || output->record->path.empty()) continue;
-            if (output->saved && output->texture) {
-                const auto cached = textures.entries.find(output->saved->sha);
-                if (cached != textures.entries.end() && cached->second.texture) renderer.retire(std::exchange(output->texture, 0));
-            }
-        }
+        textures.receive();
     }
 
     void Workspace::synchronize_collection() {
@@ -459,10 +462,10 @@ namespace genesia::editor {
         audit_dirty = false;
     }
     std::uint64_t Workspace::submit_task(runtime::Request request) {
-        auto submitted                                    = runtime.session.submit(std::move(request));
-        const auto id                                     = submitted.id;
-        session_state                                     = runtime.session.snapshot();
-        activity[{submitted.concept_key, submitted.kind}] = std::move(submitted);
+        auto submitted = runtime.session.submit(std::move(request));
+        const auto id  = submitted.id;
+        session_state  = runtime.session.snapshot();
+        if (submitted.kind != runtime::Kind::erase) activity[{submitted.concept_key, submitted.kind}] = std::move(submitted);
         return id;
     }
     void Workspace::task_event(const runtime::TaskStatus& event) {
@@ -470,10 +473,43 @@ namespace genesia::editor {
         const auto id    = event.id;
         const auto state = event.state;
         const auto& key  = event.concept_key;
-        if (kind != runtime::Kind::infer) {
+        if (kind != runtime::Kind::infer && kind != runtime::Kind::erase) {
             auto& latest = activity[{key, kind}];
             latest       = event;
             if (kind == runtime::Kind::audit || kind == runtime::Kind::fix || kind == runtime::Kind::undo) latest.result = {};
+        }
+        if (kind == runtime::Kind::erase && state >= runtime::State::complete) {
+            pending_delete.reset();
+            if (const auto* deleted = std::get_if<dataset::DeleteResult>(&event.result.value); deleted && !deleted->paths.empty()) {
+                const auto removed = [&](const std::filesystem::path& path) { return std::ranges::contains(deleted->paths, path); };
+                textures.discard(deleted->paths);
+                if (locate && removed(*locate)) locate.reset();
+                if (generation.saved && removed(generation.saved->path)) {
+                    if (generation.texture) renderer.retire(generation.texture);
+                    generation      = {};
+                    generation_view = {};
+                    if (page == Page::generation) view = {};
+                }
+                if (repaint && removed(repaint->source.path)) {
+                    repaints.at(repaint->source.sha)->editor.suspend();
+                    page    = repaint->return_page;
+                    viewing = repaint->return_view;
+                    view    = {};
+                    if (repaint->result.texture) renderer.retire(repaint->result.texture);
+                    repaint.reset();
+                    synchronize_collection();
+                    if (!collection || collection->images.empty()) viewing = View::browse;
+                } else if (repaint && repaint->result.saved && removed(repaint->result.saved->path)) {
+                    if (repaint->result.texture) renderer.retire(repaint->result.texture);
+                    repaint->result = {};
+                    viewing         = View::repaint;
+                    view            = {};
+                }
+            }
+            if (state == runtime::State::failed) {
+                action_error = event.error;
+                shown_error.clear();
+            }
         }
         if (kind == runtime::Kind::train && state == runtime::State::running) {
             const auto found = training_drafts.find(key);
@@ -518,15 +554,25 @@ namespace genesia::editor {
             const auto identity = audit_key + "|" + audit_report.model_sha + "|" + row.sample.file.sha;
             prediction_errors.erase(identity);
         }
-        if (audit_collection.images.empty()) audit_position = {};
-        else {
+        if (audit_collection.images.empty()) {
+            audit_position = {};
+            if (page == Page::audit && !repaint) {
+                viewing = View::browse;
+                view    = {};
+            }
+        } else {
             const auto selected = std::ranges::find(audit_collection.images, audit_position.selected, &dataset::File::sha);
-            const auto index    = audit_position.selected.empty() ? 0 : selected == audit_collection.images.end() ? std::min(audit_position.index, audit_collection.images.size() - 1) : std::size_t(selected - audit_collection.images.begin());
-            audit_position      = {audit_collection.images[index].sha, index, static_cast<float>(index)};
+            if (selected == audit_collection.images.end() && page == Page::audit && !repaint) view = {};
+            const auto index = audit_position.selected.empty() ? 0 : selected == audit_collection.images.end() ? std::min(audit_position.index, audit_collection.images.size() - 1) : std::size_t(selected - audit_collection.images.begin());
+            audit_position   = {audit_collection.images[index].sha, index, static_cast<float>(index)};
         }
     }
 
     void Workspace::observe_inference() {
+        if (pending_delete) {
+            runtime.session.observe({});
+            return;
+        }
         std::vector<runtime::Infer> wanted;
         for (const auto& file : visible_images)
             for (const auto& key : activated) {
@@ -574,7 +620,7 @@ namespace genesia::editor {
         }
         const auto selected = library.classifiers.find(collection_key);
         runtime.session.select(selected != library.classifiers.end() && ((dataset_sidebar.open && concept_tool == ConceptTool::train) || page == Page::audit) ? collection_key : std::string{});
-        if (page == Page::audit && !repaint && audit_dirty && !audit_task && !session_state.active) {
+        if (page == Page::audit && !repaint && audit_dirty && !audit_task && !session_state.active && !pending_delete) {
             const auto current = activity.find({audit_key, runtime::Kind::audit});
             const bool stopped = current != activity.end() && (current->second.state == runtime::State::stopped || current->second.state == runtime::State::failed);
             if (!stopped) open_audit(audit_key);
@@ -583,7 +629,7 @@ namespace genesia::editor {
             const PromptEditor* editor = page == Page::generation ? &prompt_editor : repaint ? &repaints.at(repaint->source.sha)->editor : nullptr;
             return std::pair{editor && editor->escape_owned, editor && editor->focus_input};
         };
-        const bool dismissing = escape_owned || parameter_edit.id || ImGui::IsAnyItemActive() || ImGui::GetDragDropPayload() || ImGui::GetIO().WantTextInput || (prompt_sidebar.open && editor_state().first) || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        bool dismissing = escape_owned || parameter_edit.id || ImGui::IsAnyItemActive() || ImGui::GetDragDropPayload() || ImGui::GetIO().WantTextInput || (prompt_sidebar.open && editor_state().first) || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
         if (!renderer.visible) return;
         canvas(*this, scale, size);
         sidebar(*this, true, scale, size, {});
@@ -597,7 +643,43 @@ namespace genesia::editor {
         observe_inference();
         top_strip(*this, scale, size);
         preset_dialogs(*this, scale);
-        if (!error.empty() && error != shown_error) {
+        const bool inspecting = page != Page::generation && viewing != View::browse && viewing != View::comparison;
+        if (inspecting && image.texture && image.file && !image.preview && !pending_delete && !session_state.active && !dismissing && !ImGui::IsAnyItemActive() && !ImGui::GetIO().WantTextInput && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && (ImGui::Shortcut(ImGuiKey_Delete, ImGuiInputFlags_RouteGlobal) || ImGui::Shortcut(ImGuiKey_KeypadDecimal, ImGuiInputFlags_RouteGlobal))) {
+            pending_delete = *image.file;
+            ImGui::OpenPopup("Delete image?");
+        }
+        ImGui::SetNextWindowPos({size.x / 2, size.y / 2}, ImGuiCond_Appearing, {0.5F, 0.5F});
+        ImGui::SetNextWindowSize({480 * scale, 0});
+        if (ImGui::BeginPopupModal("Delete image?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            dismissing          = true;
+            const auto relative = pending_delete->path.lexically_relative(project::directory);
+            const auto name     = files::utf8(*relative.begin());
+            const auto target   = std::ranges::find(library.roots, name, [](const dataset::Root& item) { return item.all.key; });
+            const auto count    = std::ranges::count(target->files, pending_delete->sha, &dataset::File::sha);
+            ImGui::TextWrapped("%s", files::utf8(relative).c_str());
+            ImGui::Spacing();
+            ImGui::TextWrapped("Permanently delete all %zu file entries for this image in dataset '%s', including its concepts?", static_cast<std::size_t>(count), name.c_str());
+            ImGui::TextWrapped("Other root datasets keep their images. This cannot be undone.");
+            ImGui::Spacing();
+            const bool cancel = ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+            ImGui::SetItemDefaultFocus();
+            ImGui::SameLine();
+            const bool confirm = ImGui::Button("Delete permanently");
+            if (cancel) {
+                pending_delete.reset();
+                ImGui::CloseCurrentPopup();
+            } else if (confirm) {
+                try {
+                    submit_task({runtime::Delete{name, pending_delete->sha}});
+                } catch (const std::exception& failure) {
+                    action_error = failure.what();
+                    pending_delete.reset();
+                }
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        if (!error.empty() && error != shown_error && !ImGui::IsPopupOpen("Delete image?")) {
             shown_error = error;
             ImGui::OpenPopup("Genesia error");
         }

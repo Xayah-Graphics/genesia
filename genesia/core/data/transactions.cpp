@@ -99,4 +99,45 @@ namespace genesia::dataset {
         }
         return {.restored = paths.size(), .paths = std::move(paths)};
     }
+    DeleteResult delete_image(Index& index, const std::string_view name, const std::string_view sha) {
+        const auto found = std::ranges::find(index.roots, name, [](const Root& root) { return root.all.key; });
+        if (found == index.roots.end() || !found->ready) throw std::runtime_error{"Dataset is not ready: " + std::string{name}};
+        auto& root = *found;
+        DeleteResult result{std::string{name}, std::string{sha}};
+        std::vector<std::filesystem::path> paths;
+        for (const auto& file : root.files)
+            if (file.sha == sha) paths.push_back(file.path);
+        if (paths.empty()) throw std::runtime_error{"Image is not in dataset: " + std::string{name} + " / " + std::string{sha}};
+        for (const auto& path : paths) {
+            std::error_code error;
+            const bool removed = std::filesystem::remove(path, error);
+            if (error || !removed) {
+                result.error = std::format("Permanently deleted {} of {} file entries.\nDelete {}: {}", result.paths.size(), paths.size(), files::utf8(path), error ? error.message() : "File no longer exists");
+                break;
+            }
+            result.paths.push_back(path);
+        }
+        if (result.paths.empty()) return result;
+        std::erase_if(root.files, [&](const File& file) { return std::ranges::contains(result.paths, file.path); });
+        index.rebuild(root);
+        std::set<std::filesystem::path> journals;
+        const auto folder = project::directory / files::path(name);
+        for (const auto& path : result.paths) {
+            const auto relative = path.lexically_relative(folder);
+            if (std::distance(relative.begin(), relative.end()) > 1) journals.insert(folder / *relative.begin() / ".genesia" / "audit-moves.json");
+        }
+        for (const auto& journal : journals) {
+            try {
+                if (!std::filesystem::exists(journal)) continue;
+                auto state         = files::read_json(journal);
+                auto& history      = state.at("history").get_ref<nlohmann::json::array_t&>();
+                const auto removed = std::erase_if(history, [&](const auto& operation) { return std::ranges::any_of(operation.at("moves"), [&](const nlohmann::json& move) { return move.at("sha").get_ref<const std::string&>() == sha; }); });
+                if (removed) files::write_json(journal, state);
+            } catch (const std::exception& error) {
+                if (!result.error.empty()) result.error += '\n';
+                result.error += "Images were deleted, but audit undo history could not be updated:\n" + files::utf8(journal) + ": " + error.what();
+            }
+        }
+        return result;
+    }
 } // namespace genesia::dataset
