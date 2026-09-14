@@ -9,6 +9,11 @@ import genesia.data.images;
 import genesia.training.samples;
 import std;
 namespace genesia::classification {
+    namespace {
+        // Windows exposes the new name before MoveFileEx closes its rename handle.
+        std::mutex cache_files;
+    }
+
     void to_json(nlohmann::json& json, const Result& result) {
         json = {{"id", result.id}, {"model_sha", result.model_sha}, {"image_sha", result.image_sha}, {"label", result.label}, {"classes", result.classes}, {"scores", result.scores}};
     }
@@ -92,6 +97,7 @@ namespace genesia::classification {
             result.id   = descriptor.id;
             return result;
         }
+        const std::lock_guard lock{cache_files};
         const auto path = project::state_directory / "inference" / descriptor.sha / (std::string{image_sha} + ".json");
         if (!std::filesystem::exists(path)) return {};
         const auto value = files::read_json(path);
@@ -102,6 +108,7 @@ namespace genesia::classification {
         return result;
     }
     void Cache::store(const Result& result) {
+        const std::lock_guard lock{cache_files};
         const auto path = project::state_directory / "inference" / result.model_sha / (result.image_sha + ".json");
         files::write_json(path, {{"version", 1}, {"prediction", result}});
         entries[{result.model_sha, result.image_sha}] = result;
