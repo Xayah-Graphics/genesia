@@ -91,7 +91,7 @@ export namespace genesia::sdxl {
         Inference& operator=(const Inference&) = delete;
         // Two pinned outputs alternate. Finish reading a result before the
         // second subsequent generate() call reuses its storage.
-        const Output& generate(std::uint64_t seed);
+        const Output& generate(std::uint64_t seed, const std::function<void()>& yield);
 
     private:
         Model& model;

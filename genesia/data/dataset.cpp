@@ -11,38 +11,81 @@ module;
 module genesia.dataset;
 import std;
 import genesia.hash;
+import genesia.files;
 
 namespace genesia::dataset {
-    Lock::Lock(const std::string_view name) {
-        std::filesystem::create_directories(state_directory);
-        const auto path = state_directory / std::format("{}.lock", name);
+    Lock::Lock(const std::string_view name, const bool wait, const std::filesystem::path& directory, const bool shared) {
+        std::filesystem::create_directories(directory);
+        const auto path = directory / std::format("{}.lock", name);
 #if defined(_WIN32)
         const auto file = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (file == INVALID_HANDLE_VALUE) throw std::system_error{static_cast<int>(GetLastError()), std::system_category(), "Open dataset lock"};
         OVERLAPPED operation{};
-        if (!LockFileEx(file, LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, &operation)) {
+        if (!LockFileEx(file, (shared ? 0 : LOCKFILE_EXCLUSIVE_LOCK) | (wait ? 0 : LOCKFILE_FAIL_IMMEDIATELY), 0, 1, 0, &operation)) {
             const auto error = GetLastError();
             CloseHandle(file);
+            if (!wait && error == ERROR_LOCK_VIOLATION) return;
             throw std::system_error{static_cast<int>(error), std::system_category(), "Lock dataset"};
         }
         handle = reinterpret_cast<std::intptr_t>(file);
 #else
         handle = open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0666);
         if (handle == -1) throw std::system_error{errno, std::generic_category(), "Open dataset lock"};
-        if (flock(static_cast<int>(handle), LOCK_EX) == -1) {
+        if (flock(static_cast<int>(handle), (shared ? LOCK_SH : LOCK_EX) | (wait ? 0 : LOCK_NB)) == -1) {
             const auto error = errno;
             close(static_cast<int>(handle));
+            if (!wait && error == EWOULDBLOCK) return;
             throw std::system_error{error, std::generic_category(), "Lock dataset"};
         }
 #endif
+        acquired = true;
     }
 
     Lock::~Lock() {
+        if (!acquired) return;
 #if defined(_WIN32)
         CloseHandle(reinterpret_cast<HANDLE>(handle));
 #else
         close(static_cast<int>(handle));
 #endif
+    }
+
+    ConceptType parse_concept_type(const std::string_view name) {
+        const auto found = std::ranges::find(concept_types, name);
+        if (found == concept_types.end()) throw std::runtime_error{"Unknown concept type: " + std::string(name)};
+        return static_cast<ConceptType>(found - concept_types.begin());
+    }
+    void to_json(nlohmann::json& json, const Concept& value) {
+        json = {{"version", 2}, {"type", concept_types[static_cast<std::size_t>(value.type)]}, {"locked", value.locked}};
+    }
+    Concept read_concept(const std::string_view key) {
+        const auto relative = files::path(key);
+        if (relative.is_absolute() || std::distance(relative.begin(), relative.end()) != 2 || std::ranges::any_of(relative, [](const auto& part) { return files::utf8(part).starts_with('.'); })) throw std::runtime_error{"Expected ROOT/CONCEPT"};
+        Concept result{files::utf8(relative), directory / relative};
+        if (!std::filesystem::is_directory(result.path)) throw std::runtime_error{"Concept not found: " + result.key};
+        const auto state    = result.path / ".genesia";
+        const auto manifest = state / "concept.json";
+        if (std::filesystem::exists(manifest)) {
+            const auto value = files::read_json(manifest);
+            if (value.at("version") != 2) throw std::runtime_error{"Old or unsupported concept state: " + result.key + ". Remove the old training artifacts before assigning a type."};
+            result.type   = parse_concept_type(value.at("type").get_ref<const std::string&>());
+            result.locked = value.at("locked").get<bool>();
+            if (result.type == ConceptType::none && result.locked) throw std::runtime_error{"An unassigned concept cannot have a locked training type: " + result.key};
+        } else if (std::filesystem::exists(state) && !std::filesystem::is_empty(state)) throw std::runtime_error{"Concept state has no type manifest: " + result.key};
+        return result;
+    }
+    Concept assign_type(const std::string_view key, const ConceptType type) {
+        const auto normalized = files::utf8(files::path(key));
+        const auto identity   = sha256({reinterpret_cast<const unsigned char*>(normalized.data()), normalized.size()});
+        const Lock pending{"concept-type-" + identity, false};
+        if (!pending.acquired) throw std::runtime_error{"Concept has queued or running training: " + normalized};
+        const Lock operation{"concept-" + identity, false};
+        if (!operation.acquired) throw std::runtime_error{"Concept is in use: " + normalized};
+        auto result = read_concept(normalized);
+        if (result.locked) throw std::runtime_error{"Concept type is locked by its training history: " + result.key};
+        result.type = type;
+        files::write_json(result.path / ".genesia" / "concept.json", result);
+        return result;
     }
 
     Png read_png(const std::filesystem::path& path) {
@@ -99,7 +142,6 @@ namespace genesia::dataset {
             result.source  = metadata.at("repaint").at("source");
             result.denoise = metadata.at("repaint").at("denoise");
         }
-        if (metadata.contains("classification")) result.classification.emplace(metadata.at("classification"));
         return result;
     }
 

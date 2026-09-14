@@ -25,7 +25,10 @@ namespace genesia::editor {
         {
             const std::lock_guard lock{mutex};
             if (index) {
-                roots = std::move(*index);
+                roots          = std::move(*index);
+                concepts       = std::move(concept_updates);
+                classifiers    = std::move(classifier_updates);
+                concept_errors = std::move(concept_error_updates);
                 index.reset();
                 ++revision;
                 ready = true;
@@ -119,11 +122,28 @@ namespace genesia::editor {
                     scan = std::exchange(rescan, false);
                 }
                 if (scan || std::chrono::steady_clock::now() >= scan_at) {
+                    const dataset::Lock files_lock{"image-moves"};
                     scanner.scan();
+                    std::map<std::string, dataset::Concept> next;
+                    std::map<std::string, classifier::TrainingData> next_classifiers;
+                    std::map<std::string, std::string> errors;
+                    for (const auto& root : scanner.roots)
+                        for (const auto& collection : root.concepts) {
+                            try {
+                                auto assigned        = dataset::read_concept(collection.key);
+                                next[collection.key] = assigned;
+                                if (assigned.type == dataset::ConceptType::classifier) next_classifiers[collection.key] = classifier::inspect(assigned, root);
+                            } catch (const std::exception& error) {
+                                errors[collection.key] = error.what();
+                            }
+                        }
                     {
                         const std::lock_guard lock{mutex};
-                        index   = std::move(scanner.roots);
-                        pending = true;
+                        index                 = std::move(scanner.roots);
+                        concept_updates       = std::move(next);
+                        classifier_updates    = std::move(next_classifiers);
+                        concept_error_updates = std::move(errors);
+                        pending               = true;
                     }
                     glfwPostEmptyEvent();
                     scan_at = std::chrono::steady_clock::time_point::max();

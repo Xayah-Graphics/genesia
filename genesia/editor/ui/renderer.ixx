@@ -2,7 +2,7 @@ export module genesia.editor.ui.renderer;
 import genesia.editor.platform.window;
 import genesia.editor.runtime.device;
 import genesia.editor.runtime.resources;
-import genesia.generation.images;
+import genesia.images;
 import std;
 import vulkan;
 

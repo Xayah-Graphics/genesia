@@ -1,10 +1,9 @@
 module;
 #include <nlohmann/json.hpp>
-export module classifier.storage;
+export module genesia.classifier.storage;
+export import genesia.files;
 import std;
-export namespace classifier {
-    std::filesystem::path default_cache_directory();
-    std::string path_utf8(const std::filesystem::path& path);
+export namespace genesia::classifier {
     struct Mapping {
         void* data       = nullptr;
         std::size_t size = 0;
@@ -23,5 +22,4 @@ export namespace classifier {
         std::vector<float> values;
     };
     void save_tensors(const std::filesystem::path& path, const std::map<std::string, HostTensor>& tensors, const nlohmann::json& metadata);
-    void write_json(const std::filesystem::path& path, const nlohmann::json& value);
-} // namespace classifier
+} // namespace genesia::classifier

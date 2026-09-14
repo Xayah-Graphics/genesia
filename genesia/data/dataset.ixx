@@ -10,7 +10,8 @@ export namespace genesia::dataset {
     inline const std::filesystem::path state_directory = directory.parent_path() / ".genesia";
 
     struct Lock final {
-        explicit Lock(std::string_view name);
+        explicit Lock(std::string_view name, bool wait = true, const std::filesystem::path& directory = state_directory, bool shared = false);
+        bool acquired{};
         ~Lock();
         Lock(const Lock&)            = delete;
         Lock& operator=(const Lock&) = delete;
@@ -18,6 +19,19 @@ export namespace genesia::dataset {
     private:
         std::intptr_t handle{};
     };
+    enum class ConceptType { none, classifier, lora };
+    inline constexpr std::array<std::string_view, 3> concept_types{"none", "classifier", "lora"};
+    struct Concept final {
+        std::string key;
+        std::filesystem::path path;
+        ConceptType type{ConceptType::none};
+        bool locked{};
+    };
+    ConceptType parse_concept_type(std::string_view name);
+    void to_json(nlohmann::json& json, const Concept& value);
+    Concept read_concept(std::string_view key);
+    Concept assign_type(std::string_view key, ConceptType type);
+
     struct Png final {
         struct Tag final {
             std::string name;
@@ -37,7 +51,6 @@ export namespace genesia::dataset {
         float cfg{}, denoise{1};
         std::string model, source;
         std::array<Side, 2> prompt;
-        std::optional<nlohmann::json> classification;
     };
     Png read_png(const std::filesystem::path& path);
 

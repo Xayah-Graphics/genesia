@@ -6,7 +6,7 @@
 namespace cudnn_frontend::graph {
     class Graph;
 }
-namespace classifier {
+namespace genesia::classifier {
     struct Tensor {
         void* data = nullptr;
         int n = 1, h = 1, w = 1, c = 1;
@@ -59,11 +59,11 @@ namespace classifier {
     void dropout(cudaStream_t stream, Tensor out, Tensor x, float* mask, RandomState* random, bool training);
     void dropout_backward(cudaStream_t stream, Tensor dx, Tensor dy, const float* mask);
     void bias_backward(cudaStream_t stream, Tensor dy, float* db);
-    void softmax(cudaStream_t stream, Tensor logits, float* scores, int* decisions, unsigned char* accepted, float threshold);
+    void softmax(cudaStream_t stream, Tensor logits, float* scores, int* decisions);
     void cross_entropy(cudaStream_t stream, Tensor dz, Tensor logits, const int* labels, UpdateState* state, int effective_batch);
     void gradient_norm(cudaStream_t stream, ParameterView p, UpdateState* state);
     void optimizer_begin(cudaStream_t stream, UpdateState* state);
     void optimizer_clip(cudaStream_t stream, UpdateState* state);
     void adamw(cudaStream_t stream, ParameterView p, UpdateState* state);
-} // namespace classifier
+} // namespace genesia::classifier
 #endif

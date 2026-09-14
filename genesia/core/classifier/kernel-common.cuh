@@ -4,7 +4,7 @@
 #include <cmath>
 #include <cub/block/block_reduce.cuh>
 #include <cuda_bf16.h>
-namespace classifier {
+namespace genesia::classifier {
     __device__ inline float read(Tensor t, std::size_t i) {
         return t.fp32 ? static_cast<float*>(t.data)[i] : __bfloat162float(static_cast<__nv_bfloat16*>(t.data)[i]);
     }
@@ -31,5 +31,5 @@ namespace classifier {
         }
         return (float(c.x >> 8) + .5f) * 0x1p-24f;
     }
-} // namespace classifier
+} // namespace genesia::classifier
 #endif

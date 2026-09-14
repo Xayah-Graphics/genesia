@@ -326,8 +326,7 @@ namespace genesia::editor {
                     remove = i;
                 }
                 if (clicked && !removed) {
-                    if (!weight.empty() && ImGui::GetIO().MousePos.x >= p.x + item_width - weight_width - tag_padding * scale) ImGui::OpenPopup("Weight");
-                    else if (ImGui::GetIO().KeyShift) {
+                    if (ImGui::GetIO().KeyShift) {
                         selection.clear();
                         for (std::size_t k = std::min(anchor, i); k <= std::max(anchor, i); ++k) selection.insert(k);
                     } else {
@@ -363,15 +362,6 @@ namespace genesia::editor {
                         }
                     }
                     ImGui::EndDragDropTarget();
-                }
-                if (ImGui::BeginPopup("Weight")) {
-                    float value = group.tags[i].weight;
-                    if (ImGui::InputFloat("Weight", &value, 0.05F, 0.1F, "%.2f", ImGuiInputTextFlags_EnterReturnsTrue) && std::isfinite(value)) {
-                        auto next      = group.tags;
-                        next[i].weight = value;
-                        replace(group, std::move(next));
-                    }
-                    ImGui::EndPopup();
                 }
                 if (hovered) {
                     ImGui::BeginTooltip();

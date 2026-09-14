@@ -1,5 +1,5 @@
 #include "kernel-common.cuh"
-namespace classifier {
+namespace genesia::classifier {
     __global__ void advance_kernel(RandomState* r) {
         ++r->sequence;
     }
@@ -50,4 +50,4 @@ namespace classifier {
     void random_advance(cudaStream_t s, RandomState* r) {
         advance_kernel<<<1, 1, 0, s>>>(r);
     }
-} // namespace classifier
+} // namespace genesia::classifier

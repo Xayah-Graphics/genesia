@@ -1,5 +1,5 @@
 #include "kernel-common.cuh"
-namespace classifier {
+namespace genesia::classifier {
     template <int Channels>
     __global__ void dw_packed(Tensor out, const __nv_bfloat162* x, const __nv_bfloat162* weight, const __nv_bfloat162* bias) {
         std::int64_t i = std::int64_t(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -67,4 +67,4 @@ namespace classifier {
         dw_dx_kernel<<<(dx.elements() + 255) / 256, 256, 0, s>>>(dx, dy, w);
         dw_param_kernel<<<dim3((x.c + 127) / 128, 49, 64), 128, 0, s>>>(dy, x, dw, db);
     }
-} // namespace classifier
+} // namespace genesia::classifier

@@ -1,5 +1,5 @@
 #include "kernel-common.cuh"
-namespace classifier {
+namespace genesia::classifier {
     __global__ void convert_kernel(Tensor out, Tensor in) {
         std::size_t i = std::size_t(blockIdx.x) * blockDim.x + threadIdx.x;
         if (i < out.elements()) write(out, i, read(in, i));
@@ -63,18 +63,17 @@ namespace classifier {
         for (int r = blockIdx.y; r < dy.n * dy.h * dy.w; r += gridDim.y) sum += read(dy, std::size_t(r) * dy.c + c);
         atomicAdd(db + c, sum);
     }
-    __global__ void softmax_kernel(Tensor z, float* scores, int* decisions, unsigned char* accepted, float threshold) {
+    __global__ void softmax_kernel(Tensor z, float* scores, int* decisions) {
         int n         = blockIdx.x;
         float maximum = -INFINITY, sum = 0;
         for (int c = 0; c < z.c; ++c) maximum = fmaxf(maximum, read(z, n * z.c + c));
         for (int c = 0; c < z.c; ++c) sum += expf(read(z, n * z.c + c) - maximum);
-        int other = 1;
+        int predicted = 0;
         for (int c = 0; c < z.c; ++c) {
             scores[n * z.c + c] = expf(read(z, n * z.c + c) - maximum) / sum;
-            if (c > 0 && read(z, n * z.c + c) > read(z, n * z.c + other)) other = c;
+            if (read(z, n * z.c + c) > read(z, n * z.c + predicted)) predicted = c;
         }
-        accepted[n]  = scores[n * z.c] >= threshold;
-        decisions[n] = accepted[n] ? 0 : other;
+        decisions[n] = predicted;
     }
     __global__ void ce_kernel(Tensor dz, Tensor z, const int* labels, UpdateState* state, int effective) {
         int n         = blockIdx.x;
@@ -118,10 +117,10 @@ namespace classifier {
     void bias_backward(cudaStream_t s, Tensor dy, float* db) {
         bias_grad_kernel<<<dim3((dy.c + 127) / 128, 128), 128, 0, s>>>(dy, db);
     }
-    void softmax(cudaStream_t s, Tensor z, float* p, int* d, unsigned char* a, float t) {
-        softmax_kernel<<<z.n, 1, 0, s>>>(z, p, d, a, t);
+    void softmax(cudaStream_t s, Tensor z, float* p, int* d) {
+        softmax_kernel<<<z.n, 1, 0, s>>>(z, p, d);
     }
     void cross_entropy(cudaStream_t s, Tensor dz, Tensor z, const int* labels, UpdateState* state, int effective) {
         ce_kernel<<<z.n, 1, 0, s>>>(dz, z, labels, state, effective);
     }
-} // namespace classifier
+} // namespace genesia::classifier

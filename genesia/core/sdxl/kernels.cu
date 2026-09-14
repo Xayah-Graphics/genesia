@@ -151,9 +151,11 @@ namespace genesia::sdxl::kernels {
     __global__ void advance_kernel(int* step, const int count, const cudaGraphConditionalHandle loop, const cudaGraphConditionalHandle decode, Control* control) {
         const int completed = ++*step;
         ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control->completed}.store(completed, ::cuda::memory_order_release);
-        const bool stopped = ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control->cancel}.load(::cuda::memory_order_acquire) != 0;
-        cudaGraphSetConditional(loop, !stopped && completed < count);
+        const bool stopped  = ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control->cancel}.load(::cuda::memory_order_acquire) != 0;
+        const bool yielding = ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control->yield_requested}.load(::cuda::memory_order_acquire) != 0 && completed < count;
+        cudaGraphSetConditional(loop, !stopped && !yielding && completed < count);
         cudaGraphSetConditional(decode, !stopped && completed == count);
+        if (yielding && !stopped) ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control->stage}.store(static_cast<std::uint32_t>(Stage::yielded), ::cuda::memory_order_release);
         if (stopped || completed == count) ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control->stage}.store(static_cast<std::uint32_t>(stopped ? Stage::cancelled : Stage::decoding), ::cuda::memory_order_release);
     }
 

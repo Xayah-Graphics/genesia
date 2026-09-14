@@ -3,7 +3,7 @@ module;
 #define STBI_ONLY_PNG
 #include <stb_image.h>
 
-module genesia.generation.images;
+module genesia.images;
 import std;
 
 namespace genesia {

@@ -3,10 +3,10 @@ module;
 #include <cublasLt.h>
 #include <cudnn.h>
 #include <nlohmann/json.hpp>
-export module classifier.network;
-export import classifier.storage;
+export module genesia.classifier.network;
+export import genesia.classifier.storage;
 import std;
-export namespace classifier {
+export namespace genesia::classifier {
     void cuda_check(cudaError_t status);
     struct DeviceBuffer {
         void* data       = nullptr;
@@ -95,7 +95,6 @@ export namespace classifier {
     struct GpuResult {
         float* scores;
         int* indices;
-        unsigned char* accepted;
     };
     enum class ActivationStorage { reuse, retain };
     struct NetworkPlan {
@@ -120,7 +119,7 @@ export namespace classifier {
         void convolution(std::string key, Tensor x, Parameter& weight, Tensor out, int kernel, int direction = 0, const void* original_input = nullptr);
         void forward(bool stochastic = false);
         void capture();
-        void infer(GpuRgb8 input, GpuResult result, cudaStream_t caller_stream, float threshold = .9f);
+        void infer(GpuRgb8 input, GpuResult result, cudaStream_t caller_stream);
     };
     struct TrainingPlan : NetworkPlan {
         int effective_batch;
@@ -134,4 +133,4 @@ export namespace classifier {
         void capture_training();
         void microbatch(const unsigned char* host_rgb, const int* host_labels, bool head_only, cudaStream_t caller_stream, cudaEvent_t copied);
     };
-} // namespace classifier
+} // namespace genesia::classifier

@@ -2,8 +2,9 @@ module;
 #include <Windows.h>
 export module genesia.editor.library;
 export import genesia.dataset;
+export import genesia.classifier.dataset;
 import genesia.generation.output;
-import genesia.generation.images;
+import genesia.images;
 import genesia.editor.ui.renderer;
 import std;
 
@@ -17,6 +18,9 @@ export namespace genesia::editor {
             std::string error;
         };
         std::vector<dataset::Root> roots;
+        std::map<std::string, dataset::Concept> concepts;
+        std::map<std::string, classifier::TrainingData> classifiers;
+        std::map<std::string, std::string> concept_errors;
         std::map<std::string, Texture> textures;
         std::uint64_t revision{};
         bool ready{};
@@ -41,6 +45,9 @@ export namespace genesia::editor {
         std::unique_ptr<std::remove_pointer_t<HANDLE>, decltype(&CloseHandle)> wake{nullptr, CloseHandle};
         std::mutex mutex;
         std::optional<std::vector<dataset::Root>> index;
+        std::map<std::string, dataset::Concept> concept_updates;
+        std::map<std::string, classifier::TrainingData> classifier_updates;
+        std::map<std::string, std::string> concept_error_updates;
         std::vector<Decoded> results;
         std::vector<dataset::File> requested;
         bool rescan{true};

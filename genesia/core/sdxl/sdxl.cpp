@@ -99,7 +99,6 @@ namespace genesia::sdxl {
         neural::check(cudaGraphConditionalHandleCreate(&decode_condition, graph.get(), 0, cudaGraphCondAssignDefault));
         try {
             neural::check(cudaStreamBeginCaptureToGraph(stream.get(), graph.get(), nullptr, nullptr, 0, cudaStreamCaptureModeThreadLocal));
-            kernels::initialize(stream, latent.data(), input.data(), step.data(), seed.data(), schedule.data(), static_cast<int>(latent.size()), source ? source->latent.data() : nullptr, parameters.denoise == 1);
             neural::check(cudaEventRecordWithFlags(initialized.get(), stream.get(), cudaEventRecordExternal));
             cudaStreamCaptureStatus status;
             const cudaGraphNode_t* dependencies{};
@@ -158,7 +157,7 @@ namespace genesia::sdxl {
         model.runtime.stream.sync();
     }
 
-    const Output& Inference::generate(const std::uint64_t seed) {
+    const Output& Inference::generate(const std::uint64_t seed, const std::function<void()>& yield) {
         Output& result       = outputs[output_index++ % 2];
         result.device_pixels = image.data();
         result.cancelled     = false;
@@ -175,8 +174,21 @@ namespace genesia::sdxl {
             return result;
         }
         ::cuda::copy_bytes(stream, ::cuda::std::span<const std::uint64_t>{&seed, 1}, this->seed);
-        neural::check(cudaGraphLaunch(executable.get(), stream.get()));
-        neural::check(cudaEventSynchronize(decoded_event.get()));
+        kernels::initialize(stream, latent.data(), input.data(), step.data(), this->seed.data(), schedule.data(), static_cast<int>(latent.size()), source ? source->latent.data() : nullptr, parameters.denoise == 1);
+        result.sample_seconds = 0;
+        for (;;) {
+            neural::check(cudaGraphLaunch(executable.get(), stream.get()));
+            neural::check(cudaEventSynchronize(decoded_event.get()));
+            float milliseconds;
+            neural::check(cudaEventElapsedTime(&milliseconds, initialized.get(), sampled.get()));
+            result.sample_seconds += milliseconds * 0.001;
+            const auto stage = static_cast<Stage>(::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.stage}.load(::cuda::memory_order_acquire));
+            if (stage != Stage::yielded) break;
+            ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.yield_requested}.store(0, ::cuda::memory_order_release);
+            yield();
+            if (::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.cancel}.load()) break;
+            ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.stage}.store(static_cast<std::uint32_t>(Stage::sampling));
+        }
         if (::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.cancel}.load()) {
             result.cancelled = true;
             ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.stage}.store(static_cast<std::uint32_t>(Stage::cancelled));
@@ -186,8 +198,6 @@ namespace genesia::sdxl {
         ::cuda::copy_bytes(stream, image, result.pixels);
         stream.sync();
         float milliseconds;
-        neural::check(cudaEventElapsedTime(&milliseconds, initialized.get(), sampled.get()));
-        result.sample_seconds = milliseconds * 0.001;
         neural::check(cudaEventElapsedTime(&milliseconds, sampled.get(), decoded_event.get()));
         result.decode_seconds = milliseconds * 0.001;
         ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.stage}.store(static_cast<std::uint32_t>(Stage::complete));

@@ -6,9 +6,9 @@ module;
 #define nlohmann cudnn_json
 #include <cudnn_frontend.h>
 #undef nlohmann
-module classifier.network;
+module genesia.classifier.network;
 import std;
-namespace classifier {
+namespace genesia::classifier {
     void cuda_check(cudaError_t status) {
         if (status != cudaSuccess) throw std::runtime_error(cudaGetErrorString(status));
     }
@@ -36,19 +36,20 @@ namespace classifier {
     OptimizerState::OptimizerState(const decltype(SafeFile::header)& metadata) : random_storage(sizeof(RandomState)), update_storage(sizeof(UpdateState)) {
         random = static_cast<RandomState*>(random_storage.data);
         update = static_cast<UpdateState*>(update_storage.data);
-        RandomState r{42, std::stoull(metadata.value("sequence", "0"))};
+        RandomState r{42, std::stoull(metadata.at("sequence").get<std::string>())};
         UpdateState u{};
-        u.step = std::stoi(metadata.value("step", "0"));
+        u.step = std::stoi(metadata.at("step").get<std::string>());
         cuda_check(cudaMemcpy(random, &r, sizeof(r), cudaMemcpyHostToDevice));
         cuda_check(cudaMemcpy(update, &u, sizeof(u), cudaMemcpyHostToDevice));
     }
-    Network::Network(const std::filesystem::path& path, NetworkLoad load) : cache_directory(default_cache_directory()) {
+    Network::Network(const std::filesystem::path& path, NetworkLoad load) : cache_directory(std::filesystem::path{GENESIA_CACHE_DIRECTORY} / "classifier" / "gpu") {
         const bool train = load != NetworkLoad::inference;
         SafeFile file(path);
-        if (load == NetworkLoad::pretrained) metadata = {{"architecture", "convnextv2_tiny"}, {"layout", "NHWC-OHWI-DW_RC"}};
+        if (load == NetworkLoad::pretrained) metadata = {{"architecture", "convnextv2_tiny"}, {"layout", "NHWC-OHWI-DW_RC"}, {"sequence", "0"}, {"step", "0"}};
         else {
             metadata = file.header.at("__metadata__");
-            classes  = decltype(SafeFile::header)::parse(metadata.at("classes").get<std::string>()).get<std::vector<std::string>>();
+            if (metadata.at("format") != "genesia-classifier-1") throw std::runtime_error{"Unsupported classifier model format"};
+            classes = decltype(SafeFile::header)::parse(metadata.at("classes").get<std::string>()).get<std::vector<std::string>>();
         }
         for (auto it = file.header.begin(); it != file.header.end(); ++it) {
             if (it.key() == "__metadata__" || it.key().starts_with("optimizer.")) continue;
@@ -94,7 +95,7 @@ namespace classifier {
                 if (load == NetworkLoad::resume)
                     for (const auto& state : std::array<std::pair<std::string, float*>, 2>{{{"m", p.gpu.m}, {"v", p.gpu.v}}}) {
                         std::string key = "optimizer." + state.first + "." + p.name;
-                        if (file.header.contains(key)) cuda_check(cudaMemcpy(state.second, file.base + file.header[key]["data_offsets"][0].get<std::size_t>(), count * 4, cudaMemcpyHostToDevice));
+                        cuda_check(cudaMemcpy(state.second, file.base + file.header.at(key).at("data_offsets")[0].get<std::size_t>(), count * 4, cudaMemcpyHostToDevice));
                     }
             }
             parameters.emplace(p.name, std::move(p));
@@ -380,7 +381,7 @@ namespace classifier {
                 cudaEventDestroy(end);
                 std::vector<std::uint8_t> raw(sizeof(plan->algorithm));
                 std::memcpy(raw.data(), &plan->algorithm, raw.size());
-                write_json(cache, {{"algorithm", raw}, {"workspace", plan->workspace}, {"milliseconds", double(best) / 3}, {"gpu", "RTX 5090 sm_120a"}});
+                files::write_json(cache, {{"algorithm", raw}, {"workspace", plan->workspace}, {"milliseconds", double(best) / 3}, {"gpu", "RTX 5090 sm_120a"}});
             }
             found = gemms.emplace(key, std::move(plan)).first;
         }
@@ -496,10 +497,10 @@ namespace classifier {
         cuda_check(cudaStreamEndCapture(stream, &inference_graph));
         cuda_check(cudaGraphInstantiate(&inference_exec, inference_graph, 0));
     }
-    void NetworkPlan::infer(GpuRgb8 input, GpuResult result, cudaStream_t caller_stream, float threshold) {
+    void NetworkPlan::infer(GpuRgb8 input, GpuResult result, cudaStream_t caller_stream) {
         preprocess(caller_stream, tensors[0], input.pixels, input.row_stride, std::size_t(input.height) * input.row_stride, nullptr, nullptr, false);
         cuda_check(cudaGraphLaunch(inference_exec, caller_stream));
-        softmax(caller_stream, tensors.back(), result.scores, result.indices, result.accepted, threshold);
+        softmax(caller_stream, tensors.back(), result.scores, result.indices);
     }
     TrainingPlan::TrainingPlan(Network& model, int n, int w, int h, TrainingPlan* shared) : NetworkPlan(model, n, w, h, ActivationStorage::retain, shared) {
         const auto placement = tensor_layout(tensors, ops, false);
@@ -610,4 +611,4 @@ namespace classifier {
         cuda_check(cudaEventRecord(copied, caller_stream));
         cuda_check(cudaGraphLaunch(head_only ? frozen_exec : training_exec, caller_stream));
     }
-} // namespace classifier
+} // namespace genesia::classifier

@@ -1,5 +1,5 @@
 #include "kernel-common.cuh"
-namespace classifier {
+namespace genesia::classifier {
     __global__ void norm_kernel(ParameterView p, UpdateState* state) {
         if (state->step <= state->head_only_steps && !p.head) return;
         __shared__ cub::BlockReduce<float, 256>::TempStorage shared;
@@ -49,4 +49,4 @@ namespace classifier {
     void adamw(cudaStream_t s, ParameterView p, UpdateState* state) {
         adam_kernel<<<(p.count + 255) / 256, 256, 0, s>>>(p, state);
     }
-} // namespace classifier
+} // namespace genesia::classifier

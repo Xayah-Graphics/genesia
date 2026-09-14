@@ -8,24 +8,10 @@ module;
 #include <unistd.h>
 #endif
 #include <nlohmann/json.hpp>
-module classifier.storage;
+module genesia.classifier.storage;
 import std;
-namespace classifier {
-    std::filesystem::path default_cache_directory() {
-#if defined(_WIN32)
-        std::wstring path(32768, L'\0');
-        const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
-        if (!length) throw std::system_error(int(GetLastError()), std::system_category(), "Locate executable");
-        path.resize(length);
-        return std::filesystem::path(path).parent_path() / "cache";
-#elif defined(__linux__)
-        return std::filesystem::read_symlink("/proc/self/exe").parent_path() / "cache";
-#endif
-    }
-    std::string path_utf8(const std::filesystem::path& path) {
-        const auto text = path.generic_u8string();
-        return std::string(text.begin(), text.end());
-    }
+import genesia.files;
+namespace genesia::classifier {
     Mapping::Mapping(const std::filesystem::path& path) {
         size = std::filesystem::file_size(path);
 #if defined(_WIN32)
@@ -77,11 +63,6 @@ namespace classifier {
         for (const auto& [name, tensor] : tensors) file.write(reinterpret_cast<const char*>(tensor.values.data()), tensor.values.size() * 4);
         file.close();
         if (!file) throw std::runtime_error("Cannot write checkpoint");
-        std::filesystem::rename(temporary, path);
+        files::publish(temporary, path);
     }
-    void write_json(const std::filesystem::path& path, const nlohmann::json& json) {
-        std::filesystem::create_directories(path.parent_path());
-        std::ofstream file(path);
-        file << json.dump(2);
-    }
-} // namespace classifier
+} // namespace genesia::classifier

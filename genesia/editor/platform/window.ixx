@@ -1,7 +1,6 @@
 module;
 
 #include <Windows.h>
-
 #include <GLFW/glfw3.h>
 
 export module genesia.editor.platform.window;
@@ -28,6 +27,7 @@ namespace genesia::editor {
         HWND native_window{};
         std::array<float, 4> drag_region{};
         bool redraw{true};
+        std::vector<std::filesystem::path> dropped;
         std::array<GLFWcursor*, 2> hand_cursors{};
 
     private:

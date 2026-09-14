@@ -1,4 +1,4 @@
-export module genesia.generation.images;
+export module genesia.images;
 import std;
 
 export namespace genesia {

@@ -37,7 +37,6 @@ namespace genesia {
         const auto started = std::chrono::steady_clock::now();
         const auto model   = record.model.u8string();
         nlohmann::json metadata{{"version", 1}, {"model", std::string{model.begin(), model.end()}}, {"seed", record.seed}, {"steps", record.parameters.steps}, {"cfg", record.parameters.cfg}, {"sampler", "euler"}, {"scheduler", "simple"}};
-        if (!record.classification.classifiers.empty()) metadata["classification"] = record.classification;
         if (!record.source.empty()) {
             const auto source   = record.source.u8string();
             metadata["repaint"] = {{"source", std::string{source.begin(), source.end()}}, {"denoise", record.parameters.denoise}};
@@ -65,6 +64,7 @@ namespace genesia {
         const std::unique_ptr<unsigned char, decltype(&std::free)> png{stbi_write_png_to_mem(output.pixels.data(), output.width * 3, output.width, output.height, 3, &length), &std::free};
         if (!png) throw std::runtime_error{"PNG encoding failed"};
 
+        const dataset::Lock files_lock{"image-moves"};
         const dataset::Lock publication{"raw-publish"};
         dataset::Index index;
         index.scan("raw");
@@ -133,7 +133,6 @@ namespace genesia {
                 }
         if (!archived.empty()) catalog = std::make_shared<prompt::Catalog>(std::move(catalog), archived);
         Record result;
-        if (png.classification) png.classification->get_to(result.classification);
         result.path               = path;
         result.catalog            = std::move(catalog);
         result.parameters.width   = png.width;

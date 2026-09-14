@@ -1,5 +1,5 @@
 #include "kernel-common.cuh"
-namespace classifier {
+namespace genesia::classifier {
     __global__ void ln_kernel(Tensor out, Tensor x, const float* weight, const float* bias, float* stats) {
         int lane = threadIdx.x % 32, row = blockIdx.x * 4 + threadIdx.x / 32, c = x.c;
         if (row >= x.n * x.h * x.w) return;
@@ -151,4 +151,4 @@ namespace classifier {
         grn_backward_stats<<<x.n, 256, 0, s>>>(x, w, stats, scratch, 128);
         grn_dx<<<(dx.elements() + 255) / 256, 256, 0, s>>>(dx, dy, x, w, stats, scratch + x.n * 128 * x.c);
     }
-} // namespace classifier
+} // namespace genesia::classifier

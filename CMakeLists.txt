@@ -44,6 +44,7 @@ endif ()
 
 if (MSVC)
     add_compile_options(
+            $<$<COMPILE_LANGUAGE:CXX>:/utf-8>
             $<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>
             $<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>
             $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/Zc:preprocessor>
@@ -72,66 +73,47 @@ endif ()
 # ============================================================================
 # Dataset and shared hashing (no generation runtime dependency)
 # ============================================================================
-add_library(genesia_data STATIC genesia/data/hash.cpp genesia/data/dataset.cpp)
+add_library(genesia_data STATIC genesia/data/hash.cpp genesia/data/dataset.cpp genesia/data/images.cpp genesia/data/files.cpp genesia/data/operations.cpp)
 target_sources(genesia_data PUBLIC FILE_SET cxx_modules TYPE CXX_MODULES FILES
         genesia/data/hash.ixx
         genesia/data/dataset.ixx
+        genesia/data/images.ixx
+        genesia/data/files.ixx
+        genesia/data/operations.ixx
 )
-target_compile_definitions(genesia_data PUBLIC GENESIA_DATA_DIRECTORY="${PROJECT_SOURCE_DIR}/data")
-target_link_libraries(genesia_data PUBLIC nlohmann_json::nlohmann_json Threads::Threads)
+target_compile_definitions(genesia_data PUBLIC GENESIA_DATA_DIRECTORY="${PROJECT_SOURCE_DIR}/data" GENESIA_CACHE_DIRECTORY="${PROJECT_BINARY_DIR}/genesia-cache")
+target_link_libraries(genesia_data PUBLIC nlohmann_json::nlohmann_json Threads::Threads PRIVATE genesia::stb)
 
 # ============================================================================
 # Classifier
 # ============================================================================
-add_library(classifier_runtime STATIC
-        classifier/storage.cpp
-        classifier/network.cpp
-        classifier/inference.cpp
-        classifier/preprocess.cu
-        classifier/spatial.cu
-        classifier/normalization.cu
-        classifier/elementwise.cu
-        classifier/optimizer.cu
+add_library(genesia_classifier STATIC
+        genesia/core/classifier/audit.cpp
+        genesia/core/classifier/classify.cpp
+        genesia/core/classifier/dataset.cpp
+        genesia/core/classifier/elementwise.cu
+        genesia/core/classifier/inference.cpp
+        genesia/core/classifier/network.cpp
+        genesia/core/classifier/normalization.cu
+        genesia/core/classifier/optimizer.cu
+        genesia/core/classifier/preprocess.cu
+        genesia/core/classifier/spatial.cu
+        genesia/core/classifier/storage.cpp
+        genesia/core/classifier/training.cpp
 )
-add_library(classifier::runtime ALIAS classifier_runtime)
-target_sources(classifier_runtime PUBLIC FILE_SET cxx_modules TYPE CXX_MODULES FILES
-        classifier/storage.ixx
-        classifier/network.ixx
-        classifier/inference.ixx
+target_sources(genesia_classifier PUBLIC FILE_SET cxx_modules TYPE CXX_MODULES FILES
+        genesia/core/classifier/audit.ixx
+        genesia/core/classifier/classify.ixx
+        genesia/core/classifier/dataset.ixx
+        genesia/core/classifier/inference.ixx
+        genesia/core/classifier/network.ixx
+        genesia/core/classifier/storage.ixx
+        genesia/core/classifier/training.ixx
 )
-target_link_libraries(classifier_runtime
-        PUBLIC CUDA::cudart CUDA::cublasLt cuDNN::cuDNN nlohmann_json::nlohmann_json Threads::Threads
-        PRIVATE genesia::cudnn-frontend CUDA::nvrtc
-)
-target_compile_options(classifier_runtime PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:-lineinfo;--extended-lambda>")
-
-add_library(classifier_training STATIC
-        classifier/dataset.cpp
-        classifier/training.cpp
-        classifier/audit.cpp
-        classifier/classify.cpp
-)
-add_library(classifier::training ALIAS classifier_training)
-target_sources(classifier_training PUBLIC FILE_SET cxx_modules TYPE CXX_MODULES FILES
-        classifier/dataset.ixx
-        classifier/training.ixx
-        classifier/audit.ixx
-        classifier/classify.ixx
-)
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/classifier/audit.html")
-file(READ "${PROJECT_SOURCE_DIR}/classifier/audit.html" GENESIA_CLASSIFIER_AUDIT_REPORT)
-file(CONFIGURE OUTPUT "${PROJECT_BINARY_DIR}/classifier-audit-report.h"
-        CONTENT "constexpr char audit_report[] = R\"GENESIA_AUDIT(${GENESIA_CLASSIFIER_AUDIT_REPORT})GENESIA_AUDIT\";\n" @ONLY)
-target_include_directories(classifier_training PRIVATE "${PROJECT_BINARY_DIR}")
-target_link_libraries(classifier_training PUBLIC classifier::runtime PRIVATE genesia_data genesia::stb)
-add_executable(classifier-train classifier/trainer.cpp)
-add_executable(classifier::train ALIAS classifier-train)
-target_link_libraries(classifier-train PRIVATE classifier::training)
+target_link_libraries(genesia_classifier PUBLIC genesia_data CUDA::cudart CUDA::cublasLt cuDNN::cuDNN PRIVATE genesia::cudnn-frontend CUDA::nvrtc)
+target_compile_options(genesia_classifier PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:-lineinfo;--extended-lambda>")
 if (MSVC)
-    foreach (target IN ITEMS classifier_runtime classifier_training classifier-train)
-        target_compile_options(${target} PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/utf-8;/bigobj>")
-    endforeach ()
-    target_compile_options(classifier_runtime PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/Zc:__cplusplus>")
+    target_compile_options(genesia_classifier PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/utf-8;/bigobj>" "$<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/Zc:__cplusplus>")
 endif ()
 
 # ============================================================================
@@ -153,9 +135,9 @@ target_sources(
         genesia/core/sdxl/preview.cpp
         genesia/core/sdxl/vae.cpp
         genesia/core/sdxl/sdxl.cpp
+        genesia/core/work/work.cpp
         genesia/core/headless.cpp
         genesia/core/generation/output.cpp
-        genesia/core/generation/images.cpp
         genesia/core/prompt/catalog.cpp
         genesia/core/prompt/prompt.cpp
         genesia/core/prompt/preset.cpp
@@ -170,10 +152,10 @@ target_sources(
         genesia/core/sdxl/preview.ixx
         genesia/core/sdxl/vae.ixx
         genesia/core/sdxl/sdxl.ixx
+        genesia/core/work/work.ixx
         genesia/core/headless.ixx
         genesia/core/generation/defaults.ixx
         genesia/core/generation/output.ixx
-        genesia/core/generation/images.ixx
         genesia/core/prompt/catalog.ixx
         genesia/core/prompt/prompt.ixx
         genesia/core/prompt/preset.ixx
@@ -186,7 +168,6 @@ endif ()
 target_compile_definitions(
         genesia_core
         PRIVATE
-        GENESIA_CACHE_DIRECTORY="${PROJECT_BINARY_DIR}/genesia-cache"
         GENESIA_CXX_COMPILER="${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}"
         GENESIA_PLATFORM="${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}"
 )
@@ -195,7 +176,7 @@ target_link_libraries(
         PUBLIC
         genesia_data
         CCCL::libcudacxx
-        classifier::runtime
+        genesia_classifier
         CUDA::toolkit
         cuDNN::cuDNN
         CUDA::cublasLt
@@ -281,8 +262,7 @@ endif ()
 set(GENESIA_ASSET_DIRECTORY "${PROJECT_SOURCE_DIR}/assets" CACHE PATH "Runtime assets and editable prompt presets")
 genesia_require_dependency(classifier_weights)
 target_compile_definitions(genesia_core PUBLIC GENESIA_ASSET_DIRECTORY="${GENESIA_ASSET_DIRECTORY}")
-target_compile_definitions(classifier_runtime PRIVATE CLASSIFIER_MODEL_ROOT="${GENESIA_ASSET_DIRECTORY}/classifier/models")
-target_compile_definitions(classifier_training PRIVATE CLASSIFIER_INITIAL_MODEL="${GENESIA_CLASSIFIER_INITIAL_MODEL}")
+target_compile_definitions(genesia_classifier PRIVATE CLASSIFIER_INITIAL_MODEL="${GENESIA_CLASSIFIER_INITIAL_MODEL}")
 
 if (WIN32)
     add_custom_target(genesia_cudnn_runtime
@@ -292,10 +272,8 @@ if (WIN32)
             COMMAND_EXPAND_LISTS
             VERBATIM
     )
-    foreach (target IN ITEMS genesia classifier-train)
-        target_sources(${target} PRIVATE cmake/WindowsUtf8.manifest)
-        add_dependencies(${target} genesia_cudnn_runtime)
-    endforeach ()
+    target_sources(genesia PRIVATE cmake/WindowsUtf8.manifest)
+    add_dependencies(genesia genesia_cudnn_runtime)
 endif ()
 
 # MSVC interprets a bare @cmake_cxx_std.lib as a response file.

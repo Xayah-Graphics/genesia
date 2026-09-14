@@ -1,10 +1,8 @@
 module;
 
 #include <Windows.h>
-
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
-
 #include <dwmapi.h>
 #include <windowsx.h>
 
@@ -31,6 +29,14 @@ namespace genesia::editor {
             glfwSetWindowShouldClose(window, GLFW_FALSE);
         });
 
+        glfwSetDropCallback(this->window, [](GLFWwindow* window, int count, const char** paths) {
+            auto& platform = *static_cast<WindowPlatform*>(glfwGetWindowUserPointer(window));
+            for (int i = 0; i < count; ++i) {
+                const std::string_view text{paths[i]};
+                platform.dropped.emplace_back(std::u8string{text.begin(), text.end()});
+            }
+            platform.redraw = true;
+        });
         SetPropW(this->native_window, L"GenesiaWindow", this);
         this->state.original_window_proc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(this->native_window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&WindowPlatform::window_proc)));
         constexpr LONG_PTR style         = WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU;
