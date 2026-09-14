@@ -9,13 +9,14 @@ import genesia.data.datasets;
 import genesia.io.files;
 import std;
 namespace genesia::dataset {
-    void recover_moves(const std::filesystem::path& journal) {
-        if (!std::filesystem::exists(journal)) return;
+    MoveResult recover_moves(const std::filesystem::path& journal) {
+        if (!std::filesystem::exists(journal)) return {};
         auto state = files::read_json(journal);
         if (state.at("version") != 1) throw std::runtime_error{"Unsupported image move journal"};
         auto& history      = state.at("history");
         const auto pending = std::ranges::find_if(history, [](const auto& item) { return item.at("status") == "applying" || item.at("status") == "undoing"; });
-        if (pending == history.end()) return;
+        if (pending == history.end()) return {};
+        MoveResult result;
         Index index;
         const bool undoing = pending->at("status") == "undoing";
         auto& moves        = pending->at("moves");
@@ -26,7 +27,11 @@ namespace genesia::dataset {
             if (at_source == at_destination) throw std::runtime_error{"Cannot recover image move: " + files::utf8(source) + " -> " + files::utf8(destination)};
             const auto file = index.identify(at_source ? source : destination);
             if (file.sha != entry->at("sha").get<std::string>() || file.entity != entry->at("entity").get<std::string>()) throw std::runtime_error{"Cannot recover changed image: " + files::utf8(file.path)};
-            if (at_destination) files::move(destination, source);
+            if (at_destination) {
+                files::move(destination, source);
+                result.paths.push_back({destination, source, file.sha, file.entity});
+                ++result.restored;
+            }
         }
         if (!undoing)
             for (const auto& directory : pending->at("created")) {
@@ -35,9 +40,9 @@ namespace genesia::dataset {
             }
         (*pending)["status"] = undoing ? "applied" : "rolled_back";
         files::write_json(journal, state);
+        return result;
     }
     MoveResult move_images(std::vector<Move> moves, const std::filesystem::path& journal) {
-        const files::Lock lock{"image-moves"};
         recover_moves(journal);
         const auto ordered = [](const std::filesystem::path& a, const std::filesystem::path& b) {
 #if defined(_WIN32)
@@ -48,13 +53,10 @@ namespace genesia::dataset {
         };
         std::set<std::filesystem::path, decltype(ordered)> reserved;
         std::set<std::filesystem::path> directories;
-        Index index;
         auto state = std::filesystem::exists(journal) ? files::read_json(journal) : nlohmann::json{{"version", 1}, {"history", nlohmann::json::array()}};
         nlohmann::json operation{{"status", "applying"}, {"moves", nlohmann::json::array()}, {"created", nlohmann::json::array()}};
         for (const auto& move : moves) {
             if (!reserved.insert(move.destination).second || std::filesystem::exists(move.destination)) throw std::runtime_error{"Destination already exists: " + files::utf8(move.destination)};
-            const auto current = index.identify(move.source);
-            if (current.sha != move.sha || current.entity != move.entity) throw std::runtime_error{"Source changed: " + files::utf8(move.source)};
             operation["moves"].push_back({{"source", files::utf8(move.source)}, {"destination", files::utf8(move.destination)}, {"sha", move.sha}, {"entity", move.entity}});
             for (auto directory = move.destination.parent_path(); !std::filesystem::exists(directory); directory = directory.parent_path()) directories.insert(directory);
         }
@@ -69,22 +71,20 @@ namespace genesia::dataset {
             recover_moves(journal);
             throw;
         }
-        return {.moved = moves.size()};
+        return {.moved = moves.size(), .paths = std::move(moves)};
     }
     MoveResult undo_moves(const std::filesystem::path& journal) {
-        const files::Lock lock{"image-moves"};
         recover_moves(journal);
         auto state           = files::read_json(journal);
         auto& history        = state.at("history");
         const auto operation = std::ranges::find_if(history | std::views::reverse, [](const auto& item) { return item.at("status") == "applied"; });
         if (operation == history.rend()) throw std::runtime_error{"No image move to undo"};
-        Index index;
+        std::vector<Move> paths;
         for (const auto& move : operation->at("moves")) {
             const auto original = files::path(move.at("source").get<std::string>());
             const auto current  = files::path(move.at("destination").get<std::string>());
             if (std::filesystem::exists(original)) throw std::runtime_error{"Undo destination already exists: " + files::utf8(original)};
-            const auto file = index.identify(current);
-            if (file.sha != move.at("sha").get<std::string>() || file.entity != move.at("entity").get<std::string>()) throw std::runtime_error{"Cannot undo changed image: " + files::utf8(current)};
+            paths.push_back({current, original, move.at("sha"), move.at("entity")});
         }
         (*operation)["status"] = "undoing";
         files::write_json(journal, state);
@@ -97,6 +97,6 @@ namespace genesia::dataset {
             recover_moves(journal);
             throw;
         }
-        return {.restored = operation->at("moves").size()};
+        return {.restored = paths.size(), .paths = std::move(paths)};
     }
 } // namespace genesia::dataset

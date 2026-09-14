@@ -28,10 +28,19 @@ export namespace genesia::dataset {
         std::string error;
         bool ready{};
     };
+    struct Move final {
+        std::filesystem::path source, destination;
+        std::string sha, entity;
+    };
     struct Index final {
         std::vector<Root> roots;
-        void scan(std::optional<std::string> root = {});
-        File identify(const std::filesystem::path& path);
+        std::uint64_t next_output{1};
+        void flush();
+        void scan(std::string_view name);
+        File identify(const std::filesystem::path& path, const Record* record = nullptr);
+        void insert(File file);
+        std::vector<std::string> apply(std::span<const Move> moves);
+        void rebuild(Root& root);
 
     private:
         struct Cached final {
@@ -41,5 +50,7 @@ export namespace genesia::dataset {
             int width{}, height{};
         };
         std::map<std::string, Cached> cache;
+        bool loaded{}, dirty{};
+        void load_cache();
     };
 } // namespace genesia::dataset

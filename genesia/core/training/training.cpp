@@ -49,7 +49,7 @@ namespace genesia::training {
             cudaStreamDestroy(stream);
         }
     };
-    Metrics evaluate(convnext::Network& model, Dataset& dataset, int step, const std::function<void()>& yield) {
+    Metrics evaluate(convnext::Network& model, Dataset& dataset, int step) {
         std::map<std::pair<int, int>, std::unique_ptr<convnext::NetworkPlan>> plans;
         int count = int(model.classes.size());
         compute::DeviceBuffer result(count * 4 + 4);
@@ -72,7 +72,6 @@ namespace genesia::training {
             int predicted = int(std::max_element(scores.begin(), scores.end()) - scores.begin());
             ++confusion[r.label][predicted];
             loss -= std::log(std::max(scores[r.label], 1e-30f));
-            yield();
         }
         double precision = 0, recall = 0, f1 = 0;
         int correct = 0;
@@ -92,18 +91,11 @@ namespace genesia::training {
         }
         return {step, loss / dataset.val.size(), double(correct) / dataset.val.size(), precision / count, recall / count, f1 / count, std::move(per_class), std::move(confusion), dataset.val.size()};
     }
-    State train(const Options& options, const std::atomic_bool& interrupted, const std::function<void(const runtime::Progress&)>& progress, const std::function<void()>& yield) {
+    State train(const Options& options, TrainingData source, const std::atomic_bool& interrupted, const std::function<void(const runtime::Progress&)>& progress) {
         const auto key_bytes = std::span{reinterpret_cast<const unsigned char*>(options.concept_key.data()), options.concept_key.size()};
-        const files::Lock training_lock{"concept-" + sha256(key_bytes)};
-        auto assigned = dataset::read_concept(options.concept_key);
+        auto assigned        = dataset::read_concept(options.concept_key);
         if (assigned.type == dataset::ConceptType::none) throw std::runtime_error{"Assign a concept type before training"};
         if (assigned.type == dataset::ConceptType::lora) throw std::runtime_error{"LoRA training is not implemented"};
-        auto source = inspect(options.concept_key);
-        {
-            const files::Lock recovery{"image-moves"};
-            dataset::recover_moves(source.root / ".genesia" / "audit-moves.json");
-        }
-        source = inspect(options.concept_key);
         if (!source.issue.empty()) throw std::runtime_error{source.issue};
         if (!source.training_issue.empty()) throw std::runtime_error{source.training_issue};
         const auto root       = source.root / ".genesia" / "training";
@@ -218,7 +210,7 @@ namespace genesia::training {
                 saved_random << random;
                 state.sampler = saved_random.str();
                 if (evaluation) {
-                    auto metrics = evaluate(model, dataset, update.step, yield);
+                    auto metrics = evaluate(model, dataset, update.step);
                     record_metric(source.root, metrics);
                     progress({metrics});
                 }
@@ -229,7 +221,6 @@ namespace genesia::training {
                 write_state(source.root, status);
             };
             if (!resume) checkpoint(true);
-            yield();
             auto start = std::chrono::steady_clock::now();
             while (update.step < options.steps && !interrupted.load(std::memory_order_relaxed)) {
                 std::map<std::pair<int, int>, std::vector<int>> batch;
@@ -269,14 +260,11 @@ namespace genesia::training {
                 bool final      = update.step == options.steps || interrupted.load(std::memory_order_relaxed);
                 bool evaluation = final || update.step % settings.eval_interval == 0;
                 if (evaluation || update.step % settings.save_interval == 0) checkpoint(evaluation);
-                yield();
             }
             const bool stopped = interrupted.load(std::memory_order_relaxed);
             if (stopped && status.step != update.step) checkpoint(false);
             status.phase = stopped ? Phase::stopped : Phase::complete;
             if (!stopped) {
-                const auto current = inspect(options.concept_key);
-                if (current.fingerprint != source.fingerprint) throw std::runtime_error{"Training data changed during training; Restart training is required"};
                 model.save(model_path);
                 models::publish(options.concept_key, model_path, source.fingerprint, update.step);
             }

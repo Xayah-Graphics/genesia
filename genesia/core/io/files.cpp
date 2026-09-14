@@ -14,42 +14,37 @@ import genesia.io.hash;
 import std;
 
 namespace genesia::files {
-    Lock::Lock(const std::string_view name, const bool wait, const std::filesystem::path& directory, const bool shared) {
-        std::filesystem::create_directories(directory);
-        const auto path = directory / std::format("{}.lock", name);
+    Instance::Instance() {
+        const auto path = std::filesystem::temp_directory_path() / "genesia-instance.lock";
 #if defined(_WIN32)
         const auto file = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (file == INVALID_HANDLE_VALUE) throw std::system_error{static_cast<int>(GetLastError()), std::system_category(), "Open resource lock"};
+        if (file == INVALID_HANDLE_VALUE) throw std::system_error{static_cast<int>(GetLastError()), std::system_category(), "Open Genesia instance lock"};
         OVERLAPPED operation{};
-        if (!LockFileEx(file, (shared ? 0 : LOCKFILE_EXCLUSIVE_LOCK) | (wait ? 0 : LOCKFILE_FAIL_IMMEDIATELY), 0, 1, 0, &operation)) {
+        if (!LockFileEx(file, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &operation)) {
             const auto error = GetLastError();
             CloseHandle(file);
-            if (!wait && error == ERROR_LOCK_VIOLATION) return;
-            throw std::system_error{static_cast<int>(error), std::system_category(), "Lock resource"};
+            if (error == ERROR_LOCK_VIOLATION) throw std::runtime_error{"Genesia is already running"};
+            throw std::system_error{static_cast<int>(error), std::system_category(), "Lock Genesia instance"};
         }
         handle = reinterpret_cast<std::intptr_t>(file);
 #else
         handle = open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0666);
-        if (handle == -1) throw std::system_error{errno, std::generic_category(), "Open resource lock"};
-        if (flock(static_cast<int>(handle), (shared ? LOCK_SH : LOCK_EX) | (wait ? 0 : LOCK_NB)) == -1) {
+        if (handle == -1) throw std::system_error{errno, std::generic_category(), "Open Genesia instance lock"};
+        if (flock(static_cast<int>(handle), LOCK_EX | LOCK_NB) == -1) {
             const auto error = errno;
             close(static_cast<int>(handle));
-            if (!wait && error == EWOULDBLOCK) return;
-            throw std::system_error{error, std::generic_category(), "Lock resource"};
+            if (error == EWOULDBLOCK) throw std::runtime_error{"Genesia is already running"};
+            throw std::system_error{error, std::generic_category(), "Lock Genesia instance"};
         }
 #endif
-        acquired = true;
     }
-
-    Lock::~Lock() {
-        if (!acquired) return;
+    Instance::~Instance() {
 #if defined(_WIN32)
         CloseHandle(reinterpret_cast<HANDLE>(handle));
 #else
         close(static_cast<int>(handle));
 #endif
     }
-
 
     std::string utf8(const std::filesystem::path& path) {
         const auto text = path.generic_u8string();

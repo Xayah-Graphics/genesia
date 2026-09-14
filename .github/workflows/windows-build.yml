@@ -37,6 +37,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install CMake 4.4 and Ninja
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade "cmake==4.4.*" ninja
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -c "import sysconfig; print(sysconfig.get_path('scripts'))" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
       - name: Install CUDA 13.3
         shell: pwsh
         run: |
@@ -111,6 +118,7 @@ jobs:
           cmd /d /s /c "`"$developerCommand`" -arch=x64 -host_arch=x64 && set" | ForEach-Object {
             if ($_ -match '^([^=]+)=(.*)$') { "$($Matches[1])=$($Matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
           }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Configure
         shell: pwsh
@@ -123,4 +131,4 @@ jobs:
           -DGENESIA_BUILD_UI=${{ matrix.ui }}
 
       - name: Build
-        run: cmake --build cmake-build-release --target genesia classifier-train --parallel
+        run: cmake --build cmake-build-release --target genesia --parallel

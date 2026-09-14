@@ -19,7 +19,7 @@ export namespace genesia::classification {
         bool complete{};
     };
     Audit view(const training::TrainingData& source, Cache& cache, std::string_view category = {});
-    Audit audit(std::string_view key, Predictions& predictions, bool refresh, const std::atomic_bool& interrupted, const std::function<void(const runtime::Progress&)>& progress, const std::function<void()>& yield);
-    dataset::MoveResult fix(std::string_view key, std::string_view sha, std::string_view category);
-    dataset::MoveResult undo(std::string_view key);
+    Audit audit(training::TrainingData source, Predictions& predictions, bool refresh, const std::atomic_bool& interrupted, const std::function<void(const runtime::Progress&)>& progress);
+    dataset::MoveResult fix(const training::TrainingData& source, std::string_view sha, std::string_view category);
+    dataset::MoveResult undo(const training::TrainingData& source);
 } // namespace genesia::classification

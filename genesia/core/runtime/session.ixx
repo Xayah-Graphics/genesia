@@ -1,13 +1,13 @@
 export module genesia.runtime.session;
 export import genesia.runtime.tasks;
 export import genesia.generation.engine;
-import genesia.io.files;
 import std;
 export namespace genesia::runtime {
     struct Session final {
-        explicit Session(generation::Visuals visuals = {});
+        explicit Session(generation::Visuals visuals = {}, bool browse = false);
         ~Session();
-        std::uint64_t enqueue(Request request);
+        TaskStatus submit(Request request);
+        void select(std::string key);
         void observe(std::vector<Infer> requests);
         void activate(std::vector<std::string> models);
         void configure_preview(bool enabled, bool visible);
@@ -17,32 +17,28 @@ export namespace genesia::runtime {
         Delivery drain();
 
     private:
-        struct Task final {
-            std::uint64_t id{};
-            Request request;
-            std::shared_ptr<std::atomic_bool> interrupted{std::make_shared<std::atomic_bool>()};
-            std::shared_ptr<files::Lock> type_lease;
-        };
         generation::Visuals visuals;
+        Catalog catalog;
         std::mutex mutex;
         std::condition_variable condition;
-        std::deque<Task> queue, immediate;
-        std::deque<Event> events;
-        std::deque<PreviewFrame> previews;
-        std::optional<Task> active, suspended;
-        std::map<std::uint64_t, TaskStatus> jobs;
+        Delivery delivery;
+        std::optional<TaskStatus> active;
+        std::vector<Infer> wanted;
         std::vector<std::string> activated;
         std::shared_ptr<generation::Engine> generation;
         std::unique_ptr<classification::Predictions> predictions;
-        bool closing{}, worker_done{}, preview_enabled{defaults::preview_enabled}, preview_visible{true};
-        std::string error, observed;
+        std::atomic_bool interrupted{};
+        bool closing{}, worker_done{}, loading{}, submitted{}, inferring{}, preview_enabled{defaults::preview_enabled}, preview_visible{true};
+        std::string error, observed, selection, inspect_key;
         std::uint64_t next_id{1};
         std::jthread worker;
-        void emit(const Task& task, State state, Progress progress = {}, Result result = {}, std::string error = {});
+        void emit(State state, Progress progress = {}, Result result = {}, std::string failure = {});
         void receive(Event event);
+        void update_catalog(CatalogState update);
+        void moved(const dataset::MoveResult& movement);
         void release_generation();
-        void run();
-        void execute(const Task& task);
-        void yield();
+        void run(bool browse);
+        void execute(const Request& request);
+        TaskStatus infer(Infer request, std::span<const std::uint8_t> rgb = {});
     };
 } // namespace genesia::runtime

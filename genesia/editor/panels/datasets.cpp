@@ -14,8 +14,7 @@ import genesia.editor.graphics.bridge;
 import std;
 namespace genesia::editor {
     void dataset_controls(Workspace& workspace, const float scale) {
-        if (!workspace.library->error.empty()) ImGui::TextWrapped("%s", workspace.library->error.c_str());
-        else if (workspace.collection && workspace.root) {
+        if (workspace.collection && workspace.root) {
             const auto title = ImGui::GetCursorScreenPos();
             const ImVec2 title_size{ImGui::GetContentRegionAvail().x, ImGui::GetTextLineHeight()};
             ImGui::Dummy(title_size);
@@ -27,11 +26,11 @@ namespace genesia::editor {
                 ImGui::TextWrapped("%s / %zu images", workspace.root->all.name.c_str(), workspace.collection->images.size());
                 ImGui::PopStyleColor();
             }
-            const auto metadata = workspace.library->concepts.find(workspace.collection_key);
-            const auto failure  = workspace.library->concept_errors.find(workspace.collection_key);
-            if (metadata != workspace.library->concepts.end()) {
+            const auto metadata = workspace.library.concepts.find(workspace.collection_key);
+            const auto failure  = workspace.library.concept_errors.find(workspace.collection_key);
+            if (metadata != workspace.library.concepts.end()) {
                 const auto& assigned = metadata->second;
-                const bool busy      = std::ranges::any_of(workspace.task_status, [&](const auto& entry) { return entry.second.concept_key == workspace.collection_key && (entry.second.state == runtime::State::queued || entry.second.state == runtime::State::running); });
+                const bool busy      = workspace.session_state.active.has_value();
                 static constexpr std::array names{"Unassigned", "Classifier", "LoRA"};
                 const auto color = assigned.type == dataset::ConceptType::classifier ? ImVec4{0.44F, 0.80F, 0.87F, 1} : assigned.type == dataset::ConceptType::lora ? ImVec4{0.92F, 0.69F, 0.36F, 1} : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
                 ImGui::BeginDisabled(assigned.locked || busy);
@@ -42,7 +41,7 @@ namespace genesia::editor {
                 ImGui::PopStyleVar();
                 ImGui::PopStyleColor(2);
                 ImGui::EndDisabled();
-                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", assigned.locked ? "Type is permanently locked by training history. Restart keeps this type." : busy ? "Finish or cancel this concept's queued operations before changing its type." : "Choose this concept's purpose. Assigning a type does not start training.");
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", assigned.locked ? "Type is permanently locked by training history. Restart keeps this type." : busy ? "Finish the current operation before changing its type." : "Choose this concept's purpose. Assigning a type does not start training.");
                 if (assigned.locked || busy) workspace.choosing_type = false;
                 if (workspace.choosing_type) {
                     for (std::size_t i = 0; i < names.size(); ++i)
@@ -58,7 +57,6 @@ namespace genesia::editor {
                                 workspace.concept_tool  = Workspace::ConceptTool::none;
                                 workspace.choosing_type = false;
                                 workspace.type_error.clear();
-                                workspace.dataset_index.refresh();
                             } catch (const std::exception& error) {
                                 workspace.type_error = error.what();
                             }
@@ -66,15 +64,15 @@ namespace genesia::editor {
                         }
                 }
                 if (!workspace.type_error.empty()) ImGui::TextWrapped("%s", workspace.type_error.c_str());
-                if (failure != workspace.library->concept_errors.end()) ImGui::TextWrapped("%s", failure->second.c_str());
+                if (failure != workspace.library.concept_errors.end()) ImGui::TextWrapped("%s", failure->second.c_str());
                 else if (assigned.type == dataset::ConceptType::lora) {
                     ImGui::TextWrapped("LoRA training is not available yet.");
                     ImGui::BeginDisabled();
                     ImGui::Button("Train LoRA", {-FLT_MIN, 0});
                     ImGui::EndDisabled();
                 } else if (assigned.type == dataset::ConceptType::classifier) {
-                    const auto info = workspace.library->classifiers.find(workspace.collection_key);
-                    if (info == workspace.library->classifiers.end()) ImGui::TextDisabled("Reading classifier data...");
+                    const auto info = workspace.library.classifiers.find(workspace.collection_key);
+                    if (info == workspace.library.classifiers.end()) ImGui::TextDisabled("Reading classifier data...");
                     else {
                         const auto& source   = info->second;
                         const bool published = source.model.has_value();
@@ -83,11 +81,8 @@ namespace genesia::editor {
                         if (published) ImGui::TextColored(color, "%s", active ? "Active" : "Model available");
                         else ImGui::TextDisabled("No published model");
                         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", published ? "Middle-click this concept in the dataset list to activate or deactivate its model." : "A model becomes available after training reaches its target and finishes saving.");
-                        const bool audit_available    = published || std::ranges::any_of(workspace.task_status, [&](const auto& entry) {
-                            const auto kind = entry.second.kind;
-                            return entry.second.concept_key == workspace.collection_key && (kind == runtime::Kind::audit || kind == runtime::Kind::fix || kind == runtime::Kind::undo);
-                        });
-                        const bool classify_available = published || std::ranges::any_of(workspace.task_status, [&](const auto& entry) { return entry.second.concept_key == workspace.collection_key && entry.second.kind == runtime::Kind::classify; });
+                        const bool audit_available    = published;
+                        const bool classify_available = published;
                         const int buttons             = 1 + int(audit_available) + int(classify_available);
                         const float gap               = 4 * scale;
                         const float width             = (ImGui::GetContentRegionAvail().x - (buttons - 1) * gap) / buttons;
@@ -116,7 +111,8 @@ namespace genesia::editor {
                             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {4 * scale, 6 * scale});
                             ImGui::SetNextWindowSizeConstraints({0, 0}, {FLT_MAX, std::max(1.0F, ImGui::GetContentRegionAvail().y * 0.45F)});
                             if (ImGui::BeginChild("##ConceptTool", {0, 0}, ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoBackground)) {
-                                if (workspace.concept_tool == Workspace::ConceptTool::train) training_controls(workspace, source, scale);
+                                if (!source.inspected && workspace.concept_tool != Workspace::ConceptTool::classify) ImGui::TextDisabled("Reading concept samples...");
+                                else if (workspace.concept_tool == Workspace::ConceptTool::train) training_controls(workspace, source, scale);
                                 else if (workspace.concept_tool == Workspace::ConceptTool::audit) audit_controls(workspace, source);
                                 else classify_controls(workspace, source);
                             }
@@ -126,34 +122,22 @@ namespace genesia::editor {
                         }
                     }
                 }
-            } else if (failure != workspace.library->concept_errors.end()) ImGui::TextWrapped("%s", failure->second.c_str());
+            } else if (failure != workspace.library.concept_errors.end()) ImGui::TextWrapped("%s", failure->second.c_str());
             else if (workspace.collection_key == workspace.root->all.key) ImGui::TextDisabled("%zu concepts", workspace.root->concepts.size());
             if (!workspace.root->ready) ImGui::TextColored({0.95F, 0.49F, 0.42F, 1}, "Index error / details below");
-        } else ImGui::TextDisabled(workspace.library->ready ? "Choose a dataset" : "Indexing...");
+        } else ImGui::TextDisabled(workspace.library.ready ? "Choose a dataset" : "Indexing...");
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
     }
 
     std::string concept_activity(const Workspace& workspace, const std::string_view key) {
-        static constexpr std::array names{"Generate", "Train", "Infer", "Audit", "Fix", "Undo", "Classify", "Assign"};
-        std::array<bool, names.size()> latest{};
-        std::array<std::size_t, names.size()> queued{}, running{};
         std::string result;
-        for (const auto& [id, task] : std::views::reverse(workspace.task_status)) {
-            if (task.concept_key != key || task.kind == runtime::Kind::infer) continue;
-            const auto kind  = static_cast<std::size_t>(task.kind);
-            const auto state = runtime::states[std::size_t(task.state)];
-            if (state == "queued") ++queued[kind];
-            else if (state == "running") ++running[kind];
-            else if (!latest[kind] && state == "failed") result += std::format("{} failed / ", names[kind]);
-            latest[kind] = true;
+        for (const auto& [identity, task] : workspace.activity) {
+            if (task.concept_key != key || task.kind == runtime::Kind::infer || task.state == runtime::State::complete || task.state == runtime::State::stopped) continue;
+            if (!result.empty()) result += " / ";
+            result += std::format("{} {}", runtime::kinds[std::size_t(task.kind)], runtime::states[std::size_t(task.state)]);
         }
-        for (std::size_t kind = 0; kind < names.size(); ++kind) {
-            if (running[kind]) result += std::format("{} running / ", names[kind]);
-            if (queued[kind]) result += std::format("{} queued {} / ", names[kind], queued[kind]);
-        }
-        if (!result.empty()) result.resize(result.size() - 3);
         return result;
     }
 
@@ -163,7 +147,7 @@ namespace genesia::editor {
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0, 4 * scale});
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {6 * scale, 4 * scale});
         ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, ImGui::GetTreeNodeToLabelSpacing() + 6 * scale);
-        for (const auto& entry : workspace.library->roots) {
+        for (const auto& entry : workspace.library.roots) {
             ImGui::PushID(entry.all.key.c_str());
             const auto origin = ImGui::GetCursorScreenPos();
             const float width = ImGui::GetContentRegionAvail().x;
@@ -188,10 +172,10 @@ namespace genesia::editor {
             if (open) {
                 for (const auto& item : entry.concepts) {
                     ImGui::PushID(item.key.c_str());
-                    const auto metadata  = workspace.library->concepts.find(item.key);
-                    const auto info      = workspace.library->classifiers.find(item.key);
-                    const auto failure   = workspace.library->concept_errors.find(item.key);
-                    const bool published = info != workspace.library->classifiers.end() && info->second.model.has_value();
+                    const auto metadata  = workspace.library.concepts.find(item.key);
+                    const auto info      = workspace.library.classifiers.find(item.key);
+                    const auto failure   = workspace.library.concept_errors.find(item.key);
+                    const bool published = info != workspace.library.classifiers.end() && info->second.model.has_value();
                     const bool enabled   = std::ranges::contains(workspace.activated, item.key);
                     const auto origin    = ImGui::GetCursorScreenPos();
                     const float width    = ImGui::GetContentRegionAvail().x;
@@ -210,11 +194,11 @@ namespace genesia::editor {
                     float right      = maximum.x - 6 * scale - ImGui::CalcTextSize(count.c_str()).x;
                     draw->AddText({right, y}, ImGui::GetColorU32(ImGuiCol_TextDisabled), count.c_str());
                     right -= 8 * scale;
-                    if (failure != workspace.library->concept_errors.end()) {
+                    if (failure != workspace.library.concept_errors.end()) {
                         right -= ImGui::CalcTextSize("!").x;
                         draw->AddText({right, y}, ImGui::GetColorU32(ImVec4{0.95F, 0.49F, 0.42F, 1}), "!");
                         right -= 8 * scale;
-                    } else if (metadata != workspace.library->concepts.end() && metadata->second.type != dataset::ConceptType::none) {
+                    } else if (metadata != workspace.library.concepts.end() && metadata->second.type != dataset::ConceptType::none) {
                         const bool classifier_type = metadata->second.type == dataset::ConceptType::classifier;
                         const char* tag            = classifier_type ? "C" : "LoRA";
                         const auto color           = classifier_type ? ImVec4{0.44F, 0.80F, 0.87F, 1} : ImVec4{0.92F, 0.69F, 0.36F, 1};
@@ -237,7 +221,7 @@ namespace genesia::editor {
                         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 320 * scale);
                         ImGui::TextUnformatted(item.key.c_str());
                         ImGui::TextDisabled("%zu images", item.images.size());
-                        if (metadata != workspace.library->concepts.end()) {
+                        if (metadata != workspace.library.concepts.end()) {
                             ImGui::Text("Type: %s%s", metadata->second.type == dataset::ConceptType::none ? "Unassigned" : metadata->second.type == dataset::ConceptType::classifier ? "Classifier" : "LoRA", metadata->second.locked ? " / Locked" : "");
                             if (published) {
                                 ImGui::TextUnformatted(enabled ? "Model available / Active" : "Model available");
@@ -246,13 +230,13 @@ namespace genesia::editor {
                             if (metadata->second.type == dataset::ConceptType::classifier) {
                                 const auto activity = concept_activity(workspace, item.key);
                                 if (!activity.empty()) ImGui::TextUnformatted(activity.c_str());
-                                if (info != workspace.library->classifiers.end() && info->second.training.has_value()) {
+                                if (info != workspace.library.classifiers.end() && info->second.training.has_value()) {
                                     ImGui::Text("Training: %s", training::phases[std::size_t(info->second.training->phase)].data());
                                     if (info->second.training->fingerprint != info->second.fingerprint) ImGui::TextUnformatted("Training data changed. Restart is required to train again.");
                                 }
                             }
                         }
-                        if (failure != workspace.library->concept_errors.end()) ImGui::TextColored({0.95F, 0.49F, 0.42F, 1}, "%s", failure->second.c_str());
+                        if (failure != workspace.library.concept_errors.end()) ImGui::TextColored({0.95F, 0.49F, 0.42F, 1}, "%s", failure->second.c_str());
                         ImGui::PopTextWrapPos();
                         ImGui::EndTooltip();
                     }
@@ -271,94 +255,45 @@ namespace genesia::editor {
             }
             ImGui::PopID();
         }
-        if (!workspace.library->roots.empty()) workspace.expand_dataset_roots = false;
+        if (!workspace.library.roots.empty()) workspace.expand_dataset_roots = false;
         ImGui::PopStyleVar(3);
         return selected;
     }
 
-    void operation_activity(Workspace& workspace, const std::initializer_list<runtime::Kind> kinds, const std::string_view key, const std::optional<std::uint64_t> exclude) {
-        const auto matches = [&](const auto& entry) { return entry.first != exclude && entry.second.concept_key == key && std::ranges::contains(kinds, entry.second.kind); };
-        if (!std::ranges::any_of(workspace.task_status, matches)) return;
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {8 * workspace.renderer.dpi, 6 * workspace.renderer.dpi});
-        if (std::ranges::contains(kinds, runtime::Kind::generate)) ImGui::SetNextWindowSizeConstraints({0, 0}, {FLT_MAX, ImGui::GetIO().DisplaySize.y * 0.3F});
-        if (ImGui::BeginChild("##OperationActivity", {0, 0}, ImGuiChildFlags_AutoResizeY, ImGuiWindowFlags_NoBackground)) {
-            const auto draw_job = [&](const runtime::TaskStatus& task) {
-                const bool pending = task.state < runtime::State::complete;
-                std::string title;
-                std::visit(
-                    [&]<typename T>(const T& operation) {
-                        if constexpr (std::same_as<T, runtime::Generate>) title = operation.source ? "Repaint" : "Generate";
-                        else if constexpr (std::same_as<T, runtime::Train>) title = std::format("Train / {} steps", operation.options.steps);
-                        else if constexpr (std::same_as<T, runtime::Classify>) title = files::utf8(operation.input.filename());
-                        else if constexpr (std::same_as<T, runtime::Audit>) title = "Audit";
-                        else if constexpr (std::same_as<T, runtime::Fix>) title = "Move to " + operation.category;
-                        else if constexpr (std::same_as<T, runtime::Undo>) title = "Undo move";
-                        else if constexpr (std::same_as<T, runtime::Assign>) title = "Assign type";
-                    },
-                    task.request.operation);
-                ImGui::PushID(std::to_string(task.id).c_str());
-                if (ImGui::TreeNodeEx("##Operation", pending || task.state == runtime::State::failed ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None, "%s / %s", title.c_str(), runtime::states[std::size_t(task.state)].data())) {
-                    if (const auto* generate = std::get_if<runtime::Generate>(&task.request.operation)) {
-                        ImGui::Text("%d x %d / seed %llu", generate->parameters.width, generate->parameters.height, generate->seed);
-                        if (generate->source) ImGui::TextWrapped("Source: %s", files::utf8(generate->source->path.lexically_relative(project::directory)).c_str());
-                        const auto& progress = workspace.session_state.generation;
-                        if (task.state == runtime::State::running && progress.id == task.id && progress.stage == runtime::GenerationStage::sampling) {
-                            ImGui::ProgressBar(float(progress.completed) / progress.steps, {-1, 0});
-                            ImGui::Text("Step %u / %d", progress.completed, progress.steps);
-                        }
-                    }
-                    if (const auto* classify = std::get_if<runtime::Classify>(&task.request.operation)) ImGui::TextWrapped("%s", files::utf8(classify->input).c_str());
-                    const auto* batch = std::get_if<runtime::BatchProgress>(&task.progress.value);
-                    const bool moving = task.kind == runtime::Kind::fix || task.kind == runtime::Kind::undo || task.kind == runtime::Kind::assign || (batch && batch->stage == runtime::Stage::moving);
-                    if (task.state == runtime::State::queued || (task.state == runtime::State::running && !moving)) {
-                        if (ImGui::Button(task.state == runtime::State::queued ? "Cancel queued operation" : "Stop this operation", {-FLT_MIN, 0})) workspace.runtime->session.cancel(task.id);
-                    } else if (task.state == runtime::State::saving) ImGui::TextWrapped("Saving the completed image.");
-                    else if (task.state == runtime::State::running && moving) ImGui::TextWrapped("Finishing the file operation.");
-                    if (batch) {
-                        ImGui::ProgressBar(float(batch->completed) / batch->total, {-1, 0});
-                        ImGui::Text("%zu / %zu images", batch->completed, batch->total);
-                    }
-                    if (const auto* step = std::get_if<training::Step>(&task.progress.value)) ImGui::Text("Step %d / %d", step->step, step->target);
-                    if (task.state == runtime::State::failed) ImGui::TextWrapped("%s", task.error.c_str());
-                    if (task.state == runtime::State::complete) {
-                        if (const auto* classified = std::get_if<classification::Classification>(&task.result.value))
-                            for (const auto& [label, count] : classified->classes) ImGui::TextWrapped("%s / %zu images", label.c_str(), count);
-                        if (const auto* generated = std::get_if<runtime::Generated>(&task.result.value)) ImGui::TextWrapped("%s", files::utf8(generated->path).c_str());
-                    }
-                    ImGui::TreePop();
-                }
-                ImGui::PopID();
-            };
-            bool history{};
-            for (const auto& entry : std::views::reverse(workspace.task_status)) {
-                if (!matches(entry)) continue;
-                if (entry.second.state == runtime::State::complete || entry.second.state == runtime::State::stopped) history = true;
-                else draw_job(entry.second);
-            }
-            if (history && ImGui::CollapsingHeader(exclude ? "Earlier training" : "Completed and stopped"))
-                for (const auto& entry : std::views::reverse(workspace.task_status))
-                    if (matches(entry) && (entry.second.state == runtime::State::complete || entry.second.state == runtime::State::stopped)) draw_job(entry.second);
+    void operation_activity(Workspace& workspace, const std::initializer_list<runtime::Kind> kinds, const std::string_view key) {
+        const runtime::TaskStatus* task{};
+        for (const auto kind : kinds) {
+            const auto found = workspace.activity.find({std::string{key}, kind});
+            if (found != workspace.activity.end() && (!task || found->second.id > task->id)) task = &found->second;
         }
-        ImGui::EndChild();
-        ImGui::PopStyleVar();
+        if (!task) return;
+        ImGui::TextDisabled("%s", runtime::states[std::size_t(task->state)].data());
+        const auto* batch = std::get_if<runtime::BatchProgress>(&task->progress.value);
+        if (task->state < runtime::State::complete) {
+            if (batch) {
+                ImGui::ProgressBar(float(batch->completed) / batch->total, {-1, 3 * workspace.renderer.dpi}, "");
+                ImGui::Text("%zu / %zu", batch->completed, batch->total);
+            }
+            const bool moving = task->kind == runtime::Kind::fix || task->kind == runtime::Kind::undo || task->kind == runtime::Kind::assign || (batch && batch->stage == runtime::Stage::moving);
+            if (!moving && ImGui::Button("Stop", {-FLT_MIN, 0})) workspace.runtime.session.cancel(task->id);
+        }
+        if (!task->error.empty()) ImGui::TextWrapped("%s", task->error.c_str());
+        if (const auto* classified = std::get_if<classification::Classification>(&task->result.value))
+            for (const auto& [label, count] : classified->classes) ImGui::TextWrapped("%s / %zu images", label.c_str(), count);
     }
 
     void training_controls(Workspace& workspace, const training::TrainingData& source, const float scale) {
-        auto& edits = workspace.training_drafts.try_emplace(source.key, source).first->second;
-        const runtime::TaskStatus* task{};
-        for (const auto& [id, entry] : std::views::reverse(workspace.task_status))
-            if (entry.concept_key == source.key && entry.kind == runtime::Kind::train) {
-                task = &entry;
-                break;
-            }
-        const bool busy       = task && task->state < runtime::State::complete;
-        const bool recorded   = source.training.has_value();
-        const bool changed    = recorded && source.training->fingerprint != source.fingerprint;
-        const bool configured = recorded && source.training->config != edits.config;
-        const bool checkpoint = recorded && source.training->checkpoint;
-        const int completed   = recorded ? source.training->step : 0;
-        const auto& issue     = source.issue.empty() ? source.training_issue : source.issue;
-        const auto& counts    = source.counts;
+        auto& edits                     = workspace.training_drafts.try_emplace(source.key, source).first->second;
+        const auto found                = workspace.activity.find({source.key, runtime::Kind::train});
+        const runtime::TaskStatus* task = found == workspace.activity.end() ? nullptr : &found->second;
+        const bool busy                 = task && task->state < runtime::State::complete;
+        const bool recorded             = source.training.has_value();
+        const bool changed              = recorded && source.training->fingerprint != source.fingerprint;
+        const bool configured           = recorded && source.training->config != edits.config;
+        const bool checkpoint           = recorded && source.training->checkpoint;
+        const int completed             = recorded ? source.training->step : 0;
+        const auto& issue               = source.issue.empty() ? source.training_issue : source.issue;
+        const auto& counts              = source.counts;
         if (!issue.empty()) ImGui::TextWrapped("%s", issue.c_str());
         if (changed) ImGui::TextWrapped("Training data changed. Restart training is required.");
         else if (configured) ImGui::TextWrapped("Training parameters changed. Restart training is required.");
@@ -383,7 +318,7 @@ namespace genesia::editor {
         } else if (recorded) ImGui::TextDisabled("%s / step %d", training::phases[std::size_t(source.training->phase)].data(), completed);
         bool submit{}, restart{};
         if (busy) {
-            if (ImGui::Button(task->state == runtime::State::queued ? "Cancel queued training" : "Stop training", {-FLT_MIN, 0})) workspace.runtime->session.cancel(task->id);
+            if (ImGui::Button("Stop training", {-FLT_MIN, 0})) workspace.runtime.session.cancel(task->id);
         } else {
             ImGui::AlignTextToFramePadding();
             ImGui::TextDisabled("Target steps");
@@ -393,11 +328,11 @@ namespace genesia::editor {
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Cumulative training target, including completed steps.");
             const bool target = edits.steps > completed && (!recorded || edits.steps >= source.training->target);
             if (!target) ImGui::TextWrapped("Increase the cumulative target to continue training.");
-            ImGui::BeginDisabled(!issue.empty() || changed || configured || (recorded && !checkpoint) || !target);
+            ImGui::BeginDisabled(workspace.session_state.active.has_value() || !issue.empty() || changed || configured || (recorded && !checkpoint) || !target);
             submit = ImGui::Button(recorded ? "Continue training" : "Start training", {-FLT_MIN, 0});
             ImGui::EndDisabled();
             if (recorded) {
-                ImGui::BeginDisabled(!issue.empty());
+                ImGui::BeginDisabled(workspace.session_state.active.has_value() || !issue.empty());
                 if (ImGui::Selectable("Restart training...", edits.restart_confirm)) edits.restart_confirm = !edits.restart_confirm;
                 if (edits.restart_confirm) {
                     ImGui::TextWrapped("Delete this concept's weights, checkpoints, snapshots, metrics and audit history. Train from the initial pretrained model. Images are retained.");
@@ -492,7 +427,6 @@ namespace genesia::editor {
                 }
             }
         }
-        if (task) operation_activity(workspace, {runtime::Kind::train}, source.key, task->id);
         ImGui::PopStyleColor();
     }
 
@@ -500,7 +434,7 @@ namespace genesia::editor {
         const bool trained = source.model.has_value();
         auto& path         = workspace.classify_paths[source.key];
         if (!trained) ImGui::TextWrapped("A published classifier is required to submit another folder.");
-        ImGui::BeginDisabled(!trained);
+        ImGui::BeginDisabled(!trained || workspace.session_state.active.has_value());
         ImGui::TextWrapped("Drop one folder into the window, or paste its path below.");
         ImGui::TextWrapped("Direct PNG images move into predicted category folders. Original names are retained.");
         ImGui::TextUnformatted("Directory");
@@ -537,7 +471,7 @@ namespace genesia::editor {
                 }
             ImGui::EndCombo();
         }
-        const bool busy = workspace.audit_task.has_value() || std::ranges::any_of(workspace.task_status, [&](const auto& entry) { return entry.second.concept_key == workspace.audit_key && (entry.second.state == runtime::State::running || entry.second.state == runtime::State::queued); });
+        const bool busy = workspace.session_state.active.has_value();
         ImGui::BeginDisabled(busy);
         ImGui::BeginDisabled(!source.model);
         if (ImGui::Button("Refresh audit", {-FLT_MIN, 0})) workspace.open_audit(workspace.audit_key, true);

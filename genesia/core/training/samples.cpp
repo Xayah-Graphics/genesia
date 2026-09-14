@@ -32,10 +32,11 @@ namespace genesia::training {
 
     TrainingData inspect(const dataset::Concept& source, const dataset::Root& root) {
         TrainingData result;
-        result.training = read_state(source.path);
-        result.model    = models::find(source.key);
-        result.key      = source.key;
-        result.root     = source.path;
+        result.inspected = true;
+        result.training  = read_state(source.path);
+        result.model     = models::find(source.key);
+        result.key       = source.key;
+        result.root      = source.path;
         if (!root.ready) result.issue = root.error.empty() ? "Root has independent image copies" : root.error;
         for (const auto& entry : std::filesystem::directory_iterator(result.root))
             if (entry.is_directory() && !files::utf8(entry.path().filename()).starts_with('.')) result.classes.push_back(files::utf8(entry.path().filename()));
@@ -72,17 +73,6 @@ namespace genesia::training {
         result.fingerprint = sha256({reinterpret_cast<const unsigned char*>(text.data()), text.size()});
         return result;
     }
-    TrainingData inspect(const std::string_view key) {
-        const auto source   = dataset::read_concept(key);
-        const auto relative = files::path(source.key);
-        const files::Lock files_lock{"image-moves"};
-        dataset::Index index;
-        index.scan(files::utf8(*relative.begin()));
-        const auto& root      = index.roots.front();
-        const auto collection = std::ranges::find(root.concepts, source.key, &dataset::Collection::key);
-        if (collection == root.concepts.end()) throw std::runtime_error{"Concept not found: " + source.key};
-        return inspect(source, root);
-    }
     Dataset::Dataset(const std::filesystem::path& path) : root{path}, snapshot{files::read_json(root / "snapshot.json").get<Snapshot>()} {
         const auto layout = files::read_json(root / "pixels.json");
         if (layout.at("version") != 1) throw std::runtime_error{"Unsupported RGB cache layout"};
@@ -115,8 +105,7 @@ namespace genesia::training {
             if (interrupted.load()) throw runtime::Stopped{};
             const auto& path = sample.file.path;
             const auto image = read_image(path);
-            if (files::digest(path) != sample.file.sha) throw std::runtime_error{"Image changed while preparing: " + files::utf8(path)};
-            const auto hex = sha256(image.pixels);
+            const auto hex   = sha256(image.pixels);
             hashes.push_back(hex);
             std::array<double, 1024> small{};
             for (int y = 0; y < 32; ++y)

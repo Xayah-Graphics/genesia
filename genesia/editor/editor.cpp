@@ -30,14 +30,15 @@ namespace genesia::editor {
         for (;;) {
             if (window.take_close_request()) {
                 closing = true;
-                if (ui.runtime) ui.runtime->session.shutdown();
+                ui.runtime.session.shutdown();
             }
-            bool busy{}, done{true}, pending{ui.dataset_index.pending.load() || ui.textures.pending.load()};
+            bool busy{}, done{true}, pending{ui.textures.pending.load()};
             std::uint32_t stage{}, step{};
-            if (ui.runtime) {
-                const auto state = ui.runtime->session.snapshot();
+            {
+                const auto state = ui.runtime.session.snapshot();
                 busy             = state.active.has_value();
                 done             = state.finished;
+                if (closing && done && !state.error.empty()) throw std::runtime_error{state.error};
                 pending |= state.pending;
                 stage = static_cast<std::uint32_t>(state.generation.stage);
                 step  = state.generation.completed;

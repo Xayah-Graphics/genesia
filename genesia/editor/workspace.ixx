@@ -89,10 +89,9 @@ export namespace genesia::editor {
         bool preview_enabled{defaults::preview_enabled};
         WindowPlatform& window;
         Renderer& renderer;
-        runtime::Catalog dataset_index;
-        std::shared_ptr<const runtime::CatalogState> library{std::make_shared<const runtime::CatalogState>()};
+        runtime::CatalogState library;
         TextureCache textures;
-        std::unique_ptr<WorkspaceRuntime> runtime;
+        WorkspaceRuntime runtime;
         generation::Settings draft;
         prompt::Pair prompt;
         prompt::TagSearch tag_search;
@@ -101,7 +100,6 @@ export namespace genesia::editor {
         Output generation;
         std::optional<Repaint> repaint;
         std::vector<std::string> activated;
-        std::map<std::string, classification::Result> predictions;
         std::map<std::string, std::string> prediction_errors;
         std::vector<dataset::File> visible_images;
         std::string audit_key, audit_category;
@@ -113,7 +111,7 @@ export namespace genesia::editor {
         classification::Audit audit_report;
         classification::Cache prediction_cache;
         runtime::Snapshot session_state;
-        std::map<std::uint64_t, runtime::TaskStatus> task_status;
+        std::map<std::pair<std::string, runtime::Kind>, runtime::TaskStatus> activity;
         std::optional<std::uint64_t> audit_task;
         dataset::Collection audit_collection;
         Position audit_position;

@@ -29,13 +29,13 @@ namespace genesia::editor {
             }
         }
         for (const auto& key : models) {
-            const auto source = workspace.library->classifiers.find(key);
-            if (source == workspace.library->classifiers.end() || !source->second.model) continue;
+            const auto source = workspace.library.classifiers.find(key);
+            if (source == workspace.library.classifiers.end() || !source->second.model) continue;
             const auto identity = key + "|" + source->second.model->sha + "|" + image.file->sha;
             Workspace::ImageResult entry;
             if (key == workspace.audit_key) entry.annotation = annotation;
-            const auto result = workspace.predictions.find(identity);
-            if (result != workspace.predictions.end()) {
+            const auto result = workspace.prediction_cache.entries.find({source->second.model->sha, image.file->sha});
+            if (result != workspace.prediction_cache.entries.end()) {
                 const auto& prediction = result->second;
                 const auto index       = std::ranges::find(prediction.classes, prediction.label) - prediction.classes.begin();
                 entry.summary          = std::format("{} · {} · {:.1f}%", key, prediction.label, prediction.scores[index] * 100);
@@ -211,10 +211,9 @@ namespace genesia::editor {
                 draw->AddCircle({center.x, center.y - 88 * scale}, 14 * scale, IM_COL32(145, 142, 225, 180), 32, 1.5F * scale);
                 draw->AddCircleFilled({center.x + 14 * scale, center.y - 100 * scale}, 3 * scale, IM_COL32(184, 182, 250, 255));
             }
-        } else if (!workspace.library->error.empty() || !workspace.collection || !workspace.root || !workspace.root->ready) {
+        } else if (!workspace.collection || !workspace.root || !workspace.root->ready) {
             ImGui::SetCursorScreenPos({origin.x + 16 * scale, (top_strip_height + 24) * scale});
-            if (!workspace.library->error.empty()) ImGui::TextWrapped("%s", workspace.library->error.c_str());
-            else if (!workspace.library->ready) ImGui::TextDisabled("Indexing datasets...");
+            if (!workspace.library.ready) ImGui::TextDisabled("Indexing datasets...");
             else if (!workspace.collection || !workspace.root) ImGui::TextWrapped("Dataset does not exist: %s", workspace.collection_key.c_str());
             else {
                 ImGui::TextColored({0.95F, 0.49F, 0.42F, 1}, "Dataset needs attention");

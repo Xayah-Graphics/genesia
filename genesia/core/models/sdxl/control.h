@@ -11,10 +11,9 @@ namespace genesia::sdxl {
         std::uint32_t step{};
     };
 
-    enum class Stage : std::uint32_t { idle, loading, preparing, sampling, yielded, decoding, transferring, complete, cancelled };
+    enum class Stage : std::uint32_t { idle, loading, preparing, sampling, decoding, transferring, complete, cancelled };
     struct Control final {
         alignas(64) std::uint32_t cancel{};
-        alignas(64) std::uint32_t yield_requested{};
         alignas(64) std::uint32_t completed{};
         std::uint32_t stage{};
     };

@@ -89,7 +89,6 @@ target_sources(genesia_core
         genesia/core/generation/engine.cpp
         genesia/core/generation/output.cpp
         genesia/core/headless.cpp
-        genesia/core/io/changes.cpp
         genesia/core/io/files.cpp
         genesia/core/io/hash.cpp
         genesia/core/io/safetensors.cpp
@@ -135,7 +134,6 @@ target_sources(genesia_core
         genesia/core/generation/output.ixx
         genesia/core/generation/settings.ixx
         genesia/core/headless.ixx
-        genesia/core/io/changes.ixx
         genesia/core/io/files.ixx
         genesia/core/io/hash.ixx
         genesia/core/io/safetensors.ixx

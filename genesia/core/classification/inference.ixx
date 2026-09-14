@@ -31,7 +31,7 @@ export namespace genesia::classification {
         Pipeline() = default;
         ~Pipeline();
         Pipeline(const Pipeline&) = delete;
-        void prepare(std::vector<models::Descriptor> desired, int width, int height);
+        bool prepare(std::vector<models::Descriptor> desired, int width, int height);
         Result run(const models::Descriptor& descriptor, convnext::GpuRgb8 input, cudaStream_t stream, std::string_view image_sha);
     };
     struct Cache final {
@@ -43,6 +43,8 @@ export namespace genesia::classification {
         Cache cache;
         Pipeline pipeline;
         std::vector<std::string> active;
-        Result infer(const models::Descriptor& model, const dataset::File& file, bool refresh = false);
+        Image image;
+        std::string image_sha, pixel_sha;
+        Result infer(const models::Descriptor& model, const dataset::File& file, bool refresh = false, std::span<const std::uint8_t> rgb = {});
     };
 } // namespace genesia::classification

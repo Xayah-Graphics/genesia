@@ -22,6 +22,7 @@ export namespace genesia::training {
         std::optional<State> training;
         std::optional<models::Descriptor> model;
         std::vector<std::size_t> counts;
+        bool inspected{};
     };
     struct Record final {
         std::string id, path, split, group;
@@ -42,7 +43,6 @@ export namespace genesia::training {
     void to_json(nlohmann::json& json, const Snapshot& value);
     void from_json(const nlohmann::json& json, Snapshot& value);
     TrainingData inspect(const dataset::Concept& source, const dataset::Root& root);
-    TrainingData inspect(std::string_view key);
     struct Dataset final {
         std::filesystem::path root;
         Snapshot snapshot;

@@ -29,7 +29,7 @@ namespace genesia::headless {
                     else if constexpr (std::same_as<T, runtime::Classify>) json["input"] = files::utf8(value.input);
                     else if constexpr (std::same_as<T, runtime::Fix>) json["category"] = value.category;
                 },
-                task.request.operation);
+                task.request->operation);
             std::visit(
                 [&]<typename T>(const T& value) {
                     if constexpr (std::same_as<T, runtime::BatchProgress>) json["progress"] = {{"stage", runtime::stages[std::size_t(value.stage)]}, {"completed", value.completed}, {"total", value.total}};
@@ -192,16 +192,13 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
 #endif
         runtime::Session session;
         session.activate(activated);
-        std::random_device random;
-        std::uniform_int_distribution<std::uint64_t> seeds;
-        int submitted{};
-        std::uint64_t current{};
-        const auto submit = [&] {
-            if (generating) std::get<runtime::Generate>(request.operation).seed = first_seed ? *first_seed + submitted : seeds(random);
-            current = session.enqueue(request);
-            ++submitted;
-        };
-        submit();
+        if (generating) {
+            auto& operation       = std::get<runtime::Generate>(request.operation);
+            operation.count       = count;
+            operation.random_seed = !first_seed;
+            operation.seed        = first_seed.value_or(0);
+        }
+        session.submit(std::move(request));
         bool failed{}, shutting_down{};
         for (;;) {
             if (interrupted.load() && !shutting_down) {
@@ -209,23 +206,30 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
                 shutting_down = true;
             }
             auto delivery = session.drain();
-            bool next{};
             for (auto& event : delivery.events) {
+                if (event.kind == runtime::EventKind::saved) {
+                    std::println("{}", nlohmann::json{{"id", event.id}, {"kind", "generate"}, {"state", "saved"}, {"path", files::utf8(event.record.path)}, {"seed", event.record.seed}, {"image_sha", event.file->sha}}.dump());
+                    std::cout.flush();
+                }
                 if (event.kind != runtime::EventKind::task) continue;
                 auto& task = event.task;
                 failed |= task.state == runtime::State::failed;
                 if (task.kind == runtime::Kind::audit && task.state == runtime::State::complete && !category.empty()) {
-                    classification::Cache cache;
-                    task.result.value = classification::view(training::inspect(task.concept_key), cache, category);
+                    auto& report = std::get<classification::Audit>(task.result.value);
+                    if (!std::ranges::contains(report.classes, category)) throw std::runtime_error{"Unknown audit category: " + category};
+                    std::erase_if(report.rows, [&](const classification::AuditRow& row) { return row.label != category; });
+                    report.total = report.rows.size();
                 }
                 std::println("{}", event_json(task).dump());
                 std::cout.flush();
-                next |= event.id == current && task.state == runtime::State::complete && generating && submitted < count;
             }
-            if (next && !shutting_down) submit();
             const auto state = session.snapshot();
             if (!state.error.empty()) throw std::runtime_error{state.error};
-            if (state.idle && !state.pending) break;
+            if (state.idle && !state.pending && !shutting_down) {
+                session.shutdown();
+                shutting_down = true;
+            }
+            if (state.finished && !state.pending) break;
             std::this_thread::sleep_for(std::chrono::milliseconds{10});
         }
         return interrupted.load() ? 130 : failed ? 1 : 0;

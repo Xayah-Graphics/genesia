@@ -17,11 +17,13 @@ RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
     pacman -S --noconfirm --needed \
         base-devel \
         cmake \
+        gcc15 \
         git \
         ninja
 
-WORKDIR /src
+WORKDIR /workspace
 COPY --link . .
+COPY --link assets/ /opt/genesia/assets/
 
 RUN cmake -S . -B cmake-build-release -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
@@ -38,11 +40,18 @@ FROM cuda AS runtime
 
 RUN groupadd --gid 10001 genesia \
     && useradd --uid 10001 --gid 10001 --home-dir /workspace --shell /usr/bin/nologin genesia \
-    && install --directory --owner=10001 --group=10001 /opt/genesia/bin /workspace
+    && install --directory --owner=10001 --group=10001 \
+        /opt/genesia/bin \
+        /workspace \
+        /workspace/data \
+        /workspace/data/raw \
+        /workspace/.genesia \
+        /workspace/models \
+        /workspace/cmake-build-release/genesia-cache
 
-COPY --from=build --link /src/cmake-build-release/genesia /opt/genesia/bin/genesia
-COPY --from=build --link --chown=10001:10001 /src/assets /opt/genesia/assets
-COPY --from=build --link /src/LICENSE /opt/genesia/LICENSE
+COPY --from=build --link /workspace/cmake-build-release/genesia /opt/genesia/bin/genesia
+COPY --from=build --link --chown=10001:10001 /opt/genesia/assets /opt/genesia/assets
+COPY --from=build --link /workspace/LICENSE /opt/genesia/LICENSE
 
 USER 10001:10001
 ENV HOME=/workspace \

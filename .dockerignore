@@ -5,9 +5,8 @@
 !main.cpp
 !cmake/
 !cmake/**
-!classifier/
-!classifier/**
 !genesia/
 !genesia/**
 !assets/
 !assets/**
+assets/classifier/

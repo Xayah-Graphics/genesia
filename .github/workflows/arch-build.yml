@@ -29,7 +29,7 @@ jobs:
       - name: Install latest build toolchain
         run: |
           pacman -Syu --noconfirm --needed \
-            base-devel cmake cuda cudnn git ninja
+            base-devel cmake cuda cudnn gcc15 git ninja
           echo "/opt/cuda/bin" >> "${GITHUB_PATH}"
 
       - name: Checkout
@@ -48,4 +48,4 @@ jobs:
             -DGENESIA_BUILD_UI=OFF
 
       - name: Build
-        run: cmake --build cmake-build-release --target genesia classifier-train --parallel
+        run: cmake --build cmake-build-release --target genesia --parallel

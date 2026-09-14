@@ -25,34 +25,20 @@ namespace genesia::classification {
         result.complete = result.rows.size() == result.total;
         return result;
     }
-    Audit audit(const std::string_view key, Predictions& predictions, const bool refresh, const std::atomic_bool& interrupted, const std::function<void(const runtime::Progress&)>& progress, const std::function<void()>& yield) {
-        const files::Lock lock{"concept-" + sha256({reinterpret_cast<const unsigned char*>(key.data()), key.size()})};
-        auto source = training::inspect(key);
-        {
-            const files::Lock recovery{"image-moves"};
-            dataset::recover_moves(source.root / ".genesia" / "audit-moves.json");
-        }
-        source = training::inspect(key);
+    Audit audit(training::TrainingData source, Predictions& predictions, const bool refresh, const std::atomic_bool& interrupted, const std::function<void(const runtime::Progress&)>& progress) {
         if (!source.issue.empty()) throw std::runtime_error{source.issue};
-        const auto descriptor = models::resolve(key);
+        if (!source.model) throw std::runtime_error{"Concept has no published classifier: " + source.key};
+        const auto descriptor = *source.model;
         std::size_t completed{};
         for (const auto& sample : source.samples) {
             if (interrupted.load()) throw runtime::Stopped{};
             predictions.infer(descriptor, sample.file, refresh);
             progress({runtime::BatchProgress{runtime::Stage::audit, ++completed, source.samples.size()}});
-            yield();
         }
         source.model = descriptor;
         return view(source, predictions.cache);
     }
-    dataset::MoveResult fix(const std::string_view key, const std::string_view sha, const std::string_view category) {
-        const files::Lock lock{"concept-" + sha256({reinterpret_cast<const unsigned char*>(key.data()), key.size()})};
-        auto source = training::inspect(key);
-        {
-            const files::Lock recovery{"image-moves"};
-            dataset::recover_moves(source.root / ".genesia" / "audit-moves.json");
-        }
-        source = training::inspect(key);
+    dataset::MoveResult fix(const training::TrainingData& source, const std::string_view sha, const std::string_view category) {
         if (!source.issue.empty()) throw std::runtime_error{source.issue};
         if (!std::ranges::contains(source.classes, category)) throw std::runtime_error{"Unknown category: " + std::string(category)};
         const auto sample = std::ranges::find_if(source.samples, [&](const training::Sample& value) { return value.file.sha == sha; });
@@ -63,14 +49,7 @@ namespace genesia::classification {
         for (const auto& path : sample->paths) moves.push_back({path, source.root / files::path(category) / path.lexically_relative(old_class), sample->file.sha, sample->file.entity});
         return dataset::move_images(std::move(moves), source.root / ".genesia" / "audit-moves.json");
     }
-    dataset::MoveResult undo(const std::string_view key) {
-        const files::Lock lock{"concept-" + sha256({reinterpret_cast<const unsigned char*>(key.data()), key.size()})};
-        auto source = training::inspect(key);
-        {
-            const files::Lock recovery{"image-moves"};
-            dataset::recover_moves(source.root / ".genesia" / "audit-moves.json");
-        }
-        source = training::inspect(key);
+    dataset::MoveResult undo(const training::TrainingData& source) {
         return dataset::undo_moves(source.root / ".genesia" / "audit-moves.json");
     }
 } // namespace genesia::classification

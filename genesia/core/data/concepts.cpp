@@ -3,7 +3,6 @@ module;
 module genesia.data.concepts;
 import genesia.project;
 import genesia.io.files;
-import genesia.io.hash;
 import std;
 namespace genesia::dataset {
     ConceptType parse_concept_type(const std::string_view name) {
@@ -32,12 +31,7 @@ namespace genesia::dataset {
     }
     Concept assign_type(const std::string_view key, const ConceptType type) {
         const auto normalized = files::utf8(files::path(key));
-        const auto identity   = sha256({reinterpret_cast<const unsigned char*>(normalized.data()), normalized.size()});
-        const files::Lock pending{"concept-type-" + identity, false};
-        if (!pending.acquired) throw std::runtime_error{"Concept has queued or running training: " + normalized};
-        const files::Lock operation{"concept-" + identity, false};
-        if (!operation.acquired) throw std::runtime_error{"Concept is in use: " + normalized};
-        auto result = read_concept(normalized);
+        auto result           = read_concept(normalized);
         if (result.locked) throw std::runtime_error{"Concept type is locked by its training history: " + result.key};
         result.type = type;
         files::write_json(result.path / ".genesia" / "concept.json", result);

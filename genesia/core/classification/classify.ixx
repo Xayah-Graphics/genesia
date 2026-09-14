@@ -9,5 +9,5 @@ export namespace genesia::classification {
         dataset::MoveResult movement;
         std::map<std::string, std::size_t> classes;
     };
-    Classification classify(std::string_view key, const std::filesystem::path& input, Predictions& predictions, const std::atomic_bool& interrupted, const std::function<void(const runtime::Progress&)>& progress, const std::function<void()>& yield);
+    Classification classify(dataset::Index& index, std::string_view key, const std::filesystem::path& input, const std::filesystem::path& journal, Predictions& predictions, const std::atomic_bool& interrupted, const std::function<void(const runtime::Progress&)>& progress);
 } // namespace genesia::classification

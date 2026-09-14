@@ -14,23 +14,12 @@ namespace genesia::generation {
             preview_stream = ::cuda::stream{::cuda::devices[0], least};
             compute::check(cudaEventCreateWithFlags(std::out_ptr(preview_finished), cudaEventDisableTiming));
         }
-        io = std::jthread{[this] { write_files(); }};
-        try {
-            if (visuals.publish) preview_worker = std::jthread{[this] { preview_images(); }};
-        } catch (...) {
-            {
-                const std::lock_guard lock{mutex};
-                io_closing = true;
-            }
-            condition.notify_all();
-            io.join();
-            throw;
-        }
+        if (visuals.publish) preview_worker = std::jthread{[this] { preview_images(); }};
     }
     Engine::~Engine() {
         finish();
     }
-    bool Engine::generate(const std::uint64_t id, const runtime::Generate& request, const std::atomic_bool& interrupted, const std::function<void()>& yield) {
+    std::optional<SavedImage> Engine::generate(dataset::Index& index, const std::uint64_t id, const runtime::Generate& request, const std::atomic_bool& interrupted) {
         {
             const std::lock_guard lock{mutex};
             active  = Active{id, request};
@@ -38,11 +27,6 @@ namespace genesia::generation {
             ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].cancel}.store(interrupted.load() ? 1u : 0u);
         }
 
-        if (request.source) {
-            dataset::Index index;
-            const auto source = index.identify(request.source->path);
-            if (source.sha != request.source->sha || source.width != request.parameters.width || source.height != request.parameters.height) throw std::runtime_error{"Repaint source changed after submission"};
-        }
         if (!model) {
             ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].stage}.store(static_cast<std::uint32_t>(sdxl::Stage::loading));
             model = std::make_unique<sdxl::Model>(stream, project::checkpoint, project::cache);
@@ -51,10 +35,6 @@ namespace genesia::generation {
         }
         const auto source_id = request.source ? std::optional{request.source->sha} : std::nullopt;
         if (!inference || inference->parameters != request.parameters || source_id != prepared_image) {
-            {
-                std::unique_lock lock{mutex};
-                condition.wait(lock, [this] { return !saving[0] && !saving[1]; });
-            }
             inference.reset();
             if (request.source) {
                 if (source_id != encoded_image) {
@@ -87,10 +67,6 @@ namespace genesia::generation {
             const auto slot = iteration++ % 2;
             {
                 std::unique_lock lock{mutex};
-                condition.wait(lock, [this, slot] { return !saving[slot]; });
-            }
-            {
-                std::unique_lock lock{mutex};
                 if (visuals.publish && !preview_ready && request.parameters.denoise > 0) {
                     preview_prepare = true;
                     condition.notify_all();
@@ -102,7 +78,7 @@ namespace genesia::generation {
             condition.notify_all();
             const auto& output = [&]() -> const sdxl::Output& {
                 try {
-                    return inference->generate(request.seed, yield);
+                    return inference->generate(request.seed);
                 } catch (...) {
                     {
                         const std::lock_guard lock{mutex};
@@ -129,26 +105,19 @@ namespace genesia::generation {
                 Record record{request.parameters, request.seed, {}, std::filesystem::path{project::checkpoint}.filename(), prompt::store(request.prompt, *request.catalog), request.source ? request.source->path.lexically_relative(project::directory) : std::filesystem::path{}};
                 const auto ready = visuals.publish ? visuals.publish(false, output.device_pixels, output.width, output.height, output.stream, slot) : nullptr;
                 report({runtime::EventKind::task, id, {}, {}, {.id = id, .state = runtime::State::saving}});
-                {
-                    const std::lock_guard lock{mutex};
-                    if (ready) report({runtime::EventKind::generated, id, record, ready});
-                    saving[slot] = true;
-                    files.push_back({id, &output, record, slot});
-                }
-                if (visuals.notify) visuals.notify();
-                condition.notify_all();
+                if (ready) report({runtime::EventKind::generated, id, record, ready});
+                auto file   = save_image(index, output, record);
+                record.path = file.path;
+                report({.kind = runtime::EventKind::saved, .id = id, .record = record, .file = file});
                 std::println(std::cerr, "GENERATE seed={} sample={:.3f}s decode={:.3f}s", request.seed, output.sample_seconds, output.decode_seconds);
-                std::cerr.flush();
+                return SavedImage{std::move(record), std::move(file), {output.pixels.data(), output.pixels.size()}};
             }
-            return !output.cancelled;
+            return {};
         }
-        return false;
+        return {};
     }
     void Engine::cancel() {
         ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].cancel}.store(1, ::cuda::memory_order_release);
-    }
-    void Engine::request_yield() {
-        ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].yield_requested}.store(1, ::cuda::memory_order_release);
     }
     void Engine::configure(const bool enabled, const bool visible) {
         const std::lock_guard lock{mutex};
@@ -161,21 +130,20 @@ namespace genesia::generation {
         return {active ? active->id : 0, static_cast<runtime::GenerationStage>(::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].stage}.load()), ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].completed}.load(), active ? active->request.parameters.steps : 0, model_ready, started};
     }
     void Engine::finish() {
-        if (!io.joinable()) return;
+        if (std::exchange(finished, true)) return;
         cancel();
         release();
         {
             const std::lock_guard lock{mutex};
-            io_closing = preview_closing = true;
+            preview_closing = true;
         }
         condition.notify_all();
-        io.join();
         if (preview_worker.joinable()) preview_worker.join();
     }
     void Engine::release() {
         {
             std::unique_lock lock{mutex};
-            condition.wait(lock, [this] { return !saving[0] && !saving[1] && !preview_working; });
+            condition.wait(lock, [this] { return !preview_working; });
             preview_sampling = false;
             if (visuals.publish && snapshots && !preview_done) {
                 preview_release = true;
@@ -317,28 +285,4 @@ namespace genesia::generation {
         condition.notify_all();
     }
 
-    void Engine::write_files() {
-        for (;;) {
-            FileTask task;
-            {
-                std::unique_lock lock{mutex};
-                condition.wait(lock, [this] { return io_closing || !files.empty(); });
-                if (files.empty()) break;
-                task = std::move(files.front());
-                files.pop_front();
-            }
-            try {
-                task.record.path = std::filesystem::absolute(save_image(*task.output, task.record));
-                report({runtime::EventKind::saved, task.id, task.record});
-                report({runtime::EventKind::task, task.id, {}, {}, {.id = task.id, .state = runtime::State::complete, .result = {runtime::Generated{task.record.path, task.record.seed}}}});
-            } catch (const std::exception& failure) {
-                report({runtime::EventKind::task, task.id, {}, {}, {.id = task.id, .state = runtime::State::failed, .error = failure.what()}});
-            }
-            {
-                const std::lock_guard lock{mutex};
-                saving[task.slot] = false;
-            }
-            condition.notify_all();
-        }
-    }
 } // namespace genesia::generation

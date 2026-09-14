@@ -27,27 +27,24 @@ namespace genesia::classification {
         models.clear();
         if (host_results) cudaFreeHost(host_results);
     }
-    void Pipeline::prepare(std::vector<models::Descriptor> desired, int width, int height) {
+    bool Pipeline::prepare(std::vector<models::Descriptor> desired, int width, int height) {
         std::ranges::sort(desired, {}, &models::Descriptor::id);
         if (!desired.empty() && !((width == 1024 && height == 1536) || (width == 1536 && height == 1024) || (width == 1024 && height == 1024))) throw std::runtime_error("Enabled classifiers require 1024x1536, 1536x1024, or 1024x1024 original RGB8 input");
-        const bool changed = desired.size() != models.size() || !std::equal(desired.begin(), desired.end(), models.begin(), [](const models::Descriptor& a, const LoadedClassifier& b) { return a == b.descriptor; });
+        const bool changed = (!models.empty() && !arena) || desired.size() != models.size() || !std::equal(desired.begin(), desired.end(), models.begin(), [](const models::Descriptor& a, const LoadedClassifier& b) { return a == b.descriptor; });
         if (changed) {
             if (pending_stream) compute::check(cudaStreamSynchronize(pending_stream));
+            pending_stream = nullptr;
             for (auto& model : models) model.plans.clear();
             arena.reset();
-            std::vector<LoadedClassifier> next;
+            std::erase_if(models, [&](const LoadedClassifier& model) { return !std::ranges::contains(desired, model.descriptor); });
             for (const auto& descriptor : desired) {
-                auto old = std::ranges::find_if(models, [&](const LoadedClassifier& m) { return m.descriptor == descriptor; });
-                if (old != models.end()) next.push_back(std::move(*old));
-                else {
-                    LoadedClassifier entry;
-                    entry.descriptor = descriptor;
-                    if (files::digest(descriptor.path) != descriptor.sha) throw std::runtime_error{"Classifier model does not match its published SHA"};
-                    entry.network = std::make_unique<convnext::Network>(descriptor.path);
-                    next.push_back(std::move(entry));
-                }
+                if (std::ranges::contains(models, descriptor, &LoadedClassifier::descriptor)) continue;
+                LoadedClassifier entry;
+                entry.descriptor = descriptor;
+                entry.network    = std::make_unique<convnext::Network>(descriptor.path);
+                models.push_back(std::move(entry));
             }
-            models       = std::move(next);
+            std::ranges::sort(models, {}, [](const LoadedClassifier& model) { return model.descriptor.id; });
             result_bytes = 0;
             for (auto& m : models) {
                 m.offset = result_bytes;
@@ -69,10 +66,12 @@ namespace genesia::classification {
         for (auto& m : models) {
             const auto shape = std::pair{width, height};
             if (!m.plans.contains(shape)) {
-                m.plans[shape] = std::make_unique<convnext::NetworkPlan>(*m.network, 1, width, height, convnext::ActivationStorage::reuse, arena.get());
-                m.plans[shape]->capture();
+                auto plan = std::make_unique<convnext::NetworkPlan>(*m.network, 1, width, height, convnext::ActivationStorage::reuse, arena.get());
+                plan->capture();
+                m.plans.emplace(shape, std::move(plan));
             }
         }
+        return changed;
     }
     Result Pipeline::run(const models::Descriptor& descriptor, convnext::GpuRgb8 input, cudaStream_t stream, const std::string_view image_sha) {
         pending_stream = stream;
@@ -103,24 +102,30 @@ namespace genesia::classification {
         return result;
     }
     void Cache::store(const Result& result) {
-        const files::Lock lock{"prediction-" + result.model_sha + "-" + result.image_sha};
         const auto path = project::state_directory / "inference" / result.model_sha / (result.image_sha + ".json");
         files::write_json(path, {{"version", 1}, {"prediction", result}});
         entries[{result.model_sha, result.image_sha}] = result;
     }
-    Result Predictions::infer(const models::Descriptor& descriptor, const dataset::File& file, const bool refresh) {
+    Result Predictions::infer(const models::Descriptor& descriptor, const dataset::File& file, const bool refresh, const std::span<const std::uint8_t> rgb) {
         if (!refresh)
             if (auto result = cache.find(descriptor, file.sha)) return *result;
         std::vector<models::Descriptor> desired;
         for (const auto& model : pipeline.models)
             if (model.descriptor.id != descriptor.id && std::ranges::contains(active, model.descriptor.id)) desired.push_back(model.descriptor);
         desired.push_back(descriptor);
-        pipeline.prepare(std::move(desired), file.width, file.height);
-        auto& loaded     = *std::ranges::find(pipeline.models, descriptor, &LoadedClassifier::descriptor);
-        auto& plan       = *loaded.plans.at({file.width, file.height});
-        const auto image = read_image(file.path);
-        if (files::digest(file.path) != file.sha) throw std::runtime_error{"Image changed before inference: " + files::utf8(file.path)};
-        compute::check(cudaMemcpyAsync(plan.pixels.data, image.pixels.data(), image.pixels.size(), cudaMemcpyHostToDevice, plan.stream));
+        if (pipeline.prepare(std::move(desired), file.width, file.height)) pixel_sha.clear();
+        auto& loaded = *std::ranges::find(pipeline.models, descriptor, &LoadedClassifier::descriptor);
+        auto& plan   = *loaded.plans.at({file.width, file.height});
+        if (pixel_sha != file.sha) {
+            if (rgb.empty() && image_sha != file.sha) {
+                image     = read_image(file.path);
+                image_sha = file.sha;
+            }
+            const auto bytes = rgb.empty() ? std::span<const std::uint8_t>{image.pixels} : rgb;
+            compute::check(cudaMemcpyAsync(plan.pixels.data, bytes.data(), bytes.size(), cudaMemcpyHostToDevice, plan.stream));
+            compute::check(cudaStreamSynchronize(plan.stream));
+            pixel_sha = file.sha;
+        }
         auto result = pipeline.run(descriptor, {static_cast<unsigned char*>(plan.pixels.data), file.width, file.height, std::size_t(file.width) * 3}, plan.stream, file.sha);
         cache.store(result);
         return result;

@@ -7,7 +7,6 @@ export namespace genesia::models {
         std::filesystem::path path;
         std::string fingerprint;
         int step{};
-        std::shared_ptr<files::Lock> lease;
         bool operator==(const Descriptor& other) const {
             return id == other.id && sha == other.sha;
         }
@@ -16,5 +15,4 @@ export namespace genesia::models {
     Descriptor resolve(std::string_view concept_key);
     Descriptor publish(std::string_view concept_key, const std::filesystem::path& file, std::string fingerprint, int step);
     void unpublish(std::string_view concept_key);
-    void collect(std::string_view concept_key);
 } // namespace genesia::models

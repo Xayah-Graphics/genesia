@@ -74,7 +74,7 @@ namespace genesia::editor {
         const bool mode_clicked = ImGui::Button(workspace.random_seed ? "Random###SeedMode" : "Fixed###SeedMode", {mode_width, row_height});
         ImGui::PopStyleColor(4);
         ImGui::PopStyleVar(2);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\nClick: Random / Fixed", workspace.random_seed ? "A new seed is chosen when queued." : "Reuse this seed for each image.");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\nClick: Random / Fixed", workspace.random_seed ? "A new seed is chosen when generation starts." : "Reuse this seed for each image.");
         const bool row_hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::IsMouseHoveringRect(origin, {origin.x + width, origin.y + row_height});
         if (mode_clicked || (row_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Middle))) {
             workspace.commit_parameters();
@@ -85,7 +85,7 @@ namespace genesia::editor {
             ImGui::SetNextItemWidth(-1);
             ImGui::SliderFloat("##Denoise", &workspace.denoise, 0, 1, "%.2f", ImGuiSliderFlags_AlwaysClamp);
         }
-        if (std::ranges::any_of(workspace.task_status, [](const auto& entry) { return entry.second.kind == runtime::Kind::generate; })) {
+        if (workspace.activity.contains({"", runtime::Kind::generate})) {
             ImGui::Separator();
             ImGui::TextDisabled("IMAGE GENERATION");
             operation_activity(workspace, {runtime::Kind::generate}, "");
@@ -101,7 +101,7 @@ namespace genesia::editor {
         int steps{};
         runtime::Kind active_kind{runtime::Kind::generate};
         double elapsed{};
-        if (workspace.runtime) {
+        {
             active      = workspace.session_state.active.has_value();
             loaded      = workspace.session_state.generation.model_ready;
             failed      = !workspace.session_state.error.empty();
@@ -131,18 +131,11 @@ namespace genesia::editor {
         } else {
             workspace.progress_alpha = failed ? 0 : std::max(0.0F, workspace.progress_alpha - ImGui::GetIO().DeltaTime / 0.15F);
             if (!failed && (workspace.page == Workspace::Page::generation || workspace.repaint)) {
-                bool latest = true;
-                for (const auto& [id, task] : std::views::reverse(workspace.task_status)) {
-                    if (task.kind != runtime::Kind::generate) continue;
-                    const auto state = runtime::states[std::size_t(task.state)];
-                    if (state == "saving" || state == "queued" || (latest && state == "failed")) {
-                        workspace.progress_label = state == "saving" ? "Saving image" : state == "queued" ? "Image queued" : "Generation failed";
-                        workspace.progress_time.clear();
-                        workspace.progress_alpha = 1;
-                        active_kind              = runtime::Kind::generate;
-                        break;
-                    }
-                    latest = false;
+                const auto found = workspace.activity.find({"", runtime::Kind::generate});
+                if (found != workspace.activity.end() && found->second.state == runtime::State::failed) {
+                    workspace.progress_label = "Generation failed";
+                    workspace.progress_time.clear();
+                    workspace.progress_alpha = 1;
                 }
             }
         }
@@ -230,12 +223,12 @@ namespace genesia::editor {
         if (stopping_image) {
             ImGui::SetCursorScreenPos({right_start, minimum.y + 4 * scale});
             ImGui::BeginDisabled(stopping);
-            if (text_button("##StopImage", "Stop image", scale)) workspace.runtime->session.cancel(*stopping_image);
+            if (text_button("##StopImage", "Stop image", scale)) workspace.runtime.session.cancel(*stopping_image);
             ImGui::EndDisabled();
         }
         if (submission) {
             const bool valid   = workspace.repaint ? workspace.root && workspace.root->ready && workspace.repaints.at(workspace.repaint->source.sha)->editor.valid : workspace.prompt_editor.valid;
-            const bool enabled = !unavailable && !ImGui::GetTopMostPopupModal() && valid;
+            const bool enabled = workspace.library.ready && !active && !unavailable && !ImGui::GetTopMostPopupModal() && valid;
             if (ImGui::IsPopupOpen("Generation settings") && ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::IsMouseHoveringRect({maximum.x - primary_width, minimum.y}, maximum) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                 workspace.commit_parameters();
                 ImGui::ClosePopupsOverWindow(ImGui::GetCurrentWindow(), false);

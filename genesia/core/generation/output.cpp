@@ -35,7 +35,7 @@ namespace genesia {
         }
     } // namespace
 
-    std::filesystem::path save_image(const sdxl::Output& output, const Record& record) {
+    dataset::File save_image(dataset::Index& index, const sdxl::Output& output, const Record& record) {
         const auto started = std::chrono::steady_clock::now();
         const auto model   = record.model.u8string();
         nlohmann::json metadata{{"version", 1}, {"model", std::string{model.begin(), model.end()}}, {"seed", record.seed}, {"steps", record.parameters.steps}, {"cfg", record.parameters.cfg}, {"sampler", "euler"}, {"scheduler", "simple"}};
@@ -65,40 +65,13 @@ namespace genesia {
         int length{};
         const std::unique_ptr<unsigned char, decltype(&std::free)> png{stbi_write_png_to_mem(output.pixels.data(), output.width * 3, output.width, output.height, 3, &length), &std::free};
         if (!png) throw std::runtime_error{"PNG encoding failed"};
-
-        const files::Lock files_lock{"image-moves"};
-        const files::Lock publication{"raw-publish"};
-        dataset::Index index;
-        index.scan("raw");
-        const auto& raw = index.roots.front();
-        if (!raw.error.empty()) throw std::runtime_error{raw.error};
-        if (!raw.conflicts.empty()) {
-            std::string message{"Raw contains independent copies of the same image:"};
-            for (const auto& conflict : raw.conflicts)
-                for (const auto& path : conflict) message += "\n" + path.string();
-            throw std::runtime_error{message};
-        }
-        std::uint64_t next_index{1};
-        for (const auto& entry : std::filesystem::directory_iterator{project::raw}) {
-            const auto filename = entry.path().filename().string();
-            if (!filename.starts_with("genesia_") || !filename.ends_with(".png")) continue;
-            const std::string_view digits{filename.data() + 8, filename.size() - 12};
-            std::uint64_t number{};
-            const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), number);
-            if (parsed.ec == std::errc{} && parsed.ptr == digits.data() + digits.size()) next_index = std::max(next_index, number + 1);
-        }
-        std::filesystem::path path, temporary;
-        std::ofstream file;
-        for (;;) {
-            path = project::raw / std::format("genesia_{:06}.png", next_index++);
-            if (std::filesystem::exists(path)) continue;
-            temporary = path;
-            temporary += ".part";
-            file.open(temporary, std::ios::binary | std::ios::noreplace);
-            if (file.is_open()) break;
-            if (!std::filesystem::exists(temporary)) throw std::runtime_error{std::format("Cannot create output image: {}", path.string())};
-            file.clear();
-        }
+        const auto& raw = *std::ranges::find(index.roots, std::string_view{"raw"}, [](const dataset::Root& root) { return root.all.key; });
+        if (!raw.ready) throw std::runtime_error{"Raw is not ready"};
+        const auto path = project::raw / std::format("genesia_{:06}.png", index.next_output++);
+        auto temporary  = path;
+        temporary += ".part";
+        std::ofstream file{temporary, std::ios::binary | std::ios::trunc};
+        dataset::File resource;
         file.exceptions(std::ios::badbit | std::ios::failbit);
         try {
             // stb writes the PNG signature and IHDR first; insert metadata before IDAT.
@@ -107,10 +80,12 @@ namespace genesia {
             write_chunk(file, "iTXt", text);
             file.write(reinterpret_cast<const char*>(png.get() + 33), length - 33);
             file.close();
-            // Publish a complete PNG atomically without replacing another process's output.
-            const auto resource = index.identify(temporary);
+            // Only complete files become dataset members.
+            resource            = index.identify(temporary, &record);
             const auto existing = std::ranges::find(raw.all.images, resource.sha, &dataset::File::sha);
             std::filesystem::create_hard_link(existing == raw.all.images.end() ? temporary : existing->path, path);
+            if (existing != raw.all.images.end()) resource = *existing;
+            resource.path = path;
             std::filesystem::remove(temporary);
         } catch (...) {
             file.exceptions(std::ios::goodbit);
@@ -119,7 +94,8 @@ namespace genesia {
             throw;
         }
         std::println(std::cerr, "SAVE {} {:.3f}s", path.string(), std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
-        return path;
+        index.insert(resource);
+        return resource;
     }
 
 } // namespace genesia

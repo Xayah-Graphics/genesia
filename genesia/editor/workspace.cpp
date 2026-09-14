@@ -35,7 +35,7 @@ namespace genesia::editor {
         if (!history.evaluations.empty()) metrics = history.evaluations.back();
     }
 
-    Workspace::Workspace(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, WindowPlatform& platform, Renderer& display, std::string dataset) : catalog{std::move(catalog)}, preset{std::move(preset)}, window{platform}, renderer{display}, dataset_index{[] { glfwPostEmptyEvent(); }}, textures{display}, prompt{this->preset.prompt}, tag_search{*this->catalog} {
+    Workspace::Workspace(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, WindowPlatform& platform, Renderer& display, std::string dataset) : catalog{std::move(catalog)}, preset{std::move(preset)}, window{platform}, renderer{display}, textures{display}, runtime{display.device}, prompt{this->preset.prompt}, tag_search{*this->catalog} {
         prompt_editor.reset(prompt);
         if (!dataset.empty()) {
             page           = Page::dataset;
@@ -77,11 +77,28 @@ namespace genesia::editor {
     }
 
     void Workspace::receive() {
-        const auto revision = library->revision;
-        if (auto next = dataset_index.poll()) library = std::move(next);
+        auto delivered = runtime.session.drain();
+        auto& changed  = delivered.catalog;
+        std::vector<std::string> changed_roots;
+        for (auto& root : changed.roots) {
+            changed_roots.push_back(root.all.key);
+            const auto found = std::ranges::find(library.roots, root.all.key, [](const dataset::Root& item) { return item.all.key; });
+            if (found == library.roots.end()) library.roots.push_back(std::move(root));
+            else *found = std::move(root);
+        }
+        if (!changed_roots.empty()) std::ranges::sort(library.roots, [](const dataset::Root& a, const dataset::Root& b) { return a.all.key == "raw" ? b.all.key != "raw" : b.all.key == "raw" ? false : a.all.key < b.all.key; });
+        for (auto& [key, info] : changed.concepts) {
+            library.concept_errors.erase(key);
+            if (info.type != dataset::ConceptType::classifier) library.classifiers.erase(key);
+            library.concepts[key] = std::move(info);
+        }
+        for (auto& [key, info] : changed.classifiers) library.classifiers[key] = std::move(info);
+        for (auto& [key, error] : changed.concept_errors) library.concept_errors[key] = std::move(error);
+        library.ready |= changed.ready;
         textures.receive();
-        if (revision != library->revision) {
-            for (auto& entry : library->roots) {
+        {
+            for (const auto& key : changed_roots) {
+                const auto& entry = *std::ranges::find(library.roots, key, [](const dataset::Root& root) { return root.all.key; });
                 std::vector<const dataset::Collection*> collections{&entry.all};
                 for (auto& candidate : entry.concepts) collections.push_back(&candidate);
                 for (const auto* candidate : collections) {
@@ -96,18 +113,17 @@ namespace genesia::editor {
                 }
             }
         }
-        if (revision != library->revision) {
-            std::erase_if(activated, [&](const auto& key) {
-                const auto found = library->classifiers.find(key);
-                return found == library->classifiers.end() || !found->second.model;
-            });
-            if (!audit_key.empty()) rebuild_audit();
+        for (const auto& [key, info] : changed.concepts) {
+            const auto found = library.classifiers.find(key);
+            if (found == library.classifiers.end() || !found->second.model) std::erase(activated, key);
         }
+        if (!audit_key.empty() && (changed.classifiers.contains(audit_key) || changed.concepts.contains(audit_key))) rebuild_audit();
         synchronize_collection();
-        if (runtime) {
-            auto& session           = runtime->session;
-            session_state           = session.snapshot();
-            auto [events, previews] = session.drain();
+        {
+            auto& session  = runtime.session;
+            session_state  = session.snapshot();
+            auto& events   = delivered.events;
+            auto& previews = delivered.previews;
             for (const auto& frame : previews) {
                 const auto presentation = std::static_pointer_cast<const PresentedFrame>(frame.frame);
                 auto& source            = presentation->bridge->slots[presentation->slot];
@@ -149,20 +165,13 @@ namespace genesia::editor {
                     if (output) {
                         output->record  = std::move(event.record);
                         output->preview = false;
+                        output->saved   = std::move(event.file);
                     }
-                    dataset_index.refresh();
                 }
             }
         }
         for (auto* output : {&generation, repaint ? &repaint->result : nullptr}) {
             if (!output || !output->record || output->record->path.empty()) continue;
-            if (!output->saved) {
-                const auto raw = std::ranges::find_if(library->roots, [](const auto& value) { return value.all.key == "raw"; });
-                if (raw != library->roots.end() && raw->ready) {
-                    const auto file = std::ranges::find(raw->files, output->record->path, &dataset::File::path);
-                    if (file != raw->files.end()) output->saved = *file;
-                }
-            }
             if (output->saved && output->texture) {
                 const auto cached = textures.entries.find(output->saved->sha);
                 if (cached != textures.entries.end() && cached->second.texture) renderer.retire(std::exchange(output->texture, 0));
@@ -173,7 +182,7 @@ namespace genesia::editor {
     void Workspace::synchronize_collection() {
         root       = nullptr;
         collection = nullptr;
-        for (auto& entry : library->roots) {
+        for (auto& entry : library.roots) {
             if (entry.all.key == collection_key) {
                 root       = &entry;
                 collection = &entry.all;
@@ -185,7 +194,7 @@ namespace genesia::editor {
                 }
         }
         if (page == Page::audit) collection = &audit_collection;
-        if (library->ready && page == Page::dataset && !collection) action_error = "Dataset does not exist: " + collection_key;
+        if (library.ready && page == Page::dataset && !collection) action_error = "Dataset does not exist: " + collection_key;
         if (collection && root && root->ready && !collection->images.empty()) {
             if (current_position().selected.empty()) {
                 const auto index   = collection->images.size() - 1;
@@ -435,28 +444,25 @@ namespace genesia::editor {
         }
         audit_key = std::move(key);
         audit_task.reset();
-        for (const auto& [id, task] : std::views::reverse(task_status))
-            if (task.concept_key == audit_key && task.kind == runtime::Kind::audit && (task.state == runtime::State::queued || task.state == runtime::State::running)) {
-                audit_task = id;
-                break;
-            }
+        const auto current = activity.find({audit_key, runtime::Kind::audit});
+        if (current != activity.end() && current->second.state < runtime::State::complete) audit_task = current->second.id;
         collection_key = audit_key;
         page           = Page::audit;
         viewing        = View::browse;
         rebuild_audit();
         synchronize_collection();
-        if (audit_task) return;
-        const auto source = library->classifiers.find(audit_key);
-        if (source == library->classifiers.end() || !source->second.model) return;
+        if (audit_task || session_state.active) return;
+        const auto source = library.classifiers.find(audit_key);
+        if (source == library.classifiers.end() || !source->second.model || !source->second.inspected) return;
         if (!refresh && audit_report.complete) return;
         audit_task  = submit_task({runtime::Audit{audit_key, refresh}});
         audit_dirty = false;
     }
     std::uint64_t Workspace::submit_task(runtime::Request request) {
-        if (!runtime) runtime = std::make_unique<WorkspaceRuntime>(renderer.device);
-        const auto id   = runtime->session.enqueue(std::move(request));
-        session_state   = runtime->session.snapshot();
-        task_status[id] = session_state.jobs.at(id);
+        auto submitted                                    = runtime.session.submit(std::move(request));
+        const auto id                                     = submitted.id;
+        session_state                                     = runtime.session.snapshot();
+        activity[{submitted.concept_key, submitted.kind}] = std::move(submitted);
         return id;
     }
     void Workspace::task_event(const runtime::TaskStatus& event) {
@@ -464,7 +470,11 @@ namespace genesia::editor {
         const auto id    = event.id;
         const auto state = event.state;
         const auto& key  = event.concept_key;
-        if (kind != runtime::Kind::infer) task_status[id] = event;
+        if (kind != runtime::Kind::infer) {
+            auto& latest = activity[{key, kind}];
+            latest       = event;
+            if (kind == runtime::Kind::audit || kind == runtime::Kind::fix || kind == runtime::Kind::undo) latest.result = {};
+        }
         if (kind == runtime::Kind::train && state == runtime::State::running) {
             const auto found = training_drafts.find(key);
             if (found != training_drafts.end()) {
@@ -474,38 +484,38 @@ namespace genesia::editor {
         }
         if (state == runtime::State::complete) {
             if (kind == runtime::Kind::infer) {
-                const auto& result                                                       = std::get<classification::Result>(event.result.value);
-                predictions[result.id + "|" + result.model_sha + "|" + result.image_sha] = result;
-            } else if (kind == runtime::Kind::audit && key == audit_key && audit_task == id) {
-                audit_task.reset();
-                prediction_cache.entries.clear();
-                rebuild_audit();
-            } else if (kind == runtime::Kind::fix || kind == runtime::Kind::undo) {
-                dataset_index.refresh();
-            } else if (kind == runtime::Kind::train || kind == runtime::Kind::classify || kind == runtime::Kind::assign) dataset_index.refresh();
+                const auto& result                                             = std::get<classification::Result>(event.result.value);
+                prediction_cache.entries[{result.model_sha, result.image_sha}] = result;
+                prediction_errors.erase(result.id + "|" + result.model_sha + "|" + result.image_sha);
+            } else if (kind == runtime::Kind::audit) {
+                for (const auto& row : std::get<classification::Audit>(event.result.value).rows) prediction_cache.entries[{row.prediction.model_sha, row.prediction.image_sha}] = row.prediction;
+                if (key == audit_key && audit_task == id) {
+                    audit_task.reset();
+                    rebuild_audit();
+                }
+            }
         } else if (state == runtime::State::failed || state == runtime::State::stopped) {
             if (audit_task == id) {
                 audit_task.reset();
                 audit_dirty = false;
             }
             if (state == runtime::State::failed && kind == runtime::Kind::infer) prediction_errors[key + "|" + event.model_sha + "|" + event.image_sha] = event.error;
-            if (kind == runtime::Kind::train) dataset_index.refresh();
             if (kind == runtime::Kind::assign && key == collection_key) type_error = event.error;
         }
     }
     void Workspace::rebuild_audit() {
         audit_collection  = {.key = audit_key, .name = audit_key};
-        const auto source = library->classifiers.find(audit_key);
-        if (source == library->classifiers.end()) {
+        const auto source = library.classifiers.find(audit_key);
+        if (source == library.classifiers.end() || !source->second.inspected) {
             audit_report = {};
+            audit_dirty  = true;
             return;
         }
         audit_report = classification::view(source->second, prediction_cache, audit_category);
         audit_dirty  = !audit_report.complete;
         for (const auto& row : audit_report.rows) {
             audit_collection.images.push_back(row.sample.file);
-            const auto identity   = audit_key + "|" + audit_report.model_sha + "|" + row.sample.file.sha;
-            predictions[identity] = row.prediction;
+            const auto identity = audit_key + "|" + audit_report.model_sha + "|" + row.sample.file.sha;
             prediction_errors.erase(identity);
         }
         if (audit_collection.images.empty()) audit_position = {};
@@ -520,15 +530,14 @@ namespace genesia::editor {
         std::vector<runtime::Infer> wanted;
         for (const auto& file : visible_images)
             for (const auto& key : activated) {
-                const auto found = library->classifiers.find(key);
-                if (found == library->classifiers.end() || !found->second.model) continue;
+                const auto found = library.classifiers.find(key);
+                if (found == library.classifiers.end() || !found->second.model) continue;
                 const auto& model   = *found->second.model;
                 const auto identity = key + "|" + model.sha + "|" + file.sha;
-                if (predictions.contains(identity) || prediction_errors.contains(identity)) continue;
-                wanted.push_back({.concept_key = key, .descriptor = model, .file = file});
+                if (prediction_cache.entries.contains({model.sha, file.sha}) || prediction_errors.contains(identity)) continue;
+                if (!prediction_cache.find(model, file.sha)) wanted.push_back({.concept_key = key, .descriptor = model, .file = file});
             }
-        if (!wanted.empty() && !runtime) runtime = std::make_unique<WorkspaceRuntime>(renderer.device);
-        if (runtime) runtime->session.observe(std::move(wanted));
+        runtime.session.observe(std::move(wanted));
     }
     void Workspace::draw() {
         if (parameter_edit.id && ImGui::GetActiveID() != parameter_edit.id) commit_parameters();
@@ -545,30 +554,29 @@ namespace genesia::editor {
         canvas_origin = {dataset_sidebar.width * dataset_sidebar.amount, 0};
         canvas_size   = {std::max(1.0F, size.x - dataset_sidebar.width * dataset_sidebar.amount - prompt_sidebar.width * prompt_sidebar.amount), size.y};
         if (!window.dropped.empty()) {
-            const auto info = library->classifiers.find(collection_key);
-            if (!dataset_sidebar.open || concept_tool != ConceptTool::classify || info == library->classifiers.end() || !info->second.model) action_error = "Open Classify at the top of the Dataset panel before dropping a folder.";
+            const auto info = library.classifiers.find(collection_key);
+            if (!dataset_sidebar.open || concept_tool != ConceptTool::classify || info == library.classifiers.end() || !info->second.model) action_error = "Open Classify at the top of the Dataset panel before dropping a folder.";
+            else if (session_state.active) action_error = "Finish the current operation first.";
             else if (window.dropped.size() != 1) action_error = "Drop one directory at a time.";
             else {
                 submit_task({runtime::Classify{collection_key, window.dropped.front()}});
             }
             window.dropped.clear();
         }
-        std::string error = library->error.empty() ? action_error : library->error;
-        if (runtime) {
-            auto& session = runtime->session;
+        std::string error = action_error;
+        {
+            auto& session = runtime.session;
             session.activate(activated);
-            const auto* generate = session_state.active ? std::get_if<runtime::Generate>(&session_state.active->request.operation) : nullptr;
+            const auto* generate = session_state.active ? std::get_if<runtime::Generate>(&session_state.active->request->operation) : nullptr;
             const bool visible   = renderer.visible && generate && ((!generate->source && page == Page::generation) || (repaint && repaint->result.task == session_state.active->id && (viewing == View::comparison || viewing == View::result)));
             session.configure_preview(preview_enabled, visible);
             if (!session_state.error.empty()) error = session_state.error;
         }
-        if (page == Page::audit && !repaint && audit_dirty && !audit_task) {
-            bool stopped{};
-            for (const auto& [id, task] : std::views::reverse(task_status))
-                if (task.concept_key == audit_key && task.kind == runtime::Kind::audit) {
-                    stopped = task.state == runtime::State::stopped || task.state == runtime::State::failed;
-                    break;
-                }
+        const auto selected = library.classifiers.find(collection_key);
+        runtime.session.select(selected != library.classifiers.end() && ((dataset_sidebar.open && concept_tool == ConceptTool::train) || page == Page::audit) ? collection_key : std::string{});
+        if (page == Page::audit && !repaint && audit_dirty && !audit_task && !session_state.active) {
+            const auto current = activity.find({audit_key, runtime::Kind::audit});
+            const bool stopped = current != activity.end() && (current->second.state == runtime::State::stopped || current->second.state == runtime::State::failed);
             if (!stopped) open_audit(audit_key);
         }
         const auto editor_state = [&] {

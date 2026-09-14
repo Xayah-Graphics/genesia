@@ -78,9 +78,7 @@ export namespace genesia::sdxl {
         ~Inference();
         Inference(const Inference&)            = delete;
         Inference& operator=(const Inference&) = delete;
-        // Two pinned outputs alternate. Finish reading a result before the
-        // second subsequent generate() call reuses its storage.
-        const Output& generate(std::uint64_t seed, const std::function<void()>& yield);
+        const Output& generate(std::uint64_t seed);
 
     private:
         Model& model;
@@ -101,8 +99,7 @@ export namespace genesia::sdxl {
         ::cuda::device_buffer<__nv_bfloat16> decoder;
         ::cuda::device_buffer<__nv_bfloat16> decoded;
         ::cuda::device_buffer<std::uint8_t> image;
-        std::array<Output, 2> outputs;
-        std::size_t output_index{};
+        Output output;
         std::unique_ptr<std::remove_pointer_t<cudaEvent_t>, decltype(&cudaEventDestroy)> initialized{nullptr, cudaEventDestroy};
         std::unique_ptr<std::remove_pointer_t<cudaEvent_t>, decltype(&cudaEventDestroy)> sampled{nullptr, cudaEventDestroy};
         std::unique_ptr<std::remove_pointer_t<cudaEvent_t>, decltype(&cudaEventDestroy)> decoded_event{nullptr, cudaEventDestroy};

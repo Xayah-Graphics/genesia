@@ -5,12 +5,11 @@ export import genesia.project;
 import std;
 
 export namespace genesia::files {
-    struct Lock final {
-        explicit Lock(std::string_view name, bool wait = true, const std::filesystem::path& directory = project::state_directory, bool shared = false);
-        bool acquired{};
-        ~Lock();
-        Lock(const Lock&)            = delete;
-        Lock& operator=(const Lock&) = delete;
+    struct Instance final {
+        Instance();
+        ~Instance();
+        Instance(const Instance&)            = delete;
+        Instance& operator=(const Instance&) = delete;
 
     private:
         std::intptr_t handle{};

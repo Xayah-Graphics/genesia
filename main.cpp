@@ -1,9 +1,11 @@
 import genesia.headless;
+import genesia.io.files;
 #if defined(GENESIA_HAS_EDITOR)
 import genesia.editor;
 #endif
 import std;
 int main(const int argc, char** argv) try {
+    const genesia::files::Instance instance;
     std::vector<std::string_view> arguments{argv + 1, argv + argc};
     if (!arguments.empty() && arguments.front() == "--gui") {
 #if defined(GENESIA_HAS_EDITOR)

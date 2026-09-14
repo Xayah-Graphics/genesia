@@ -2,58 +2,46 @@ module;
 #include <genesia/cuda.h>
 module genesia.runtime.session;
 import genesia.io.hash;
-import genesia.compute.device;
 import std;
 namespace genesia::runtime {
-    Session::Session(generation::Visuals hooks) : visuals{std::move(hooks)}, worker{[this] { run(); }} {}
+    Session::Session(generation::Visuals hooks, const bool browse) : visuals{std::move(hooks)}, loading{browse}, worker{[this, browse] { run(browse); }} {}
     Session::~Session() {
         shutdown();
         worker.join();
     }
-    std::uint64_t Session::enqueue(Request request) {
-        Task task;
-        task.request    = std::move(request);
-        const auto kind = Kind(task.request.operation.index());
-        std::string concept_key;
-        std::visit(
-            [&]<typename T>(const T& operation) {
-                if constexpr (std::same_as<T, Train>) concept_key = operation.options.concept_key;
-                else if constexpr (!std::same_as<T, Generate>) concept_key = operation.concept_key;
-            },
-            task.request.operation);
-        if (kind == Kind::train) {
-            concept_key                                                 = files::utf8(files::path(concept_key));
-            std::get<Train>(task.request.operation).options.concept_key = concept_key;
-            task.type_lease                                             = std::make_shared<files::Lock>("concept-type-" + sha256({reinterpret_cast<const unsigned char*>(concept_key.data()), concept_key.size()}), false, project::state_directory, true);
-            if (!task.type_lease->acquired) throw std::runtime_error{"Concept type is being changed: " + concept_key};
-            const auto source = dataset::read_concept(concept_key);
-            if (source.type == dataset::ConceptType::none) throw std::runtime_error{"Assign a concept type before training"};
-            if (source.type == dataset::ConceptType::lora) throw std::runtime_error{"LoRA training is not implemented"};
-        }
-        std::shared_ptr<generation::Engine> engine;
-        std::uint64_t id;
+    TaskStatus Session::submit(Request request) {
+        auto operation = std::make_shared<const Request>(std::move(request));
+        TaskStatus initial;
         {
             const std::lock_guard lock{mutex};
-            if (closing) throw std::runtime_error{"Task session is closing"};
+            if (closing) throw std::runtime_error{"Genesia is closing"};
             if (!error.empty()) throw std::runtime_error{error};
-            task.id = id = next_id++;
-            TaskStatus status{.id = id, .kind = kind, .concept_key = std::move(concept_key), .request = task.request};
-            if (const auto* infer = std::get_if<Infer>(&task.request.operation)) {
-                if (infer->descriptor) status.model_sha = infer->descriptor->sha;
-                if (infer->file) status.image_sha = infer->file->sha;
-                std::get<Infer>(status.request.operation).descriptor.reset();
-            }
-            jobs[id] = status;
-            events.push_back({EventKind::task, id, {}, {}, std::move(status)});
-            if (kind == Kind::infer) {
-                immediate.push_back(std::move(task));
-                engine = generation;
-            } else queue.push_back(std::move(task));
+            if (active || loading) throw std::runtime_error{"Finish the current operation first"};
+            const auto id = next_id++;
+            active        = TaskStatus{.id = id, .kind = Kind(operation->operation.index()), .started = std::chrono::steady_clock::now(), .request = operation};
+            std::visit(
+                [&]<typename T>(const T& value) {
+                    if constexpr (std::same_as<T, Train>) active->concept_key = value.options.concept_key;
+                    else if constexpr (!std::same_as<T, Generate>) active->concept_key = value.concept_key;
+                },
+                operation->operation);
+            interrupted = false;
+            submitted   = true;
+            initial     = *active;
+            delivery.events.push_back({EventKind::task, id, {}, {}, initial});
         }
-        if (engine) engine->request_yield();
-        condition.notify_all();
+        condition.notify_one();
         if (visuals.notify) visuals.notify();
-        return id;
+        return initial;
+    }
+    void Session::select(std::string key) {
+        {
+            const std::lock_guard lock{mutex};
+            if (selection == key) return;
+            selection   = key;
+            inspect_key = std::move(key);
+        }
+        condition.notify_one();
     }
     void Session::observe(std::vector<Infer> requests) {
         std::string signature;
@@ -62,14 +50,9 @@ namespace genesia::runtime {
             const std::lock_guard lock{mutex};
             if (signature == observed || closing) return;
             observed = std::move(signature);
-            std::erase_if(immediate, [&](const Task& task) {
-                if (!task.request.transient) return false;
-                jobs.erase(task.id);
-                return true;
-            });
-            if (active && active->request.transient) active->interrupted->store(true);
+            wanted   = std::move(requests);
         }
-        for (auto& request : requests) enqueue({std::move(request), true});
+        condition.notify_one();
     }
     void Session::activate(std::vector<std::string> models) {
         const std::lock_guard lock{mutex};
@@ -86,62 +69,41 @@ namespace genesia::runtime {
         if (engine) engine->configure(enabled, visible);
     }
     void Session::cancel(const std::uint64_t id) {
-        std::optional<Task> removed;
         std::shared_ptr<generation::Engine> engine;
         {
             const std::lock_guard lock{mutex};
-            for (auto* current : {&active, &suspended}) {
-                if (!*current || (*current)->id != id) continue;
-                const auto& status = jobs.at(id);
-                if (status.state != State::running && status.state != State::queued) return;
-                if (status.kind == Kind::fix || status.kind == Kind::undo || status.kind == Kind::assign) return;
-                const auto* batch = std::get_if<BatchProgress>(&status.progress.value);
-                if (batch && batch->stage == Stage::moving) return;
-                (*current)->interrupted->store(true);
-                jobs.at(id).stopping = true;
-                if (status.kind == Kind::generate) engine = generation;
-            }
-            for (auto* pending : {&queue, &immediate}) {
-                const auto found = std::ranges::find(*pending, id, &Task::id);
-                if (found == pending->end()) continue;
-                removed = std::move(*found);
-                pending->erase(found);
-                break;
-            }
+            if (!active || active->id != id) return;
+            const auto kind   = active->kind;
+            const auto* batch = std::get_if<BatchProgress>(&active->progress.value);
+            if (kind == Kind::fix || kind == Kind::undo || kind == Kind::assign || (batch && batch->stage == Stage::moving)) return;
+            interrupted      = true;
+            active->stopping = true;
+            if (kind == Kind::generate) engine = generation;
         }
         if (engine) engine->cancel();
-        if (removed) emit(*removed, State::stopped);
     }
     void Session::shutdown() {
         std::shared_ptr<generation::Engine> engine;
         {
             const std::lock_guard lock{mutex};
-            closing = true;
-            for (auto* current : {&active, &suspended})
-                if (*current) (*current)->interrupted->store(true);
-            for (auto* pending : {&queue, &immediate}) {
-                for (const auto& task : *pending) {
-                    auto& job = jobs.at(task.id);
-                    job.state = State::stopped;
-                    events.push_back({EventKind::task, task.id, {}, {}, job});
-                }
-                pending->clear();
-            }
+            closing     = true;
+            interrupted = true;
+            wanted.clear();
+            inspect_key.clear();
             engine = generation;
         }
         if (engine) engine->cancel();
-        condition.notify_all();
+        condition.notify_one();
     }
     Snapshot Session::snapshot() {
         Snapshot result;
         std::shared_ptr<generation::Engine> engine;
         {
             const std::lock_guard lock{mutex};
-            if (active) result.active = jobs.at(active->id);
-            result.jobs     = jobs;
-            result.idle     = !active && queue.empty() && immediate.empty() && std::ranges::all_of(jobs, [](const auto& entry) { return entry.second.state >= State::complete; });
+            result.active   = active;
+            result.idle     = !active && !loading && !inferring && wanted.empty() && inspect_key.empty();
             result.finished = worker_done;
-            result.pending  = !events.empty() || !previews.empty();
+            result.pending  = !delivery.events.empty() || !delivery.previews.empty() || delivery.catalog.ready || !delivery.catalog.roots.empty() || !delivery.catalog.concepts.empty() || !delivery.catalog.classifiers.empty() || !delivery.catalog.concept_errors.empty();
             result.error    = error;
             engine          = generation;
         }
@@ -150,43 +112,59 @@ namespace genesia::runtime {
     }
     Delivery Session::drain() {
         const std::lock_guard lock{mutex};
-        return {std::exchange(events, {}), std::exchange(previews, {})};
+        return std::exchange(delivery, {});
     }
-    void Session::emit(const Task& task, const State state, Progress progress, Result result, std::string failure) {
+    void Session::emit(const State state, Progress progress, Result result, std::string failure) {
         {
             const std::lock_guard lock{mutex};
-            auto& status = jobs.at(task.id);
-            if (status.state == State::queued && state == State::running) status.started = std::chrono::steady_clock::now();
-            status.state = state;
-            if (progress.value.index()) status.progress = std::move(progress);
-            if (result.value.index()) status.result = std::move(result);
-            status.error = std::move(failure);
-            events.push_back({EventKind::task, task.id, {}, {}, status});
+            active->state = state;
+            if (progress.value.index()) active->progress = std::move(progress);
+            auto event   = *active;
+            event.result = std::move(result);
+            event.error  = std::move(failure);
+            delivery.events.push_back({EventKind::task, event.id, {}, {}, std::move(event)});
+            if (state >= State::complete) active.reset();
         }
         if (visuals.notify) visuals.notify();
     }
     void Session::receive(Event event) {
-        std::vector<std::string> selected;
-        const auto path = event.record.path;
         {
             const std::lock_guard lock{mutex};
-            if (event.kind == EventKind::task) {
-                auto& status  = jobs.at(event.id);
-                status.state  = event.task.state;
-                status.result = std::move(event.task.result);
-                status.error  = std::move(event.task.error);
-                event.task    = status;
-            } else if (event.kind == EventKind::saved && !closing) selected = activated;
-            events.push_back(std::move(event));
-        }
-        for (const auto& key : selected) {
-            try {
-                enqueue({Infer{.concept_key = key, .input = path}});
-            } catch (const std::exception& failure) {
-                std::println(std::cerr, "Post-save inference: {}", failure.what());
+            if (event.kind == EventKind::task && event.id) {
+                active->state = event.task.state;
+                event.task    = *active;
             }
+            delivery.events.push_back(std::move(event));
         }
         if (visuals.notify) visuals.notify();
+    }
+    void Session::update_catalog(CatalogState update) {
+        {
+            const std::lock_guard lock{mutex};
+            for (auto& root : update.roots) {
+                const auto found = std::ranges::find(delivery.catalog.roots, root.all.key, [](const dataset::Root& item) { return item.all.key; });
+                if (found == delivery.catalog.roots.end()) delivery.catalog.roots.push_back(std::move(root));
+                else *found = std::move(root);
+            }
+            for (auto& [key, value] : update.concepts) delivery.catalog.concepts[key] = std::move(value);
+            for (auto& [key, value] : update.classifiers) delivery.catalog.classifiers[key] = std::move(value);
+            for (auto& [key, value] : update.concept_errors) delivery.catalog.concept_errors[key] = std::move(value);
+            delivery.catalog.ready |= update.ready;
+        }
+        if (visuals.notify) visuals.notify();
+    }
+    void Session::moved(const dataset::MoveResult& movement) {
+        for (const auto& root : catalog.index.apply(movement.paths)) update_catalog(catalog.root(root));
+        std::set<std::string> concepts;
+        for (const auto& move : movement.paths)
+            for (const auto& path : {move.source, move.destination}) {
+                const auto relative = path.lexically_relative(project::directory);
+                if (relative.empty() || *relative.begin() == ".." || std::distance(relative.begin(), relative.end()) < 3) continue;
+                auto part       = relative.begin();
+                const auto root = *part++;
+                concepts.insert(files::utf8(root / *part));
+            }
+        for (const auto& key : concepts) update_catalog(catalog.describe(key, true));
     }
     void Session::release_generation() {
         std::shared_ptr<generation::Engine> previous;
@@ -195,122 +173,70 @@ namespace genesia::runtime {
             previous = std::exchange(generation, {});
         }
         if (previous) previous->finish();
-        previous.reset();
     }
-    void Session::run() {
-        std::unique_ptr<files::Lock> lease;
-        std::string gpu_name;
-        const auto gpu_locks = std::filesystem::temp_directory_path() / "genesia-gpu";
-        const auto release   = [&] {
-            release_generation();
-            predictions.reset();
-            lease.reset();
-        };
+    void Session::run(const bool browse) {
         try {
+            if (browse) update_catalog(catalog.load());
+            {
+                const std::lock_guard lock{mutex};
+                loading = false;
+            }
+            if (visuals.notify) visuals.notify();
             for (;;) {
-                Task task;
+                std::shared_ptr<const Request> request;
+                std::optional<Infer> image;
+                std::string selected;
                 {
                     std::unique_lock lock{mutex};
-                    while (!closing && immediate.empty() && queue.empty()) {
+                    condition.wait(lock, [this] { return closing || submitted || !inspect_key.empty() || !wanted.empty(); });
+                    if (closing) {
+                        const bool pending = active.has_value();
                         lock.unlock();
-                        if (lease) {
-                            const files::Lock demand{gpu_name + "-wanted", false, gpu_locks};
-                            if (!demand.acquired) {
-                                release();
-                                for (;;) {
-                                    const files::Lock waiting{gpu_name + "-wanted", false, gpu_locks};
-                                    if (waiting.acquired) break;
-                                    std::unique_lock lock{mutex};
-                                    if (closing) break;
-                                    condition.wait_for(lock, std::chrono::milliseconds{100});
-                                }
-                            }
-                        }
-                        lock.lock();
-                        condition.wait_for(lock, std::chrono::milliseconds{100}, [this] { return closing || !queue.empty() || !immediate.empty(); });
+                        if (pending) emit(State::stopped);
+                        break;
                     }
-                    if (closing) break;
-                    auto& pending = immediate.empty() ? queue : immediate;
-                    task          = std::move(pending.front());
-                    pending.pop_front();
-                    active = task;
+                    if (submitted) {
+                        request   = active->request;
+                        submitted = false;
+                    } else if (!inspect_key.empty()) selected = std::exchange(inspect_key, {});
+                    else {
+                        image = std::move(wanted.front());
+                        wanted.erase(wanted.begin());
+                        inferring = true;
+                    }
                 }
-                emit(task, State::running);
-                try {
-                    if (!predictions) predictions = std::make_unique<classification::Predictions>();
-                    bool gpu = std::visit(
-                        [&]<typename T>(T& operation) {
-                            if constexpr (std::same_as<T, Infer>) {
-                                if (!operation.descriptor) operation.descriptor = models::resolve(operation.concept_key);
-                                if (!operation.file) {
-                                    dataset::Index index;
-                                    operation.file = index.identify(operation.input);
-                                }
-                                const std::lock_guard lock{mutex};
-                                auto& status     = jobs.at(task.id);
-                                status.model_sha = operation.descriptor->sha;
-                                status.image_sha = operation.file->sha;
-                                return operation.refresh || !predictions->cache.find(*operation.descriptor, operation.file->sha);
-                            } else if constexpr (std::same_as<T, Audit>) {
-                                const auto source = training::inspect(operation.concept_key);
-                                return operation.refresh || !classification::view(source, predictions->cache).complete;
-                            } else return std::same_as<T, Generate> || std::same_as<T, Train> || std::same_as<T, Classify>;
-                        },
-                        task.request.operation);
-                    if (gpu && gpu_name.empty()) {
-                        cudaDeviceProp properties;
-                        compute::check(cudaGetDeviceProperties(&properties, 0));
-                        gpu_name = "gpu-";
-                        for (const auto byte : properties.uuid.bytes) gpu_name += std::format("{:02x}", static_cast<unsigned char>(byte));
+                if (!selected.empty()) {
+                    try {
+                        update_catalog(catalog.load(files::utf8(*files::path(selected).begin())));
+                        catalog.inspect(selected);
+                        update_catalog(catalog.describe(selected));
+                    } catch (const std::exception& failure) {
+                        CatalogState update;
+                        update.concept_errors[selected] = failure.what();
+                        update_catalog(std::move(update));
                     }
-                    std::unique_ptr<files::Lock> demand;
-                    while (gpu && !lease) {
-                        auto attempt = std::make_unique<files::Lock>(gpu_name, false, gpu_locks);
-                        if (attempt->acquired) {
-                            lease = std::move(attempt);
-                            break;
-                        }
-                        if (task.interrupted->load()) throw Stopped{};
-                        if (!demand) {
-                            auto wanted = std::make_unique<files::Lock>(gpu_name + "-wanted", false, gpu_locks);
-                            if (wanted->acquired) demand = std::move(wanted);
-                        }
-                        std::unique_lock lock{mutex};
-                        condition.wait_for(lock, std::chrono::milliseconds{100});
-                    }
-                    demand.reset();
-                    execute(task);
-                } catch (const Stopped&) {
-                    emit(task, State::stopped);
-                } catch (const std::exception& failure) {
-                    emit(task, State::failed, {}, {}, failure.what());
-                }
-                {
+                } else if (image) {
+                    receive({EventKind::task, 0, {}, {}, infer(std::move(*image))});
                     const std::lock_guard lock{mutex};
-                    active.reset();
-                    if (task.request.transient) jobs.erase(task.id);
-                }
-                if (lease) {
-                    const files::Lock demand{gpu_name + "-wanted", false, gpu_locks};
-                    if (!demand.acquired) {
-                        release();
-                        for (;;) {
-                            const files::Lock waiting{gpu_name + "-wanted", false, gpu_locks};
-                            if (waiting.acquired) break;
-                            std::unique_lock lock{mutex};
-                            if (closing) break;
-                            condition.wait_for(lock, std::chrono::milliseconds{100});
-                        }
+                    inferring = false;
+                } else if (request) {
+                    try {
+                        if (interrupted) throw Stopped{};
+                        execute(*request);
+                    } catch (const Stopped&) {
+                        emit(State::stopped);
+                    } catch (const std::exception& failure) {
+                        if (const auto* train = std::get_if<Train>(&request->operation)) update_catalog(catalog.describe(train->options.concept_key));
+                        emit(State::failed, {}, {}, failure.what());
                     }
                 }
-                if (visuals.notify) visuals.notify();
             }
-            release();
+            release_generation();
+            predictions.reset();
+            catalog.index.flush();
         } catch (const std::exception& failure) {
             const std::lock_guard lock{mutex};
             error = failure.what();
-            queue.clear();
-            immediate.clear();
         }
         {
             const std::lock_guard lock{mutex};
@@ -318,17 +244,18 @@ namespace genesia::runtime {
         }
         if (visuals.notify) visuals.notify();
     }
-    void Session::execute(const Task& task) {
-        if (task.interrupted->load()) throw Stopped{};
-        const auto progress    = [&](const Progress& value) { emit(task, State::running, value); };
-        const auto cooperative = [this] { yield(); };
+    void Session::execute(const Request& request) {
+        const auto progress = [&](const Progress& value) { emit(State::running, value); };
         std::visit(
             [&]<typename T>(const T& operation) {
                 if constexpr (std::same_as<T, Generate>) {
+                    update_catalog(catalog.load(std::string{"raw"}));
                     std::shared_ptr<generation::Engine> engine;
+                    std::uint64_t id;
                     {
                         const std::lock_guard lock{mutex};
                         engine = generation;
+                        id     = active->id;
                     }
                     if (!engine) {
                         engine = std::make_shared<generation::Engine>(
@@ -336,73 +263,109 @@ namespace genesia::runtime {
                             [this](PreviewFrame frame) {
                                 {
                                     const std::lock_guard lock{mutex};
-                                    previews.push_back(std::move(frame));
+                                    delivery.previews.push_back(std::move(frame));
                                 }
                                 if (visuals.notify) visuals.notify();
                             });
                         const std::lock_guard lock{mutex};
                         engine->configure(preview_enabled, preview_visible);
                         generation = engine;
-                        if (!immediate.empty()) engine->request_yield();
                     }
-                    if (!engine->generate(task.id, operation, *task.interrupted, cooperative)) emit(task, State::stopped);
-                } else if constexpr (std::same_as<T, Train>) {
-                    release_generation();
-                    predictions.reset();
-                    predictions       = std::make_unique<classification::Predictions>();
-                    const auto result = training::train(operation.options, *task.interrupted, progress, cooperative);
-                    emit(task, result.phase == training::Phase::stopped ? State::stopped : State::complete, {}, {result});
+                    std::random_device random;
+                    Generated result;
+                    for (int i = 0; i < operation.count; ++i) {
+                        if (interrupted) throw Stopped{};
+                        auto image = operation;
+                        image.seed = operation.random_seed ? std::uniform_int_distribution<std::uint64_t>{}(random) : operation.seed + i;
+                        emit(State::running, {BatchProgress{Stage::generating, std::size_t(i), std::size_t(operation.count)}});
+                        const auto saved = engine->generate(catalog.index, id, image, interrupted);
+                        if (!saved) throw Stopped{};
+                        update_catalog(catalog.root("raw"));
+                        result = {saved->file.path, saved->record.seed};
+                        std::vector<std::string> selected;
+                        {
+                            const std::lock_guard lock{mutex};
+                            selected = activated;
+                        }
+                        for (const auto& key : selected) {
+                            if (interrupted) break;
+                            receive({EventKind::task, 0, {}, {}, infer({.concept_key = key, .file = saved->file}, saved->pixels)});
+                        }
+                    }
+                    emit(interrupted ? State::stopped : State::complete, {}, {result});
                 } else if constexpr (std::same_as<T, Infer>) {
-                    const auto descriptor = operation.descriptor ? *operation.descriptor : models::resolve(operation.concept_key);
-                    dataset::Index index;
-                    const auto file = operation.file ? *operation.file : index.identify(operation.input);
-                    {
-                        const std::lock_guard lock{mutex};
-                        jobs.at(task.id).model_sha = descriptor.sha;
-                        jobs.at(task.id).image_sha = file.sha;
+                    auto result = infer(operation);
+                    emit(result.state, {}, std::move(result.result), std::move(result.error));
+                } else if constexpr (std::same_as<T, Classify>) {
+                    const auto input   = std::filesystem::absolute(operation.input).lexically_normal();
+                    const auto text    = files::utf8(input);
+                    const auto journal = project::state_directory / "operations" / (sha256({reinterpret_cast<const unsigned char*>(text.data()), text.size()}) + ".json");
+                    moved(dataset::recover_moves(journal));
+                    const auto relative = input.lexically_relative(project::directory);
+                    if (!relative.empty() && *relative.begin() != "..") update_catalog(catalog.load(files::utf8(*relative.begin())));
+                    if (!predictions) predictions = std::make_unique<classification::Predictions>();
+                    const auto result = classification::classify(catalog.index, operation.concept_key, input, journal, *predictions, interrupted, progress);
+                    moved(result.movement);
+                    emit(State::complete, {}, {result});
+                } else {
+                    const auto key = [&] {
+                        if constexpr (std::same_as<T, Train>) return operation.options.concept_key;
+                        else return operation.concept_key;
+                    }();
+                    update_catalog(catalog.load(files::utf8(*files::path(key).begin())));
+                    if constexpr (std::same_as<T, Assign>) {
+                        const auto result = dataset::assign_type(key, operation.type);
+                        update_catalog(catalog.describe(key));
+                        emit(State::complete, {}, {result});
+                    } else {
+                        const auto source = catalog.inspect(key);
+                        if constexpr (std::same_as<T, Train>) {
+                            release_generation();
+                            predictions.reset();
+                            const auto result = training::train(operation.options, source, interrupted, progress);
+                            update_catalog(catalog.describe(key));
+                            {
+                                const std::lock_guard lock{mutex};
+                                wanted.clear();
+                                observed.clear();
+                            }
+                            emit(result.phase == training::Phase::stopped ? State::stopped : State::complete, {}, {result});
+                        } else if constexpr (std::same_as<T, Audit>) {
+                            if (!predictions) predictions = std::make_unique<classification::Predictions>();
+                            emit(State::complete, {}, {classification::audit(source, *predictions, operation.refresh, interrupted, progress)});
+                        } else {
+                            const auto result = [&] {
+                                if constexpr (std::same_as<T, Fix>) return classification::fix(source, operation.sha, operation.category);
+                                else return classification::undo(source);
+                            }();
+                            moved(result);
+                            emit(State::complete, {}, {result});
+                        }
                     }
-                    std::vector<std::string> selected;
-                    {
-                        const std::lock_guard lock{mutex};
-                        selected = activated;
-                    }
-                    predictions->active = std::move(selected);
-                    auto result         = predictions->infer(descriptor, file, operation.refresh);
-                    if (task.interrupted->load()) throw Stopped{};
-                    emit(task, State::complete, {}, {std::move(result)});
-                } else if constexpr (std::same_as<T, Audit>) emit(task, State::complete, {}, {classification::audit(operation.concept_key, *predictions, operation.refresh, *task.interrupted, progress, cooperative)});
-                else if constexpr (std::same_as<T, Fix>) emit(task, State::complete, {}, {classification::fix(operation.concept_key, operation.sha, operation.category)});
-                else if constexpr (std::same_as<T, Undo>) emit(task, State::complete, {}, {classification::undo(operation.concept_key)});
-                else if constexpr (std::same_as<T, Classify>) emit(task, State::complete, {}, {classification::classify(operation.concept_key, operation.input, *predictions, *task.interrupted, progress, cooperative)});
-                else if constexpr (std::same_as<T, Assign>) emit(task, State::complete, {}, {dataset::assign_type(operation.concept_key, operation.type)});
+                }
             },
-            task.request.operation);
+            request.operation);
     }
-    void Session::yield() {
-        Task task;
-        {
-            const std::lock_guard lock{mutex};
-            if (immediate.empty() || closing) return;
-            task = std::move(immediate.front());
-            immediate.pop_front();
-            suspended = active;
-            active    = task;
-        }
-        emit(task, State::running);
+    TaskStatus Session::infer(Infer request, const std::span<const std::uint8_t> rgb) {
+        TaskStatus result{.kind = Kind::infer, .concept_key = request.concept_key, .state = State::complete, .request = std::make_shared<const Request>(Request{request})};
         try {
-            execute(task);
-        } catch (const Stopped&) {
-            emit(task, State::stopped);
+            if (!predictions) predictions = std::make_unique<classification::Predictions>();
+            if (!request.descriptor) {
+                const auto loaded  = std::ranges::find(predictions->pipeline.models, request.concept_key, [](const classification::LoadedClassifier& model) { return model.descriptor.id; });
+                request.descriptor = loaded == predictions->pipeline.models.end() ? models::resolve(request.concept_key) : loaded->descriptor;
+            }
+            if (!request.file) request.file = catalog.index.identify(request.input);
+            result.model_sha = request.descriptor->sha;
+            result.image_sha = request.file->sha;
+            {
+                const std::lock_guard lock{mutex};
+                predictions->active = activated;
+            }
+            result.result.value = predictions->infer(*request.descriptor, *request.file, request.refresh, rgb);
         } catch (const std::exception& failure) {
-            emit(task, State::failed, {}, {}, failure.what());
+            result.state = State::failed;
+            result.error = failure.what();
         }
-        std::shared_ptr<generation::Engine> engine;
-        {
-            const std::lock_guard lock{mutex};
-            active = std::exchange(suspended, {});
-            if (task.request.transient) jobs.erase(task.id);
-            if (!immediate.empty()) engine = generation;
-        }
-        if (engine) engine->request_yield();
+        return result;
     }
 } // namespace genesia::runtime

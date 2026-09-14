@@ -7,10 +7,10 @@ export namespace genesia::runtime {
             return "Task stopped";
         }
     };
-    enum class State { queued, running, saving, complete, stopped, failed };
-    inline constexpr std::array<std::string_view, 6> states{"queued", "running", "saving", "complete", "stopped", "failed"};
-    enum class Stage { preparing, audit, classifying, moving };
-    inline constexpr std::array<std::string_view, 4> stages{"preparing", "audit", "classifying", "moving"};
+    enum class State { running, saving, complete, stopped, failed };
+    inline constexpr std::array<std::string_view, 5> states{"running", "saving", "complete", "stopped", "failed"};
+    enum class Stage { preparing, audit, classifying, moving, generating };
+    inline constexpr std::array<std::string_view, 5> stages{"preparing", "audit", "classifying", "moving", "generating"};
     struct BatchProgress final {
         Stage stage;
         std::size_t completed{}, total{};

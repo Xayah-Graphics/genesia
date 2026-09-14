@@ -11,75 +11,50 @@ import std;
 import genesia.io.files;
 
 namespace genesia::dataset {
-    void Index::scan(const std::optional<std::string> root) {
-        const files::Lock lock{"index"};
-        const auto cache_path = project::state_directory / "hashes.json";
-        cache.clear();
-        if (std::filesystem::exists(cache_path)) {
-            std::ifstream input{cache_path};
-            input.exceptions(std::ios::badbit | std::ios::failbit);
-            const auto stored = nlohmann::json::parse(input);
-            if (stored.at("version") != 1) throw std::runtime_error{"Unsupported dataset hash cache version"};
-            for (const auto& [entity, entry] : stored.at("files").get_ref<const nlohmann::json::object_t&>()) {
-                Cached value{entry.at("modified"), entry.at("bytes"), entry.at("sha"), entry.at("width"), entry.at("height")};
-                if (value.sha.size() != 64 || !std::ranges::all_of(value.sha, [](const char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); })) throw std::runtime_error{"Malformed dataset SHA cache entry: " + entity};
-                cache.emplace(entity, std::move(value));
-            }
-        }
-        std::filesystem::create_directories(project::raw);
-        roots.clear();
-        std::vector<std::filesystem::path> folders;
-        if (root) folders.push_back(project::directory / files::path(*root));
-        else
-            for (const auto& entry : std::filesystem::directory_iterator{project::directory})
-                if (entry.is_directory() && !files::utf8(entry.path().filename()).starts_with('.')) folders.push_back(entry.path());
-        std::ranges::sort(folders, [](const auto& a, const auto& b) { return a.filename() == "raw" ? b.filename() != "raw" : b.filename() == "raw" ? false : a.filename() < b.filename(); });
-        for (const auto& folder : folders) {
-            auto& found   = roots.emplace_back();
-            found.all.key = found.all.name = files::utf8(folder.filename());
-            try {
-                for (const auto& entry : std::filesystem::directory_iterator{folder})
-                    if (entry.is_directory() && !files::utf8(entry.path().filename()).starts_with('.')) found.concepts.push_back({files::utf8(entry.path().lexically_relative(project::directory)), files::utf8(entry.path().filename())});
-                std::ranges::sort(found.concepts, {}, &Collection::name);
-                for (auto iterator = std::filesystem::recursive_directory_iterator{folder}; iterator != std::filesystem::recursive_directory_iterator{}; ++iterator) {
-                    const auto& entry = *iterator;
-                    if (entry.is_directory()) {
-                        if (files::utf8(entry.path().filename()).starts_with('.')) iterator.disable_recursion_pending();
-                        continue;
-                    }
-                    auto extension = entry.path().extension().string();
-                    std::ranges::transform(extension, extension.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                    if (entry.is_regular_file() && extension == ".png") found.files.push_back(identify(entry.path()));
-                }
-                std::ranges::sort(found.files, [](const File& a, const File& b) { return std::tie(a.modified, a.path) < std::tie(b.modified, b.path); });
-                std::map<std::string, std::vector<const File*>> resources;
-                std::map<std::string, std::set<std::string>> members;
-                for (const auto& file : found.files) {
-                    auto& paths = resources[file.sha];
-                    if (paths.empty()) found.all.images.push_back(file);
-                    paths.push_back(&file);
-                    const auto relative = file.path.lexically_relative(folder);
-                    if (std::distance(relative.begin(), relative.end()) < 2) continue;
-                    const auto concept_name = files::utf8(*relative.begin());
-                    auto& collection        = *std::ranges::find(found.concepts, concept_name, &Collection::name);
-                    if (members[concept_name].insert(file.sha).second) collection.images.push_back(file);
-                }
-                for (const auto& [sha, paths] : resources) {
-                    if (std::ranges::all_of(paths, [&](const File* file) { return file->entity == paths.front()->entity; })) continue;
-                    auto& conflict = found.conflicts.emplace_back();
-                    for (const auto* file : paths) conflict.push_back(file->path);
-                }
-                found.ready = found.conflicts.empty();
-            } catch (const std::exception& error) {
-                found.error = std::format("{}: {}", files::utf8(folder), error.what());
-            }
-        }
+    void Index::flush() {
+        if (!dirty) return;
         nlohmann::json files = nlohmann::json::object();
         for (const auto& [entity, entry] : cache) files[entity] = {{"modified", entry.modified}, {"bytes", entry.bytes}, {"sha", entry.sha}, {"width", entry.width}, {"height", entry.height}};
-        files::write_json(cache_path, {{"version", 1}, {"files", std::move(files)}});
+        files::write_json(project::state_directory / "hashes.json", {{"version", 1}, {"files", std::move(files)}});
+        dirty = false;
     }
-
-    File Index::identify(const std::filesystem::path& path) {
+    void Index::scan(const std::string_view name) {
+        load_cache();
+        const auto folder = project::directory / files::path(name);
+        if (std::ranges::any_of(roots, [&](const Root& root) { return root.all.key == name; })) return;
+        auto& found   = roots.emplace_back();
+        found.all.key = found.all.name = files::utf8(folder.filename());
+        try {
+            for (const auto& entry : std::filesystem::directory_iterator{folder})
+                if (entry.is_directory() && !files::utf8(entry.path().filename()).starts_with('.')) found.concepts.push_back({files::utf8(entry.path().lexically_relative(project::directory)), files::utf8(entry.path().filename())});
+            std::ranges::sort(found.concepts, {}, &Collection::name);
+            for (auto iterator = std::filesystem::recursive_directory_iterator{folder}; iterator != std::filesystem::recursive_directory_iterator{}; ++iterator) {
+                const auto& entry = *iterator;
+                if (entry.is_directory()) {
+                    if (files::utf8(entry.path().filename()).starts_with('.')) iterator.disable_recursion_pending();
+                    continue;
+                }
+                auto extension = entry.path().extension().string();
+                std::ranges::transform(extension, extension.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                if (entry.is_regular_file() && extension == ".png") found.files.push_back(identify(entry.path()));
+            }
+            rebuild(found);
+            if (folder == project::raw)
+                for (const auto& file : found.files) {
+                    if (file.path.parent_path() != project::raw) continue;
+                    const auto filename = files::utf8(file.path.filename());
+                    if (!filename.starts_with("genesia_") || !filename.ends_with(".png")) continue;
+                    const std::string_view digits{filename.data() + 8, filename.size() - 12};
+                    std::uint64_t number{};
+                    const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), number);
+                    if (parsed.ec == std::errc{} && parsed.ptr == digits.data() + digits.size()) next_output = std::max(next_output, number + 1);
+                }
+        } catch (const std::exception& error) {
+            found.error = std::format("{}: {}", files::utf8(folder), error.what());
+        }
+    }
+    File Index::identify(const std::filesystem::path& path, const Record* record) {
+        load_cache();
         File result;
         result.path = path;
 #if defined(_WIN32)
@@ -103,13 +78,84 @@ namespace genesia::dataset {
 #endif
         auto entry = cache.find(result.entity);
         if (entry == cache.end() || entry->second.modified != result.modified || entry->second.bytes != result.bytes) {
+            dirty          = true;
             auto sha       = files::digest(path);
-            const auto png = read_record(path);
+            const auto png = record ? *record : read_record(path);
             entry          = cache.insert_or_assign(result.entity, Cached{result.modified, result.bytes, std::move(sha), png.parameters.width, png.parameters.height}).first;
         }
         result.sha    = entry->second.sha;
         result.width  = entry->second.width;
         result.height = entry->second.height;
         return result;
+    }
+    void Index::insert(File file) {
+        auto& raw         = *std::ranges::find(roots, std::string_view{"raw"}, [](const Root& root) { return root.all.key; });
+        const auto before = [](const File& a, const File& b) { return std::tie(a.modified, a.path) < std::tie(b.modified, b.path); };
+        if (!std::ranges::contains(raw.all.images, file.sha, &File::sha)) raw.all.images.insert(std::ranges::lower_bound(raw.all.images, file, before), file);
+        raw.files.insert(std::ranges::lower_bound(raw.files, file, before), std::move(file));
+    }
+    std::vector<std::string> Index::apply(const std::span<const Move> moves) {
+        std::vector<std::string> changed;
+        for (auto& root : roots) {
+            bool moved{};
+            for (const auto& move : moves) {
+                const auto found = std::ranges::find(root.files, move.source, &File::path);
+                if (found == root.files.end()) continue;
+                found->path = move.destination;
+                moved       = true;
+            }
+            if (!moved) continue;
+            rebuild(root);
+            changed.push_back(root.all.key);
+        }
+        return changed;
+    }
+    void Index::rebuild(Root& root) {
+        root.all.images.clear();
+        root.conflicts.clear();
+        for (auto& collection : root.concepts) collection.images.clear();
+        const auto folder = project::directory / files::path(root.all.key);
+        for (const auto& file : root.files) {
+            const auto relative = file.path.lexically_relative(folder);
+            if (std::distance(relative.begin(), relative.end()) < 2) continue;
+            const auto name = files::utf8(*relative.begin());
+            if (!std::ranges::contains(root.concepts, name, &Collection::name)) root.concepts.push_back({root.all.key + "/" + name, name});
+        }
+        std::ranges::sort(root.concepts, {}, &Collection::name);
+        std::ranges::sort(root.files, [](const File& a, const File& b) { return std::tie(a.modified, a.path) < std::tie(b.modified, b.path); });
+        std::map<std::string, std::vector<const File*>> resources;
+        std::map<std::string, std::set<std::string>> members;
+        for (const auto& file : root.files) {
+            auto& paths = resources[file.sha];
+            if (paths.empty()) root.all.images.push_back(file);
+            paths.push_back(&file);
+            const auto relative = file.path.lexically_relative((project::directory / files::path(root.all.key)));
+            if (std::distance(relative.begin(), relative.end()) < 2) continue;
+            const auto concept_name = files::utf8(*relative.begin());
+            auto& collection        = *std::ranges::find(root.concepts, concept_name, &Collection::name);
+            if (members[concept_name].insert(file.sha).second) collection.images.push_back(file);
+        }
+        for (const auto& [sha, paths] : resources) {
+            if (std::ranges::all_of(paths, [&](const File* file) { return file->entity == paths.front()->entity; })) continue;
+            auto& conflict = root.conflicts.emplace_back();
+            for (const auto* file : paths) conflict.push_back(file->path);
+        }
+        root.ready = root.conflicts.empty();
+    }
+    void Index::load_cache() {
+        if (loaded) return;
+        const auto cache_path = project::state_directory / "hashes.json";
+        if (std::filesystem::exists(cache_path)) {
+            std::ifstream input{cache_path};
+            input.exceptions(std::ios::badbit | std::ios::failbit);
+            const auto stored = nlohmann::json::parse(input);
+            if (stored.at("version") != 1) throw std::runtime_error{"Unsupported dataset hash cache version"};
+            for (const auto& [entity, entry] : stored.at("files").get_ref<const nlohmann::json::object_t&>()) {
+                Cached value{entry.at("modified"), entry.at("bytes"), entry.at("sha"), entry.at("width"), entry.at("height")};
+                if (value.sha.size() != 64 || !std::ranges::all_of(value.sha, [](const char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); })) throw std::runtime_error{"Malformed dataset SHA cache entry: " + entity};
+                cache.emplace(entity, std::move(value));
+            }
+        }
+        loaded = true;
     }
 } // namespace genesia::dataset
