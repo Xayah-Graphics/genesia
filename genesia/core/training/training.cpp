@@ -6,7 +6,6 @@ import genesia.models.convnext;
 import std;
 import genesia.io.files;
 import genesia.io.hash;
-import genesia.data.transactions;
 namespace genesia::training {
     struct Resume final {
         std::string fingerprint;
@@ -138,9 +137,9 @@ namespace genesia::training {
         if (options.restart && std::filesystem::exists(root)) {
             if (!source.training) throw std::runtime_error{"Cannot reset an unregistered concept state directory"};
             source.model.reset();
-            models::unpublish(options.concept_key);
+            // Restart replaces the classifier without clearing its activation preference.
+            models::unpublish(options.concept_key, true);
             std::filesystem::remove_all(root);
-            std::filesystem::remove(source.root / ".genesia" / "audit-moves.json");
             for (const auto& entry : std::filesystem::directory_iterator(snapshot.parent_path()))
                 if (entry.path() != snapshot) std::filesystem::remove_all(entry.path());
             source.training.reset();

@@ -18,7 +18,9 @@ namespace genesia::editor {
     std::vector<Workspace::ImageResult> image_results(const Workspace& workspace, const Workspace::Picture& image) {
         std::vector<Workspace::ImageResult> results;
         if (!image.file || image.preview) return results;
-        auto models = workspace.activated;
+        std::vector<std::string> models;
+        for (const auto& [key, controls] : workspace.model_settings)
+            if (controls.active && !controls.lora) models.push_back(key);
         std::string annotation;
         if (workspace.page == Workspace::Page::audit && !workspace.audit_report.concept_key.empty()) {
             const auto& rows = workspace.audit_report.rows;
@@ -53,6 +55,7 @@ namespace genesia::editor {
 
     Workspace::ImageAction image_panel(Workspace& workspace, const char* id, const Workspace::Picture& image, const ImVec2 origin, const ImVec2 size, const float scale, const bool interactive, const float brightness) {
         if (!image.width || !image.height) return Workspace::ImageAction::none;
+        if (image.file && !image.preview && origin.x + size.x > workspace.canvas_origin.x && origin.x < workspace.canvas_origin.x + workspace.canvas_size.x) workspace.mask_visible.insert(image.file->sha);
         auto* draw = ImGui::GetWindowDrawList();
         ImGui::SetCursorScreenPos(origin);
         ImGui::InvisibleButton(id, size, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
@@ -103,8 +106,33 @@ namespace genesia::editor {
         }
         const ImVec2 maximum{minimum.x + extent.x, minimum.y + extent.y};
         draw->PushClipRect(origin, {origin.x + size.x, origin.y + size.y}, true);
-        if (image.texture) draw->AddImage(image.texture, minimum, maximum, {0, 0}, {1, 1}, ImGui::GetColorU32(ImVec4{brightness, brightness, brightness, 1}));
-        else {
+        if (image.texture) {
+            auto texture = image.texture;
+            std::string status, failure;
+            if (workspace.show_foreground) {
+                if (!image.file || image.preview) status = "Preview · Original";
+                else {
+                    const auto cached = workspace.textures.entries.find(image.file->sha);
+                    if (cached != workspace.textures.entries.end() && cached->second.mask) {
+                        // Low 32 bits: original texture; high 32: foreground mask, or zero for Original.
+                        texture |= cached->second.mask << 32;
+                    } else {
+                        status = workspace.session_state.active ? "Mask pending · Original" : "Preparing mask · Original";
+                        if (const auto error = workspace.mask_errors.find(image.file->sha); error != workspace.mask_errors.end()) failure = error->second;
+                        else if (cached != workspace.textures.entries.end()) failure = cached->second.mask_error;
+                        if (!failure.empty()) status = "Mask failed · Original";
+                    }
+                }
+            }
+            draw->AddImage(texture, minimum, maximum, {0, 0}, {1, 1}, ImGui::GetColorU32(ImVec4{brightness, brightness, brightness, 1}));
+            if (!status.empty()) {
+                const ImVec2 position{std::max(origin.x, minimum.x) + 12 * scale, std::max(origin.y, minimum.y) + (top_strip_height + 8) * scale};
+                const auto text = ImGui::CalcTextSize(status.c_str());
+                draw->AddRectFilled({position.x - 6 * scale, position.y - 4 * scale}, {position.x + text.x + 6 * scale, position.y + text.y + 4 * scale}, IM_COL32(16, 18, 24, 190), 4 * scale);
+                draw->AddText(position, ImGui::GetColorU32(failure.empty() ? ImGuiCol_TextDisabled : ImGuiCol_PlotHistogram), status.c_str());
+                if (!failure.empty() && hovered && ImGui::IsMouseHoveringRect(position, {position.x + text.x, position.y + text.y})) ImGui::SetTooltip("%s", failure.c_str());
+            }
+        } else {
             const char* label = image.role == Workspace::Role::result ? "Waiting for image" : "Loading image";
             if (image.file) {
                 const auto cached = workspace.textures.entries.find(image.file->sha);
@@ -227,6 +255,7 @@ namespace genesia::editor {
         // Navigate on press so releasing a popup-dismissal click cannot also change the view.
         const bool navigating = ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(origin, {origin.x + available.x, origin.y + available.y}) && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && ImGui::IsMouseClicked(ImGuiMouseButton_Right);
         ImGui::PushClipRect(origin, {origin.x + available.x, origin.y + available.y}, true);
+        workspace.mask_visible.clear();
         std::vector<dataset::File> wanted;
         std::optional<dataset::File> repaint_source;
         const bool dataset_ready = workspace.collection && workspace.root && workspace.root->ready;
@@ -339,7 +368,7 @@ namespace genesia::editor {
             const auto root = *workspace.pending_delete->path.lexically_relative(project::directory).begin();
             std::erase_if(wanted, [&](const dataset::File& file) { return file.sha == workspace.pending_delete->sha && *file.path.lexically_relative(project::directory).begin() == root; });
         }
-        workspace.textures.request(std::move(wanted));
+        workspace.textures.request(std::move(wanted), workspace.show_foreground);
         ImGui::PopClipRect();
         ImGui::End();
         if (navigating) {

@@ -29,8 +29,10 @@ namespace genesia::editor {
         bool previous_busy{};
         for (;;) {
             if (window.take_close_request()) {
-                closing = true;
-                ui.runtime.session.shutdown();
+                if (ui.save_model_settings()) {
+                    closing = true;
+                    ui.runtime.session.shutdown();
+                } else window.redraw = true;
             }
             bool busy{}, done{true}, pending{ui.textures.pending.load()};
             std::uint32_t stage{}, step{};

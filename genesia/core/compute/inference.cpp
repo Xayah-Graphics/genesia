@@ -22,11 +22,11 @@ namespace genesia::compute {
     };
 
     struct InferenceRuntime::AttentionPlan final {
-        std::array<int, 10> key;
+        std::array<int, 11> key;
         cudnn_frontend::graph::Graph graph;
         ::cuda::device_buffer<std::int32_t> query_lengths;
 
-        AttentionPlan(::cuda::stream_ref stream, const std::array<int, 10>& shape);
+        AttentionPlan(::cuda::stream_ref stream, const std::array<int, 11>& shape);
     };
 
     void check(cudnn_frontend::error_t status) {
@@ -67,8 +67,8 @@ namespace genesia::compute {
         check(graph.validate());
     }
 
-    InferenceRuntime::AttentionPlan::AttentionPlan(const ::cuda::stream_ref stream, const std::array<int, 10>& shape) : key{shape}, query_lengths{stream, ::cuda::device_default_memory_pool(stream.device()), shape[9] ? std::size_t(shape[0]) : 0uz, ::cuda::no_init} {
-        const auto [batch, queries, keys, heads, dimension, query_stride, key_stride, scalar, causal, ragged] = shape;
+    InferenceRuntime::AttentionPlan::AttentionPlan(const ::cuda::stream_ref stream, const std::array<int, 11>& shape) : key{shape}, query_lengths{stream, ::cuda::device_default_memory_pool(stream.device()), shape[9] ? std::size_t(shape[0]) : 0uz, ::cuda::no_init} {
+        const auto [batch, queries, keys, heads, dimension, query_stride, key_stride, scalar, causal, ragged, biased] = shape;
         if (ragged) {
             const std::vector<std::int32_t> lengths(batch, queries);
             ::cuda::copy_bytes(stream, ::cuda::std::span<const std::int32_t>{lengths.data(), lengths.size()}, query_lengths);
@@ -79,6 +79,7 @@ namespace genesia::compute {
         auto k          = graph.tensor(cudnn_frontend::graph::Tensor_attributes{}.set_name("k").set_uid(2).set_dim({batch, heads, keys, dimension}).set_stride({static_cast<std::int64_t>(keys) * key_stride, dimension, key_stride, 1}));
         auto v          = graph.tensor(cudnn_frontend::graph::Tensor_attributes{}.set_name("v").set_uid(3).set_dim({batch, heads, keys, dimension}).set_stride({static_cast<std::int64_t>(keys) * key_stride, dimension, key_stride, 1}));
         auto attributes = cudnn_frontend::graph::SDPA_attributes{}.set_generate_stats(false).set_attn_scale(1.0F / std::sqrt(static_cast<float>(dimension))).set_causal_mask(causal != 0);
+        if (biased) attributes.set_bias(graph.tensor(cudnn_frontend::graph::Tensor_attributes{}.set_uid(7).set_dim({batch, heads, queries, keys}).set_stride({std::int64_t(heads) * queries * keys, std::int64_t(queries) * keys, keys, 1})));
         if (ragged) {
             auto lengths       = graph.tensor(cudnn_frontend::graph::Tensor_attributes{}.set_uid(5).set_data_type(cudnn_frontend::DataType_t::INT32).set_dim({batch, 1, 1, 1}).set_stride({1, 1, 1, 1}));
             auto query_lengths = graph.tensor(cudnn_frontend::graph::Tensor_attributes{}.set_uid(6).set_data_type(cudnn_frontend::DataType_t::INT32).set_dim({batch, 1, 1, 1}).set_stride({1, 1, 1, 1}));
@@ -176,7 +177,7 @@ namespace genesia::compute {
         kernels::group_norm(stream, output.data, input.data, layer.weight.data, layer.bias.data, statistics, input.n, input.h * input.w, input.c, layer.epsilon, static_cast<int>(input.scalar), silu, prepared, time.data, step);
     }
 
-    void InferenceRuntime::attention(const TensorView output, const TensorView query, const TensorView key, const TensorView value, const int heads, const int query_stride, const int key_stride, const bool causal, const std::int32_t* positions, const std::int32_t* lengths) {
+    void InferenceRuntime::attention(const TensorView output, const TensorView query, const TensorView key, const TensorView value, const int heads, const int query_stride, const int key_stride, const bool causal, const std::int32_t* positions, const std::int32_t* lengths, const TensorView bias) {
         const int dimension = output.c / heads;
         const int queries   = query.h * query.w;
         const int keys      = key.h * key.w;
@@ -204,10 +205,11 @@ namespace genesia::compute {
             }
             return;
         }
-        const std::array<int, 10> shape{query.n, queries, keys, heads, dimension, query_stride, key_stride, int(query.scalar), causal, lengths != nullptr};
+        const std::array<int, 11> shape{query.n, queries, keys, heads, dimension, query_stride, key_stride, int(query.scalar), causal, lengths != nullptr, bias.data != nullptr};
         auto plan = std::ranges::find_if(attentions, [&](const AttentionPlan& item) { return item.key == shape; });
         std::unordered_map<std::int64_t, void*> tensors{{1, query.data}, {2, key.data}, {3, value.data}, {4, output.data}};
         if (lengths) tensors.emplace(5, const_cast<std::int32_t*>(lengths));
+        if (bias.data) tensors.emplace(7, bias.data);
         if (plan == attentions.end()) {
             plan = attentions.emplace(attentions.end(), stream, shape);
             if (lengths) tensors.emplace(6, plan->query_lengths.data());

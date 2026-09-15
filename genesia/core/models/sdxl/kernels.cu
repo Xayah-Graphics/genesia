@@ -148,11 +148,15 @@ namespace genesia::sdxl::kernels {
         if (schedule[index + 1].sigma != 0.0F) input[i] = input[i + count] = __half(value * schedule[index + 1].inverse);
     }
 
-    __global__ void advance_kernel(int* step, const int count, const cudaGraphConditionalHandle loop, const cudaGraphConditionalHandle decode, Control* control) {
+    __global__ void enter_phase_kernel(const cudaGraphConditionalHandle loop, Control* control) {
+        cudaGraphSetConditional(loop, ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control->cancel}.load(::cuda::memory_order_acquire) == 0);
+    }
+
+    __global__ void advance_kernel(int* step, const int end, const int count, const cudaGraphConditionalHandle loop, const cudaGraphConditionalHandle decode, Control* control) {
         const int completed = ++*step;
         ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control->completed}.store(completed, ::cuda::memory_order_release);
         const bool stopped = ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control->cancel}.load(::cuda::memory_order_acquire) != 0;
-        cudaGraphSetConditional(loop, !stopped && completed < count);
+        cudaGraphSetConditional(loop, !stopped && completed < end);
         cudaGraphSetConditional(decode, !stopped && completed == count);
         if (stopped || completed == count) ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control->stage}.store(static_cast<std::uint32_t>(stopped ? Stage::cancelled : Stage::decoding), ::cuda::memory_order_release);
     }
@@ -230,8 +234,11 @@ namespace genesia::sdxl::kernels {
         if (snapshots) ::cuda::launch(stream, config, euler_kernel<true>, state, static_cast<__half*>(input), static_cast<const __half*>(epsilon), schedule, step, cfg, count, snapshots, selected);
         else ::cuda::launch(stream, config, euler_kernel<false>, state, static_cast<__half*>(input), static_cast<const __half*>(epsilon), schedule, step, cfg, count, snapshots, selected);
     }
-    void advance(const ::cuda::stream_ref stream, int* step, const int count, const cudaGraphConditionalHandle loop, const cudaGraphConditionalHandle decode, Control* control) {
-        ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims(1), ::cuda::block_dims(1))), advance_kernel, step, count, loop, decode, control);
+    void enter_phase(const ::cuda::stream_ref stream, const cudaGraphConditionalHandle loop, Control* control) {
+        ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims(1), ::cuda::block_dims(1))), enter_phase_kernel, loop, control);
+    }
+    void advance(const ::cuda::stream_ref stream, int* step, const int end, const int count, const cudaGraphConditionalHandle loop, const cudaGraphConditionalHandle decode, Control* control) {
+        ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims(1), ::cuda::block_dims(1))), advance_kernel, step, end, count, loop, decode, control);
     }
     void image_encode(const ::cuda::stream_ref stream, void* output, const std::uint8_t* pixels, const int count) {
         ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims((count + 255) / 256), ::cuda::block_dims(256))), image_encode_kernel, static_cast<__nv_bfloat16*>(output), pixels, count);

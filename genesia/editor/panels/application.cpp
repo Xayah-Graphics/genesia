@@ -21,7 +21,7 @@ namespace genesia::editor {
         layout.different             = workspace.page == Workspace::Page::generation && image.texture && (image.width != workspace.draft.width || image.height != workspace.draft.height);
         const float dimensions_width = workspace.page == Workspace::Page::generation ? 112 * scale + (layout.different ? ImGui::CalcTextSize("Next").x + 12 * scale : 0) : image.texture ? ImGui::CalcTextSize(std::format("{} \xC3\x97 {}", image.width, image.height).c_str()).x : 0;
         if (layout.different) layout.image_label_width = ImGui::CalcTextSize(std::format("{} {} \xC3\x97 {} \xE2\x86\x92", image.preview ? "Preview" : "Image", image.width, image.height).c_str()).x + 12 * scale;
-        layout.right_width    = layout.image_label_width + dimensions_width + (image.texture ? 116 * scale : 0);
+        layout.right_width    = layout.image_label_width + dimensions_width + (image.texture ? 244 * scale : 0);
         const float available = size.x - workspace.dataset_sidebar.width * workspace.dataset_sidebar.amount - 2 * bottom_margin * scale;
         layout.image_above    = layout.right_width > available;
         if (layout.image_above) layout.right_width -= layout.image_label_width;
@@ -122,11 +122,14 @@ namespace genesia::editor {
         if (working) {
             workspace.progress_alpha = 1;
             if (stopping) workspace.progress_label = "Stopping";
-            else if (!loaded) workspace.progress_label = "Loading model";
+            else if (active_kind != runtime::Kind::generate) {
+                static constexpr std::array labels{"Generate", "Training", "Inference", "Audit", "Moving image", "Classifying folder", "Assigning type", "Deleting image", "Normalizing dataset", "Saving caption", "Exporting dataset", "Updating LoRA", "Recognizing foreground"};
+                static_assert(labels.size() == runtime::kinds.size());
+                workspace.progress_label = labels[std::size_t(active_kind)];
+            } else if (!loaded) workspace.progress_label = "Loading model";
             else if (stage == runtime::GenerationStage::sampling) workspace.progress_label = std::format("{} / {}", completed, steps);
             else if (stage == runtime::GenerationStage::decoding || stage == runtime::GenerationStage::transferring || stage == runtime::GenerationStage::complete) workspace.progress_label = "Finishing image";
             else workspace.progress_label = "Preparing";
-            if (!stopping && active_kind != runtime::Kind::generate) workspace.progress_label = std::array{"Generate", "Training", "Inference", "Audit", "Moving image", "Undo", "Classifying folder", "Assigning type", "Deleting image", "Normalizing dataset", "Saving caption", "Exporting dataset"}[static_cast<int>(active_kind)];
             workspace.progress_time = active ? std::format("{:.1f}s", elapsed) : "";
         } else {
             workspace.progress_alpha = failed ? 0 : std::max(0.0F, workspace.progress_alpha - ImGui::GetIO().DeltaTime / 0.15F);
@@ -321,6 +324,15 @@ namespace genesia::editor {
             draw->AddText({dimensions_x, y + (control_height * scale - ImGui::GetFontSize()) / 2}, ImGui::GetColorU32(ImGuiCol_TextDisabled), label.c_str());
         }
         if (image.texture) {
+            ImGui::SetCursorScreenPos({right - 232 * scale, y});
+            text_button("##Foreground", workspace.show_foreground ? "Foreground" : "Original", scale, 128 * scale);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Middle-click: toggle Original / Foreground\nF1: Original\nF2: Foreground");
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+                    workspace.show_foreground = !workspace.show_foreground;
+                    workspace.animate_until   = std::max(workspace.animate_until, workspace.frame_time + 0.12);
+                }
+            }
             ImGui::SetCursorScreenPos({right - 104 * scale, y});
             const ImVec2 dimensions{float(image.width), float(image.height)};
             const float fitted = std::min(workspace.view_available.x / dimensions.x, workspace.view_available.y / dimensions.y);

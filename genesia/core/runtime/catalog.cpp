@@ -1,5 +1,4 @@
 module genesia.runtime.catalog;
-import genesia.data.transactions;
 import std;
 namespace genesia::runtime {
     CatalogState Catalog::load(const std::optional<std::string> selected) {
@@ -12,9 +11,6 @@ namespace genesia::runtime {
         CatalogState result;
         for (const auto& name : names) {
             if (std::ranges::any_of(index.roots, [&](const dataset::Root& root) { return root.all.key == name; })) continue;
-            dataset::recover_normalization(project::directory / files::path(name));
-            for (const auto& entry : std::filesystem::directory_iterator{project::directory / files::path(name)})
-                if (entry.is_directory() && !files::utf8(entry.path().filename()).starts_with('.')) dataset::recover_moves(entry.path() / ".genesia" / "audit-moves.json");
             index.scan(name);
             auto loaded = root(name);
             result.roots.push_back(std::move(loaded.roots.front()));
@@ -35,7 +31,7 @@ namespace genesia::runtime {
             const auto assigned   = dataset::read_concept(key);
             result.concepts[name] = assigned;
             if (assigned.type == dataset::ConceptType::lora) {
-                result.loras[name] = models::find(key);
+                result.loras[name]    = models::find(key);
                 const auto& root      = *std::ranges::find(index.roots, files::utf8(*files::path(key).begin()), [](const dataset::Root& value) { return value.all.key; });
                 result.captions[name] = caption::inspect(assigned, root);
             }

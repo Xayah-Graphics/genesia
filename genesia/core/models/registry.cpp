@@ -79,9 +79,15 @@ namespace genesia::models {
         if (previous && previous->path != published) std::filesystem::remove(previous->path);
         return resolve(concept_key, dataset::ConceptType::lora);
     }
-    void unpublish(const std::string_view concept_key) {
-        const auto previous = find(concept_key);
-        const auto source   = dataset::read_concept(concept_key);
+    void unpublish(const std::string_view concept_key, const bool replacing) {
+        const auto previous    = find(concept_key);
+        const auto source      = dataset::read_concept(concept_key);
+        const auto preferences = source.path / ".genesia" / "editor.json";
+        if (!replacing && std::filesystem::exists(preferences)) {
+            auto value         = files::read_json(preferences);
+            value.at("active") = false;
+            files::write_json(preferences, value);
+        }
         {
             std::filesystem::remove(source.path / ".genesia" / "model.json");
             if (previous) std::filesystem::remove(previous->path);

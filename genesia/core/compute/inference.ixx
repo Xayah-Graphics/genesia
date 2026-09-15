@@ -84,7 +84,7 @@ export namespace genesia::compute {
         void convolution(TensorView output, TensorView input, const Conv& layer, TensorView residual = {});
         void layer_norm(TensorView output, TensorView input, const Norm& layer);
         void group_norm(TensorView output, TensorView input, const Norm& layer, float* statistics, bool silu, bool prepared = false, TensorView time = {}, const int* step = nullptr);
-        void attention(TensorView output, TensorView query, TensorView key, TensorView value, int heads, int query_stride, int key_stride, bool causal = false, const std::int32_t* positions = nullptr, const std::int32_t* lengths = nullptr);
+        void attention(TensorView output, TensorView query, TensorView key, TensorView value, int heads, int query_stride, int key_stride, bool causal = false, const std::int32_t* positions = nullptr, const std::int32_t* lengths = nullptr, TensorView bias = {});
 
     private:
         void* scratch(std::size_t bytes);

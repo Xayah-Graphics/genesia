@@ -100,15 +100,23 @@ export namespace genesia::editor {
         std::map<std::string, std::unique_ptr<RepaintDraft>> repaints;
         Output generation;
         std::optional<Repaint> repaint;
-        std::vector<std::string> activated;
-        struct LoraControls final {
-            std::array<char, 2048> path{};
+        struct LoraSettings final {
             float weight{1};
-            bool active{};
+            float start{};
         };
-        std::map<std::string, LoraControls> lora_controls;
+        struct ModelSettings final {
+            bool active{};
+            std::optional<LoraSettings> lora;
+            bool dirty{};
+        };
+        std::map<std::string, ModelSettings> model_settings;
+        std::map<std::string, std::array<char, 2048>> lora_paths;
+        std::string editing_model;
         std::map<std::string, std::string> prediction_errors;
         std::vector<dataset::File> visible_images;
+        bool show_foreground{};
+        std::map<std::string, std::string> mask_errors;
+        std::set<std::string> mask_visible;
         std::string audit_key, audit_category;
         ConceptTool concept_tool{ConceptTool::none};
         bool choosing_type{};
@@ -159,6 +167,7 @@ export namespace genesia::editor {
         Workspace(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, WindowPlatform& platform, Renderer& renderer, std::string dataset);
         ~Workspace();
         void receive();
+        bool save_model_settings(std::string_view key = {});
         void synchronize_collection();
         void select_collection(std::string key, std::string sha = {});
         void select_tool(ConceptTool tool);

@@ -203,9 +203,13 @@ namespace genesia::compute::kernels {
     void launch_norm(const ::cuda::stream_ref stream, T* output, const T* input, T* residual, const T* weight, const T* bias, const int rows, const int width, const float epsilon) {
         const auto launch = [&]<int Width>() { ::cuda::launch(stream, ::cuda::make_config(::cuda::make_hierarchy(::cuda::grid_dims(rows), ::cuda::block_dims(256))), layer_norm_kernel<T, Width, Residual>, output, input, residual, weight, bias, epsilon); };
         switch (width) {
+        case 192: launch.template operator()<192>(); break;
+        case 384: launch.template operator()<384>(); break;
         case 640: launch.template operator()<640>(); break;
         case 768: launch.template operator()<768>(); break;
         case 1280: launch.template operator()<1280>(); break;
+        case 1536: launch.template operator()<1536>(); break;
+        case 3072: launch.template operator()<3072>(); break;
         }
     }
 

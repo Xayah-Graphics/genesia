@@ -15,6 +15,8 @@ struct ImGuiPushData {
     uint vertex_offset;
     float2 scale;
     float2 translation;
+    DescriptorHandle<Texture2D<float>> mask;
+    uint foreground;
 }
 
 [vk::push_constant]
@@ -47,5 +49,13 @@ float4 imgui_fragment(ImGuiVertexOutput input) : SV_Target0 {
     Texture2D<float4> texture = push_data.texture;
     SamplerState sampler = push_data.sampler;
     float3 linear_color = select(input.color.rgb <= 0.04045f, input.color.rgb / 12.92f, pow((input.color.rgb + 0.055f) / 1.055f, 2.4f));
-    return float4(linear_color, input.color.a) * texture.SampleLevel(sampler, input.texture_coordinate, 0.0f);
+    float4 pixel = texture.SampleLevel(sampler, input.texture_coordinate, 0.0f);
+    if (push_data.foreground != 0) {
+        Texture2D<float> mask = push_data.mask;
+        float alpha = mask.SampleLevel(sampler, input.texture_coordinate, 0.0f);
+        uint2 tile = uint2(input.position.xy / 12.0f);
+        float checker = ((tile.x + tile.y) & 1) != 0 ? 0.055f : 0.035f;
+        pixel = float4(lerp(checker.xxx, pixel.rgb, alpha), 1.0f);
+    }
+    return float4(linear_color, input.color.a) * pixel;
 }

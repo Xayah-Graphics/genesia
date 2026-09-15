@@ -14,19 +14,14 @@ namespace genesia::headless {
             std::signal(signal, interrupt);
         }
         nlohmann::json event_json(const runtime::TaskStatus& task) {
-            nlohmann::json json{{"id", task.id}, {"kind", runtime::kinds[std::size_t(task.kind)]}, {"concept", task.concept_key}, {"state", runtime::states[std::size_t(task.state)]}};
+            nlohmann::json json{{"id", task.id}, {"kind", runtime::kinds[std::size_t(task.kind)]}, {"state", runtime::states[std::size_t(task.state)]}};
+            if (!task.concept_key.empty()) json["concept"] = task.concept_key;
             if (!task.error.empty()) json["error"] = task.error;
             if (!task.image_sha.empty()) json["image_sha"] = task.image_sha;
             if (!task.model_sha.empty()) json["model_sha"] = task.model_sha;
             std::visit(
                 [&]<typename T>(const T& value) {
-                    if constexpr (std::same_as<T, runtime::Generate>) {
-                        json["source"] = value.source ? files::utf8(value.source->path.lexically_relative(project::directory)) : "";
-                        json["seed"]   = value.seed;
-                        json["width"]  = value.parameters.width;
-                        json["height"] = value.parameters.height;
-                        json["loras"]  = value.parameters.loras;
-                    } else if constexpr (std::same_as<T, runtime::Train>) json["target"] = value.options.steps;
+                    if constexpr (std::same_as<T, runtime::Train>) json["target"] = value.options.steps;
                     else if constexpr (std::same_as<T, runtime::Classify>) json["input"] = files::utf8(value.input);
                     else if constexpr (std::same_as<T, runtime::Fix>) json["category"] = value.category;
                     else if constexpr (std::same_as<T, runtime::Caption>) json["folder"] = value.folder;
@@ -48,8 +43,7 @@ namespace genesia::headless {
                 task.progress.value);
             std::visit(
                 [&]<typename T>(const T& value) {
-                    if constexpr (std::same_as<T, runtime::Generated>) json["result"] = {{"path", files::utf8(value.path)}, {"seed", value.seed}};
-                    else if constexpr (std::same_as<T, classification::Audit>) {
+                    if constexpr (std::same_as<T, classification::Audit>) {
                         auto& report = json["result"];
                         report       = {{"concept", value.concept_key}, {"model_sha", value.model_sha}, {"fingerprint", value.fingerprint}, {"classes", value.classes}, {"total", value.total}, {"complete", value.complete}, {"rows", nlohmann::json::array()}};
                         for (const auto& row : value.rows) {
@@ -57,18 +51,18 @@ namespace genesia::headless {
                             for (const auto& path : row.sample.paths) paths.push_back(files::utf8(path));
                             report["rows"].push_back({{"sha", row.sample.file.sha}, {"path", files::utf8(row.sample.file.path)}, {"paths", paths}, {"label", row.label}, {"predicted", row.prediction.label}, {"confidence", row.confidence}, {"classes", row.prediction.classes}, {"scores", row.prediction.scores}});
                         }
-                    } else if constexpr (std::same_as<T, dataset::MoveResult>) json["result"] = {{"moved", value.moved}, {"restored", value.restored}};
-                    else if constexpr (std::same_as<T, classification::Classification>) json["result"] = {{"input", files::utf8(value.input)}, {"moved", value.movement.moved}, {"classes", value.classes}};
+                    } else if constexpr (std::same_as<T, dataset::MoveResult>) json["result"] = {{"moved", value.paths.size()}};
+                    else if constexpr (std::same_as<T, classification::Classification>) json["result"] = {{"input", files::utf8(value.input)}, {"moved", value.movement.paths.size()}, {"classes", value.classes}};
                     else if constexpr (std::same_as<T, dataset::DeleteResult>) {
                         std::vector<std::string> paths;
                         for (const auto& path : value.paths) paths.push_back(files::utf8(path));
                         json["result"] = {{"dataset", value.root}, {"sha", value.sha}, {"deleted", paths.size()}, {"paths", paths}};
                     } else if constexpr (std::same_as<T, dataset::NormalizeResult>) json["result"] = {{"dataset", value.root}, {"files", value.files}, {"linked", value.linked}, {"renamed", value.renamed.size()}};
+                    else if constexpr (std::same_as<T, foreground::Result>) json["result"] = {{"path", files::utf8(value.path)}, {"image_sha", value.image.sha}, {"model_sha", value.model_sha}, {"width", value.image.width}, {"height", value.image.height}, {"cached", value.cached}};
                     else if constexpr (std::same_as<T, caption::Exported>) json["result"] = {{"path", files::utf8(value.path)}, {"images", value.images}};
                     else if constexpr (std::same_as<T, runtime::LoraModelResult>) {
                         json["result"] = value.model ? nlohmann::json{{"concept", value.model->id}, {"sha", value.model->sha}, {"name", value.model->name}, {"path", files::utf8(value.model->path)}} : nlohmann::json{};
-                    }
-                    else if constexpr (!std::same_as<T, std::monostate>) json["result"] = value;
+                    } else if constexpr (!std::same_as<T, std::monostate>) json["result"] = value;
                 },
                 task.result.value);
             return json;
@@ -80,22 +74,22 @@ namespace genesia::headless {
 genesia --gui [--preset NAME] [--dataset ROOT[/CONCEPT]]
 genesia generate [--preset NAME | --prompt-file FILE] [--count N] [--seed SEED]
                  [--width N] [--height N] [--steps N] [--cfg VALUE] [--activate ROOT/CONCEPT ...]
-                 [--lora ROOT/CONCEPT WEIGHT ...]
+                 [--lora ROOT/CONCEPT WEIGHT ...] [--lora-start ROOT/CONCEPT FRACTION ...]
 genesia repaint --source PNG --denoise VALUE [--preset NAME | --prompt-file FILE]
                 [--count N] [--seed SEED] [--steps N] [--cfg VALUE] [--activate ROOT/CONCEPT ...]
-                [--lora ROOT/CONCEPT WEIGHT ...]
+                [--lora ROOT/CONCEPT WEIGHT ...] [--lora-start ROOT/CONCEPT FRACTION ...]
 genesia concept ROOT/CONCEPT --type none|classifier|lora
 genesia lora ROOT/CONCEPT [--import MODEL.safetensors | --remove]
 genesia train ROOT/CONCEPT --steps N [--config FILE] [--restart]
 genesia infer ROOT/CONCEPT --input PNG
 genesia audit ROOT/CONCEPT [--category NAME] [--refresh]
 genesia audit-fix ROOT/CONCEPT --sha SHA --to CATEGORY
-genesia audit-undo ROOT/CONCEPT
 genesia classify ROOT/CONCEPT --input DIRECTORY
 genesia delete ROOT --sha SHA
 genesia normalize ROOT
-genesia caption ROOT/CONCEPT [--folder RELATIVE_DIRECTORY] [--tags "tag one, tag two"]
+genesia caption ROOT/CONCEPT [--folder RELATIVE_DIRECTORY] [--tags "tag one, tag two"] [--bypass true|false]
 genesia export ROOT/CONCEPT --output NEW_DIRECTORY
+genesia mask --input PNG [--output MASK.png]
 
 Training config: physical_batch, effective_batch, head_only_steps, warmup_steps,
 head_only_lr, backbone_lr, head_lr, weight_decay, clip_norm, seed,
@@ -103,13 +97,19 @@ eval_interval, save_interval, log_interval.
 Assign a concept type before training. LoRA concepts manage captions and export for external training.
 LoRA import copies one standard SDXL UNet KOHYA_LORA model into the concept and permanently locks its type.
 Generate and repaint accept repeated --lora ROOT/CONCEPT WEIGHT options. Trigger words are not added.
+--lora-start sets a selected LoRA's start in the full denoising schedule: 0 = always, 1 = never.
+It defaults to 0. Repaint uses the same schedule, starting at its existing noise level.
 Import replaces the managed model; --remove deletes it without unlocking the type. External files are retained.
 LoRA concepts require exactly one path per image SHA, including hard links.
 Caption reads or replaces a folder's own tags. Effective captions start with the concept folder name
 as the trigger word, followed by tags from the selected folder up to the concept root.
 The default caption folder is the concept itself. --tags "" clears its own tags.
-Export copies PNG images and writes full inherited captions into a new directory outside data.
-Every directory, including the concept root and empty directories, needs its own tags.
+--bypass true excludes the folder and its descendants from export; false clears its own bypass.
+An ancestor's bypass still applies. Browsing and stored tags are unchanged.
+Export copies PNG images, writes full inherited captions and generates foreground -masklabel.png files
+into a new directory outside data. Mask uses BiRefNet-general; white is foreground, black is background.
+Mask without --output returns the shared cache path. An explicit output must be a new file.
+Every non-bypassed directory, including the concept root and empty directories, needs its own tags.
 The type locks permanently when the first training record is created.
 Data or configuration changes require explicit --restart. Images and type are retained.
 Classification moves direct PNG images into DIRECTORY/predicted-class/original-name.
@@ -127,7 +127,8 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
         const bool repaint = command == "repaint", generating = command == "generate" || repaint;
         runtime::Request request;
         std::size_t begin = 1;
-        if (!generating) {
+        if (command == "mask") request.operation = runtime::Mask{};
+        else if (!generating) {
             if (arguments.size() < 2) throw std::runtime_error{command == "delete" || command == "normalize" ? "Specify ROOT" : "Specify ROOT/CONCEPT"};
             const std::string key{arguments[1]};
             begin = 2;
@@ -135,7 +136,6 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
             else if (command == "infer") request.operation = runtime::Infer{.concept_key = key};
             else if (command == "audit") request.operation = runtime::Audit{key};
             else if (command == "audit-fix") request.operation = runtime::Fix{key};
-            else if (command == "audit-undo") request.operation = runtime::Undo{key};
             else if (command == "classify") request.operation = runtime::Classify{key};
             else if (command == "concept") request.operation = runtime::Assign{key};
             else if (command == "delete") request.operation = runtime::Delete{key};
@@ -151,6 +151,7 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
         std::optional<float> cfg, denoise;
         std::vector<std::string> activated;
         std::vector<generation::Lora> loras;
+        std::map<std::string, float> lora_starts;
         std::filesystem::path source, prompt_file, config_file;
         std::string name{defaults::preset}, category;
         bool named_preset{}, steps_set{}, type_set{};
@@ -176,11 +177,13 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
             else if (option == "--steps" && generating) number(steps.emplace());
             else if (option == "--cfg" && generating) number(cfg.emplace());
             else if (option == "--lora" && generating) {
-                auto& lora = loras.emplace_back();
+                auto& lora       = loras.emplace_back();
                 lora.concept_key = argument();
                 number(lora.weight);
-            }
-            else if (option == "--source" && repaint) source = files::path(argument());
+            } else if (option == "--lora-start" && generating) {
+                const std::string key{argument()};
+                number(lora_starts[key]);
+            } else if (option == "--source" && repaint) source = files::path(argument());
             else if (option == "--denoise" && repaint) number(denoise.emplace());
             else if (option == "--activate" && generating) {
                 activated.emplace_back(argument());
@@ -193,6 +196,8 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
                 steps_set = true;
             } else if (option == "--config" && command == "train") config_file = files::path(argument());
             else if (option == "--restart" && command == "train") std::get<runtime::Train>(request.operation).options.restart = true;
+            else if (option == "--input" && command == "mask") std::get<runtime::Mask>(request.operation).input = files::path(argument());
+            else if (option == "--output" && command == "mask") std::get<runtime::Mask>(request.operation).output = files::path(argument());
             else if (option == "--input" && command == "infer") std::get<runtime::Infer>(request.operation).input = files::path(argument());
             else if (option == "--input" && command == "classify") std::get<runtime::Classify>(request.operation).input = files::path(argument());
             else if (option == "--category" && command == "audit") category = argument();
@@ -202,7 +207,11 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
             else if (option == "--to" && command == "audit-fix") std::get<runtime::Fix>(request.operation).category = argument();
             else if (option == "--folder" && command == "caption") std::get<runtime::Caption>(request.operation).folder = files::utf8(files::path(argument()).lexically_normal());
             else if (option == "--tags" && command == "caption") std::get<runtime::Caption>(request.operation).tags = caption::parse(argument());
-            else if (option == "--output" && command == "export") std::get<runtime::Export>(request.operation).output = files::path(argument());
+            else if (option == "--bypass" && command == "caption") {
+                const auto value = argument();
+                if (value != "true" && value != "false") throw std::runtime_error{"--bypass requires true or false"};
+                std::get<runtime::Caption>(request.operation).bypass = value == "true";
+            } else if (option == "--output" && command == "export") std::get<runtime::Export>(request.operation).output = files::path(argument());
             else if (option == "--import" && command == "lora") std::get<runtime::LoraModel>(request.operation).input = files::path(argument());
             else if (option == "--remove" && command == "lora") std::get<runtime::LoraModel>(request.operation).remove = true;
             else throw std::runtime_error{"Unknown option for this command: " + std::string{option}};
@@ -239,6 +248,11 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
             if (height) operation.parameters.height = *height;
             if (steps) operation.parameters.steps = *steps;
             if (cfg) operation.parameters.cfg = *cfg;
+            for (const auto& [key, start] : lora_starts) {
+                const auto selected = std::ranges::find(loras, key, &generation::Lora::concept_key);
+                if (selected == loras.end()) throw std::runtime_error{"--lora-start requires --lora for " + key};
+                selected->start = start;
+            }
             operation.parameters.loras = std::move(loras);
         } else if (command == "train" && !config_file.empty()) {
             auto& options       = std::get<runtime::Train>(request.operation).options;
@@ -259,7 +273,22 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
             operation.random_seed = !first_seed;
             operation.seed        = first_seed.value_or(0);
         }
-        session.submit(std::move(request));
+        const auto submitted = session.submit(std::move(request));
+        if (generating) {
+            const auto& operation  = std::get<runtime::Generate>(submitted.request->operation);
+            const auto& parameters = operation.parameters;
+            nlohmann::json json{{"id", submitted.id}, {"kind", "generate"}, {"state", "running"}, {"total", operation.count}, {"width", parameters.width}, {"height", parameters.height}, {"steps", parameters.steps}, {"cfg", parameters.cfg}, {"random_seed", operation.random_seed}};
+            if (!operation.random_seed) json["seed"] = operation.seed;
+            if (!parameters.loras.empty()) json["loras"] = parameters.loras;
+            if (operation.source) {
+                json["source"]  = files::utf8(operation.source->path.lexically_relative(project::directory));
+                json["denoise"] = parameters.denoise;
+            }
+            std::println("{}", json.dump());
+            std::cout.flush();
+        }
+        std::size_t completed{};
+        runtime::GenerationTiming timing;
         bool failed{}, shutting_down{};
         for (;;) {
             if (interrupted.load() && !shutting_down) {
@@ -269,12 +298,25 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
             auto delivery = session.drain();
             for (auto& event : delivery.events) {
                 if (event.kind == runtime::EventKind::saved) {
-                    std::println("{}", nlohmann::json{{"id", event.id}, {"kind", "generate"}, {"state", "saved"}, {"path", files::utf8(event.record.path)}, {"seed", event.record.seed}, {"image_sha", event.file->sha}}.dump());
+                    ++completed;
+                    timing.sample += event.timing.sample;
+                    timing.decode += event.timing.decode;
+                    timing.save += event.timing.save;
+                    std::println("{}", nlohmann::json{{"id", event.id}, {"kind", "generate"}, {"state", "saved"}, {"completed", completed}, {"total", count}, {"path", files::utf8(event.record.path)}, {"seed", event.record.seed}, {"image_sha", event.file->sha}, {"seconds", {{"sample", event.timing.sample}, {"decode", event.timing.decode}, {"save", event.timing.save}}}}.dump());
                     std::cout.flush();
                 }
                 if (event.kind != runtime::EventKind::task) continue;
                 auto& task = event.task;
                 failed |= task.state == runtime::State::failed;
+                if (task.kind == runtime::Kind::generate) {
+                    if (task.state < runtime::State::complete) continue;
+                    const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - submitted.started).count();
+                    nlohmann::json json{{"id", task.id}, {"kind", "generate"}, {"state", runtime::states[std::size_t(task.state)]}, {"completed", completed}, {"total", count}, {"seconds", {{"elapsed", elapsed}, {"sample", timing.sample}, {"decode", timing.decode}, {"save", timing.save}}}};
+                    if (!task.error.empty()) json["error"] = task.error;
+                    std::println("{}", json.dump());
+                    std::cout.flush();
+                    continue;
+                }
                 if (task.kind == runtime::Kind::audit && task.state == runtime::State::complete && !category.empty()) {
                     auto& report = std::get<classification::Audit>(task.result.value);
                     if (!std::ranges::contains(report.classes, category)) throw std::runtime_error{"Unknown audit category: " + category};

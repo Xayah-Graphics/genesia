@@ -98,7 +98,7 @@ namespace genesia::classification {
             return result;
         }
         const std::lock_guard lock{cache_files};
-        const auto path = project::state_directory / "inference" / descriptor.sha / (std::string{image_sha} + ".json");
+        const auto path = std::filesystem::path{project::cache} / "inference" / descriptor.sha / (std::string{image_sha} + ".json");
         if (!std::filesystem::exists(path)) return {};
         const auto value = files::read_json(path);
         if (value.at("version") != 1) throw std::runtime_error{"Unsupported prediction cache format"};
@@ -109,7 +109,7 @@ namespace genesia::classification {
     }
     void Cache::store(const Result& result) {
         const std::lock_guard lock{cache_files};
-        const auto path = project::state_directory / "inference" / result.model_sha / (result.image_sha + ".json");
+        const auto path = std::filesystem::path{project::cache} / "inference" / result.model_sha / (result.image_sha + ".json");
         files::write_json(path, {{"version", 1}, {"prediction", result}});
         entries[{result.model_sha, result.image_sha}] = result;
     }

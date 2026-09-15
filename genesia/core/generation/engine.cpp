@@ -37,12 +37,6 @@ namespace genesia::generation {
         if (!inference || inference->parameters != request.parameters || source_id != prepared_image) {
             inference.reset();
             ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].stage}.store(static_cast<std::uint32_t>(sdxl::Stage::preparing));
-            try {
-                model->apply_loras(request.parameters.loras);
-            } catch (...) {
-                release();
-                throw;
-            }
             if (request.source) {
                 if (source_id != encoded_image) {
                     const auto pixels = read_image(request.source->path);
@@ -63,7 +57,12 @@ namespace genesia::generation {
                 snapshots     = std::move(next);
                 preview_ready = false;
             }
-            inference = std::make_unique<sdxl::Inference>(*model, request.parameters, control.data()[0], snapshots.get(), request.source ? source_image.get() : nullptr);
+            try {
+                inference = std::make_unique<sdxl::Inference>(*model, request.parameters, control.data()[0], snapshots.get(), request.source ? source_image.get() : nullptr);
+            } catch (...) {
+                release();
+                throw;
+            }
             std::println(std::cerr, "READY prepare={:.3f}s cache={}/{} memory={:.2f}GiB", inference->prepare_seconds, inference->cache_hits, inference->cache_misses, inference->resident_bytes / double(1ull << 30));
             std::cerr.flush();
             if (visuals.prepare) visuals.prepare(false, request.parameters.width, request.parameters.height, stream);
@@ -113,10 +112,11 @@ namespace genesia::generation {
                 const auto ready = visuals.publish ? visuals.publish(false, output.device_pixels, output.width, output.height, output.stream, slot) : nullptr;
                 report({runtime::EventKind::task, id, {}, {}, {.id = id, .state = runtime::State::saving}});
                 if (ready) report({runtime::EventKind::generated, id, record, ready});
-                auto file   = save_image(index, output, record);
-                record.path = file.path;
-                report({.kind = runtime::EventKind::saved, .id = id, .record = record, .file = file});
-                std::println(std::cerr, "GENERATE seed={} sample={:.3f}s decode={:.3f}s", request.seed, output.sample_seconds, output.decode_seconds);
+                const auto save_started = std::chrono::steady_clock::now();
+                auto file               = save_image(index, output, record);
+                const auto save_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - save_started).count();
+                record.path             = file.path;
+                report({.kind = runtime::EventKind::saved, .id = id, .record = record, .file = file, .timing = {output.sample_seconds, output.decode_seconds, save_seconds}});
                 return SavedImage{std::move(record), std::move(file), {output.pixels.data(), output.pixels.size()}};
             }
             return {};

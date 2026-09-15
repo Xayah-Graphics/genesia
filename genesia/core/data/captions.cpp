@@ -6,7 +6,7 @@ import std;
 
 namespace genesia::caption {
     void to_json(nlohmann::json& json, const Result& result) {
-        json = {{"folder", result.folder}, {"tags", result.tags}, {"effective", result.effective}, {"caption", compose(result.effective)}};
+        json = {{"folder", result.folder}, {"tags", result.tags}, {"effective", result.effective}, {"caption", compose(result.effective)}, {"bypass", result.bypass}, {"excluded", result.excluded}};
     }
     std::vector<std::string> parse(const std::string_view text) {
         std::vector<std::string> tags;
@@ -41,6 +41,14 @@ namespace genesia::caption {
         }
         return result;
     }
+    bool excluded(const Document& document, const std::string_view folder) {
+        auto path = files::path(folder);
+        for (;;) {
+            if (document.bypass.contains(files::utf8(path))) return true;
+            if (path == ".") return false;
+            path = path.has_parent_path() ? path.parent_path() : std::filesystem::path{"."};
+        }
+    }
     Dataset inspect(const dataset::Concept& assigned, const dataset::Root& root) {
         Dataset result{.key = assigned.key, .issue = dataset::lora_issue(root, assigned.key)};
         const auto path = assigned.path / ".genesia" / "captions.json";
@@ -48,6 +56,7 @@ namespace genesia::caption {
             const auto json = files::read_json(path);
             if (json.at("version") != 1) throw std::runtime_error{"Unsupported caption format: " + files::utf8(path)};
             json.at("folders").get_to(result.document.folders);
+            if (const auto bypass = json.find("bypass"); bypass != json.end()) bypass->get_to(result.document.bypass);
         }
         std::map<std::string, std::pair<std::set<std::string>, std::set<std::string>>> folders;
         folders["."];
@@ -65,31 +74,44 @@ namespace genesia::caption {
                 relative = relative.has_parent_path() ? relative.parent_path() : std::filesystem::path{"."};
             }
         }
-        if (root.error.empty() && std::erase_if(result.document.folders, [&](const auto& entry) { return !folders.contains(entry.first); })) files::write_json(path, {{"version", 1}, {"folders", result.document.folders}});
+        if (root.error.empty()) {
+            const auto removed_tags   = std::erase_if(result.document.folders, [&](const auto& entry) { return !folders.contains(entry.first); });
+            const auto removed_bypass = std::erase_if(result.document.bypass, [&](const auto& name) { return !folders.contains(name); });
+            if (removed_tags || removed_bypass) files::write_json(path, {{"version", 1}, {"folders", result.document.folders}, {"bypass", result.document.bypass}});
+        }
+        std::set<std::string> export_images;
         for (const auto& [name, counts] : folders) {
-            result.folders.push_back({name, counts.first.size(), counts.second.size()});
+            const bool bypassed = excluded(result.document, name);
+            result.folders.push_back({name, counts.first.size(), counts.second.size(), bypassed});
+            if (bypassed) continue;
+            export_images.insert_range(counts.first);
             const auto tags = result.document.folders.find(name);
             if (tags == result.document.folders.end() || tags->second.empty()) result.missing_tags.insert(name);
         }
+        result.export_images = export_images.size();
         return result;
     }
-    Result edit(const Dataset& source, const std::string_view folder, const std::optional<std::vector<std::string>>& tags) {
+    Result edit(const Dataset& source, const std::string_view folder, const std::optional<std::vector<std::string>>& tags, const std::optional<bool> bypass) {
         if (!std::ranges::contains(source.folders, folder, &Folder::path)) throw std::runtime_error{"Caption folder does not exist: " + std::string{folder}};
         auto document = source.document;
         if (tags) {
             auto normalized = parse(compose(*tags));
             if (normalized.empty()) document.folders.erase(std::string{folder});
             else document.folders[std::string{folder}] = std::move(normalized);
-            files::write_json(project::directory / files::path(source.key) / ".genesia" / "captions.json", {{"version", 1}, {"folders", document.folders}});
         }
+        if (bypass) {
+            if (*bypass) document.bypass.emplace(folder);
+            else document.bypass.erase(std::string{folder});
+        }
+        if (tags || bypass) files::write_json(project::directory / files::path(source.key) / ".genesia" / "captions.json", {{"version", 1}, {"folders", document.folders}, {"bypass", document.bypass}});
         const auto found = document.folders.find(std::string{folder});
-        return {std::string{folder}, found == document.folders.end() ? std::vector<std::string>{} : found->second, resolve(document, source.key, folder)};
+        return {std::string{folder}, found == document.folders.end() ? std::vector<std::string>{} : found->second, resolve(document, source.key, folder), document.bypass.contains(std::string{folder}), excluded(document, folder)};
     }
-    Exported export_dataset(const Dataset& source, const dataset::Root& root, const std::filesystem::path& destination, const std::atomic_bool& interrupted, const std::function<void(std::size_t, std::size_t)>& progress) {
+    Exported export_dataset(const Dataset& source, const dataset::Root& root, const std::filesystem::path& destination, const std::atomic_bool& interrupted, const std::function<std::filesystem::path(const dataset::File&)>& mask, const std::function<void(std::size_t, std::size_t)>& progress) {
         if (!source.issue.empty()) throw std::runtime_error{source.issue};
         if (!root.ready) throw std::runtime_error{root.error.empty() ? "Dataset root has independent image copies" : root.error};
         if (!source.missing_tags.empty()) {
-            std::string error = std::format("{} directories need their own tags, including empty directories. Inherited tags do not satisfy this requirement:", source.missing_tags.size());
+            std::string error = std::format("{} non-bypassed directories need their own tags, including empty directories. Inherited tags do not satisfy this requirement:", source.missing_tags.size());
             for (const auto& path : source.missing_tags) error += "\n" + source.key + (path == "." ? " (concept root)" : "/" + path);
             throw std::runtime_error{error};
         }
@@ -99,12 +121,13 @@ namespace genesia::caption {
         for (auto parent = output.parent_path(); parent != parent.root_path(); parent = parent.parent_path())
             if (std::filesystem::exists(parent) && std::filesystem::equivalent(parent, project::directory)) throw std::runtime_error{"Export outside the project's data directory"};
         if (std::filesystem::exists(output)) throw std::runtime_error{"Export requires a new directory: " + files::utf8(output)};
-        std::vector<std::pair<std::filesystem::path, std::string>> samples;
+        std::vector<std::pair<const dataset::File*, std::string>> samples;
         for (const auto& file : root.files) {
             const auto path = file.path.lexically_relative(folder);
             if (path.empty() || *path.begin() == "..") continue;
             const auto parent = path.has_parent_path() ? files::utf8(path.parent_path()) : ".";
-            samples.emplace_back(path, compose(resolve(source.document, source.key, parent)));
+            if (excluded(source.document, parent)) continue;
+            samples.emplace_back(&file, compose(resolve(source.document, source.key, parent)));
         }
         if (samples.empty()) throw std::runtime_error{"No images to export"};
         // Build beside the destination. An interrupted export never looks complete.
@@ -113,11 +136,15 @@ namespace genesia::caption {
         std::size_t completed{};
         try {
             progress(0, samples.size());
-            for (const auto& [path, text] : samples) {
+            for (const auto& [file, text] : samples) {
                 if (interrupted.load()) throw runtime::Stopped{};
-                const auto target = staging / path;
+                const auto mask_path = mask(*file);
+                if (interrupted.load()) throw runtime::Stopped{};
+                const auto target = staging / file->path.lexically_relative(folder);
                 std::filesystem::create_directories(target.parent_path());
-                std::filesystem::copy_file(folder / path, target);
+                std::filesystem::copy_file(file->path, target);
+                const auto mask_target = target.parent_path() / (target.stem().native() + std::filesystem::path{"-masklabel.png"}.native());
+                std::filesystem::copy_file(mask_path, mask_target);
                 auto caption = target;
                 caption.replace_extension(".txt");
                 files::write_bytes(caption, {reinterpret_cast<const std::uint8_t*>(text.data()), text.size()});

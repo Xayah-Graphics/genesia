@@ -8,7 +8,7 @@ export namespace genesia::runtime {
         ~Session();
         TaskStatus submit(Request request);
         void select(std::string key);
-        void observe(std::vector<Infer> requests);
+        void observe(std::vector<Infer> requests, std::vector<dataset::File> masks, bool generated_masks);
         void activate(std::vector<std::string> models);
         void configure_preview(bool enabled, bool visible);
         void cancel(std::uint64_t id);
@@ -24,6 +24,9 @@ export namespace genesia::runtime {
         Delivery delivery;
         std::optional<TaskStatus> active;
         std::vector<Infer> wanted;
+        std::vector<dataset::File> wanted_masks;
+        foreground::Pipeline foreground;
+        bool generated_masks{};
         std::vector<std::string> activated;
         std::shared_ptr<generation::Engine> generation;
         std::unique_ptr<classification::Predictions> predictions;
@@ -40,5 +43,6 @@ export namespace genesia::runtime {
         void run(bool browse);
         void execute(const Request& request);
         TaskStatus infer(Infer request, std::span<const std::uint8_t> rgb = {});
+        TaskStatus segment(Mask request, std::span<const std::uint8_t> rgb = {});
     };
 } // namespace genesia::runtime

@@ -1,7 +1,6 @@
 module;
 #include <genesia/cuda.h>
 module genesia.runtime.session;
-import genesia.io.hash;
 import std;
 namespace genesia::runtime {
     Session::Session(generation::Visuals hooks, const bool browse) : visuals{std::move(hooks)}, loading{browse}, worker{[this, browse] { run(browse); }} {}
@@ -24,19 +23,19 @@ namespace genesia::runtime {
                 for (auto& lora : loras) {
                     if (!std::isfinite(lora.weight) || previous == lora.concept_key) throw std::runtime_error{"Invalid or repeated LoRA selection: " + lora.concept_key};
                     const auto model = models::resolve(lora.concept_key, dataset::ConceptType::lora);
-                    lora.sha = model.sha;
-                    previous = lora.concept_key;
+                    lora.sha         = model.sha;
+                    previous         = lora.concept_key;
                 }
             }
             auto operation = std::make_shared<const Request>(std::move(request));
-            const auto id = next_id++;
-            active        = TaskStatus{.id = id, .kind = Kind(operation->operation.index()), .started = std::chrono::steady_clock::now(), .request = operation};
+            const auto id  = next_id++;
+            active         = TaskStatus{.id = id, .kind = Kind(operation->operation.index()), .started = std::chrono::steady_clock::now(), .request = operation};
             std::visit(
                 [&]<typename T>(const T& value) {
                     if constexpr (std::same_as<T, Train>) active->concept_key = value.options.concept_key;
                     else if constexpr (std::same_as<T, Delete>) active->image_sha = value.sha;
                     else if constexpr (std::same_as<T, Normalize>) active->concept_key = value.root;
-                    else if constexpr (!std::same_as<T, Generate>) active->concept_key = value.concept_key;
+                    else if constexpr (!std::same_as<T, Generate> && !std::same_as<T, Mask>) active->concept_key = value.concept_key;
                 },
                 operation->operation);
             interrupted = false;
@@ -57,14 +56,17 @@ namespace genesia::runtime {
         }
         condition.notify_one();
     }
-    void Session::observe(std::vector<Infer> requests) {
+    void Session::observe(std::vector<Infer> requests, std::vector<dataset::File> masks, const bool include_generated) {
         std::string signature;
         for (const auto& request : requests) signature += request.descriptor->id + request.descriptor->sha + request.file->sha;
+        for (const auto& image : masks) signature += "mask:" + image.sha;
         {
             const std::lock_guard lock{mutex};
+            generated_masks = include_generated;
             if (signature == observed || closing) return;
-            observed = std::move(signature);
-            wanted   = std::move(requests);
+            observed     = std::move(signature);
+            wanted       = std::move(requests);
+            wanted_masks = std::move(masks);
         }
         condition.notify_one();
     }
@@ -89,7 +91,7 @@ namespace genesia::runtime {
             if (!active || active->id != id) return;
             const auto kind   = active->kind;
             const auto* batch = std::get_if<BatchProgress>(&active->progress.value);
-            if (kind == Kind::fix || kind == Kind::undo || kind == Kind::assign || kind == Kind::erase || kind == Kind::caption || kind == Kind::lora || (batch && batch->stage == Stage::moving)) return;
+            if (kind == Kind::fix || kind == Kind::assign || kind == Kind::erase || kind == Kind::caption || kind == Kind::lora || (batch && batch->stage == Stage::moving)) return;
             interrupted      = true;
             active->stopping = true;
             if (kind == Kind::generate) engine = generation;
@@ -103,6 +105,7 @@ namespace genesia::runtime {
             closing     = true;
             interrupted = true;
             wanted.clear();
+            wanted_masks.clear();
             inspect_key.clear();
             engine = generation;
         }
@@ -115,7 +118,7 @@ namespace genesia::runtime {
         {
             const std::lock_guard lock{mutex};
             result.active   = active;
-            result.idle     = !active && !loading && !inferring && wanted.empty() && inspect_key.empty();
+            result.idle     = !active && !loading && !inferring && wanted.empty() && wanted_masks.empty() && inspect_key.empty();
             result.finished = worker_done;
             result.pending  = !delivery.events.empty() || !delivery.previews.empty() || delivery.catalog.ready || !delivery.catalog.roots.empty() || !delivery.catalog.concepts.empty() || !delivery.catalog.classifiers.empty() || !delivery.catalog.captions.empty() || !delivery.catalog.concept_errors.empty();
             result.error    = error;
@@ -201,10 +204,11 @@ namespace genesia::runtime {
             for (;;) {
                 std::shared_ptr<const Request> request;
                 std::optional<Infer> image;
+                std::optional<dataset::File> mask;
                 std::string selected;
                 {
                     std::unique_lock lock{mutex};
-                    condition.wait(lock, [this] { return closing || submitted || !inspect_key.empty() || !wanted.empty(); });
+                    condition.wait(lock, [this] { return closing || submitted || !inspect_key.empty() || !wanted.empty() || !wanted_masks.empty(); });
                     if (closing) {
                         const bool pending = active.has_value();
                         lock.unlock();
@@ -215,7 +219,11 @@ namespace genesia::runtime {
                         request   = active->request;
                         submitted = false;
                     } else if (!inspect_key.empty()) selected = std::exchange(inspect_key, {});
-                    else {
+                    else if (!wanted_masks.empty()) {
+                        mask = std::move(wanted_masks.front());
+                        wanted_masks.erase(wanted_masks.begin());
+                        inferring = true;
+                    } else {
                         image = std::move(wanted.front());
                         wanted.erase(wanted.begin());
                         inferring = true;
@@ -231,6 +239,10 @@ namespace genesia::runtime {
                         update.concept_errors[selected] = failure.what();
                         update_catalog(std::move(update));
                     }
+                } else if (mask) {
+                    receive({EventKind::task, 0, {}, {}, segment({.file = std::move(mask)})});
+                    const std::lock_guard lock{mutex};
+                    inferring = false;
                 } else if (image) {
                     receive({EventKind::task, 0, {}, {}, infer(std::move(*image))});
                     const std::lock_guard lock{mutex};
@@ -249,6 +261,7 @@ namespace genesia::runtime {
             }
             release_generation();
             predictions.reset();
+            foreground.network.reset();
             catalog.index.flush();
         } catch (const std::exception& failure) {
             const std::lock_guard lock{mutex};
@@ -288,7 +301,6 @@ namespace genesia::runtime {
                         generation = engine;
                     }
                     std::random_device random;
-                    Generated result;
                     for (int i = 0; i < operation.count; ++i) {
                         if (interrupted) throw Stopped{};
                         auto image = operation;
@@ -297,21 +309,33 @@ namespace genesia::runtime {
                         const auto saved = engine->generate(catalog.index, id, image, interrupted);
                         if (!saved) throw Stopped{};
                         update_catalog(catalog.root("raw"));
-                        result = {saved->file.path, saved->record.seed};
                         std::vector<std::string> selected;
+                        bool mask_saved;
                         {
                             const std::lock_guard lock{mutex};
-                            selected = activated;
+                            selected   = activated;
+                            mask_saved = generated_masks;
                         }
+                        if (mask_saved && !interrupted) receive({EventKind::task, 0, {}, {}, segment({.file = saved->file}, saved->pixels)});
                         for (const auto& key : selected) {
                             if (interrupted) break;
                             receive({EventKind::task, 0, {}, {}, infer({.concept_key = key, .file = saved->file}, saved->pixels)});
                         }
                     }
-                    emit(interrupted ? State::stopped : State::complete, {}, {result});
+                    emit(interrupted ? State::stopped : State::complete);
                 } else if constexpr (std::same_as<T, Infer>) {
                     auto result = infer(operation);
                     emit(result.state, {}, std::move(result.result), std::move(result.error));
+                } else if constexpr (std::same_as<T, Mask>) {
+                    emit(State::running, {BatchProgress{Stage::segmenting, 0, 1}});
+                    auto result = segment(operation);
+                    if (interrupted) throw Stopped{};
+                    if (result.state == State::complete && !operation.output.empty()) {
+                        auto& mask = std::get<foreground::Result>(result.result.value);
+                        std::filesystem::copy_file(mask.path, operation.output);
+                        mask.path = operation.output;
+                    }
+                    emit(result.state, {BatchProgress{Stage::segmenting, 1, 1}}, std::move(result.result), std::move(result.error));
                 } else if constexpr (std::same_as<T, Delete>) {
                     const auto root = files::path(operation.root);
                     if (root.has_parent_path() || operation.root.empty() || operation.root.front() == '.') throw std::runtime_error{"Delete requires a root dataset name"};
@@ -327,6 +351,7 @@ namespace genesia::runtime {
                         for (const auto& key : concepts) update_catalog(catalog.describe(key, true));
                         const std::lock_guard lock{mutex};
                         std::erase_if(wanted, [&](const Infer& image) { return image.file && std::ranges::contains(result.paths, image.file->path); });
+                        std::erase_if(wanted_masks, [&](const auto& image) { return std::ranges::contains(result.paths, image.path); });
                         observed.clear();
                     }
                     emit(result.error.empty() ? State::complete : State::failed, {}, {result}, result.error);
@@ -344,18 +369,16 @@ namespace genesia::runtime {
                     {
                         const std::lock_guard lock{mutex};
                         wanted.clear();
+                        wanted_masks.clear();
                         observed.clear();
                     }
                     emit(!result.error.empty() ? State::failed : result.stopped ? State::stopped : State::complete, {}, {result}, result.error);
                 } else if constexpr (std::same_as<T, Classify>) {
-                    const auto input   = std::filesystem::absolute(operation.input).lexically_normal();
-                    const auto text    = files::utf8(input);
-                    const auto journal = project::state_directory / "operations" / (sha256({reinterpret_cast<const unsigned char*>(text.data()), text.size()}) + ".json");
-                    moved(dataset::recover_moves(journal));
+                    const auto input    = std::filesystem::absolute(operation.input).lexically_normal();
                     const auto relative = input.lexically_relative(project::directory);
                     if (!relative.empty() && *relative.begin() != "..") update_catalog(catalog.load(files::utf8(*relative.begin())));
                     if (!predictions) predictions = std::make_unique<classification::Predictions>();
-                    const auto result = classification::classify(catalog.index, operation.concept_key, input, journal, *predictions, interrupted, progress);
+                    const auto result = classification::classify(catalog.index, operation.concept_key, input, *predictions, interrupted, progress);
                     moved(result.movement);
                     emit(State::complete, {}, {result});
                 } else {
@@ -382,11 +405,11 @@ namespace genesia::runtime {
                         const auto& root  = *std::ranges::find(catalog.index.roots, files::utf8(*files::path(key).begin()), [](const dataset::Root& value) { return value.all.key; });
                         const auto source = caption::inspect(assigned, root);
                         if constexpr (std::same_as<T, Caption>) {
-                            const auto result = caption::edit(source, operation.folder, operation.tags);
-                            if (operation.tags) update_catalog(catalog.describe(key));
+                            const auto result = caption::edit(source, operation.folder, operation.tags, operation.bypass);
+                            if (operation.tags || operation.bypass) update_catalog(catalog.describe(key));
                             emit(State::complete, {}, {result});
                         } else {
-                            const auto result = caption::export_dataset(source, root, operation.output, interrupted, [&](const std::size_t completed, const std::size_t total) { progress({BatchProgress{Stage::exporting, completed, total}}); });
+                            const auto result = caption::export_dataset(source, root, operation.output, interrupted, [&](const dataset::File& image) { return foreground.infer(image).path; }, [&](const std::size_t completed, const std::size_t total) { progress({BatchProgress{Stage::exporting, completed, total}}); });
                             emit(State::complete, {}, {result});
                         }
                     } else {
@@ -394,11 +417,13 @@ namespace genesia::runtime {
                         if constexpr (std::same_as<T, Train>) {
                             release_generation();
                             predictions.reset();
+                            foreground.network.reset();
                             const auto result = training::train(operation.options, source, interrupted, progress);
                             update_catalog(catalog.describe(key));
                             {
                                 const std::lock_guard lock{mutex};
                                 wanted.clear();
+                                wanted_masks.clear();
                                 observed.clear();
                             }
                             emit(result.phase == training::Phase::stopped ? State::stopped : State::complete, {}, {result});
@@ -406,10 +431,7 @@ namespace genesia::runtime {
                             if (!predictions) predictions = std::make_unique<classification::Predictions>();
                             emit(State::complete, {}, {classification::audit(source, *predictions, operation.refresh, interrupted, progress)});
                         } else {
-                            const auto result = [&] {
-                                if constexpr (std::same_as<T, Fix>) return classification::fix(source, operation.sha, operation.category);
-                                else return classification::undo(source);
-                            }();
+                            const auto result = classification::fix(source, operation.sha, operation.category);
                             moved(result);
                             emit(State::complete, {}, {result});
                         }
@@ -434,6 +456,20 @@ namespace genesia::runtime {
                 predictions->active = activated;
             }
             result.result.value = predictions->infer(*request.descriptor, *request.file, request.refresh, rgb);
+        } catch (const std::exception& failure) {
+            result.state = State::failed;
+            result.error = failure.what();
+        }
+        return result;
+    }
+    TaskStatus Session::segment(Mask request, const std::span<const std::uint8_t> rgb) {
+        TaskStatus result{.kind = Kind::mask, .state = State::complete, .request = std::make_shared<const Request>(Request{request})};
+        try {
+            if (!request.file) request.file = catalog.index.identify(request.input);
+            result.image_sha    = request.file->sha;
+            auto mask           = foreground.infer(*request.file, rgb);
+            result.model_sha    = mask.model_sha;
+            result.result.value = std::move(mask);
         } catch (const std::exception& failure) {
             result.state = State::failed;
             result.error = failure.what();

@@ -86,13 +86,16 @@ target_sources(genesia_core
         genesia/core/data/captions.cpp
         genesia/core/data/datasets.cpp
         genesia/core/data/images.cpp
-        genesia/core/data/transactions.cpp
+        genesia/core/data/operations.cpp
         genesia/core/generation/engine.cpp
         genesia/core/generation/output.cpp
         genesia/core/headless.cpp
         genesia/core/io/files.cpp
         genesia/core/io/hash.cpp
         genesia/core/io/safetensors.cpp
+        genesia/core/models/birefnet/kernels.cu
+        genesia/core/models/birefnet/network.cpp
+        genesia/core/segmentation/foreground.cpp
         genesia/core/models/convnext/elementwise.cu
         genesia/core/models/convnext/network.cpp
         genesia/core/models/convnext/normalization.cu
@@ -131,7 +134,7 @@ target_sources(genesia_core
         genesia/core/data/captions.ixx
         genesia/core/data/datasets.ixx
         genesia/core/data/images.ixx
-        genesia/core/data/transactions.ixx
+        genesia/core/data/operations.ixx
         genesia/core/generation/defaults.ixx
         genesia/core/generation/engine.ixx
         genesia/core/generation/output.ixx
@@ -140,6 +143,8 @@ target_sources(genesia_core
         genesia/core/io/files.ixx
         genesia/core/io/hash.ixx
         genesia/core/io/safetensors.ixx
+        genesia/core/models/birefnet/network.ixx
+        genesia/core/segmentation/foreground.ixx
         genesia/core/models/convnext/network.ixx
         genesia/core/models/registry.ixx
         genesia/core/models/sdxl/lora.ixx

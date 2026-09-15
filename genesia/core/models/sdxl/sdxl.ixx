@@ -29,7 +29,6 @@ export namespace genesia::sdxl {
     struct Model final {
         Model(::cuda::stream_ref stream, const std::filesystem::path& checkpoint, const std::filesystem::path& cache_directory);
         void encode(ImageInput& image);
-        void apply_loras(std::span<const generation::Lora> loras);
 
     private:
         friend struct Inference;
@@ -82,6 +81,13 @@ export namespace genesia::sdxl {
         const Output& generate(std::uint64_t seed);
 
     private:
+        struct Phase final {
+            int end;
+            Weights::Variant weights;
+            UNet network;
+            UNetCondition condition;
+            cudaGraphConditionalHandle loop{};
+        };
         Model& model;
         Control& control;
         Snapshots* snapshots;
@@ -90,6 +96,7 @@ export namespace genesia::sdxl {
         VAEWorkspaceLayout vae_layout;
         ::cuda::device_buffer<std::byte> workspace;
         UNetState unet;
+        std::vector<Phase> phases;
         ::cuda::device_buffer<kernels::SamplingStep> schedule;
         ::cuda::device_buffer<std::uint64_t> seed;
         ::cuda::device_buffer<std::byte> operator_workspace;
@@ -106,10 +113,9 @@ export namespace genesia::sdxl {
         std::unique_ptr<std::remove_pointer_t<cudaEvent_t>, decltype(&cudaEventDestroy)> decoded_event{nullptr, cudaEventDestroy};
         std::unique_ptr<std::remove_pointer_t<cudaGraph_t>, decltype(&cudaGraphDestroy)> graph{nullptr, cudaGraphDestroy};
         std::unique_ptr<std::remove_pointer_t<cudaGraphExec_t>, decltype(&cudaGraphExecDestroy)> executable{nullptr, cudaGraphExecDestroy};
-        cudaGraphConditionalHandle loop{};
         cudaGraphConditionalHandle decode_condition{};
 
-        void denoise();
+        void denoise(const Phase& phase);
         void decode();
     };
 } // namespace genesia::sdxl

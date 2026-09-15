@@ -146,10 +146,10 @@ namespace genesia::editor {
         return id;
     }
 
-    void Renderer::upload(const std::uint64_t id, const void* rgba, const int width, const int height, const bool initial) {
+    void Renderer::upload(const std::uint64_t id, const void* pixels, const int width, const int height, const bool initial) {
         auto& image   = textures.at(id).image;
-        auto& staging = frames[frame_index].uploads.emplace_back(device, std::size_t(width) * height * 4, true);
-        std::memcpy(staging.mapped, rgba, staging.size);
+        auto& staging = frames[frame_index].uploads.emplace_back(device, std::size_t(width) * height * (image.format == vk::Format::eR8Unorm ? 1 : 4), true);
+        std::memcpy(staging.mapped, pixels, staging.size);
         const auto& command = commands[frame_index];
         const vk::ImageMemoryBarrier2 transfer{initial ? vk::PipelineStageFlagBits2::eNone : vk::PipelineStageFlagBits2::eFragmentShader, initial ? vk::AccessFlags2{} : vk::AccessFlagBits2::eShaderSampledRead, vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite, initial ? vk::ImageLayout::eUndefined : vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eTransferDstOptimal, vk::QueueFamilyIgnored, vk::QueueFamilyIgnored, *image.image, {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
         command.pipelineBarrier2(vk::DependencyInfo{{}, {}, {}, {}, {}, 1, &transfer});
@@ -279,7 +279,9 @@ namespace genesia::editor {
                     std::array<std::uint32_t, 2> vertices, indices, texture, sampler;
                     std::uint32_t index_offset, vertex_offset;
                     std::array<float, 2> scale, translation;
-                } push{{std::uint32_t(frame_index * 2), 0}, {std::uint32_t(frame_index * 2 + 1), 0}, {std::uint32_t(draw.GetTexID() - 1), 0}, {0, 0}, index_offset + draw.IdxOffset, vertex_offset + draw.VtxOffset, {2 / data.DisplaySize.x, 2 / data.DisplaySize.y}, {-1 - data.DisplayPos.x * 2 / data.DisplaySize.x, -1 - data.DisplayPos.y * 2 / data.DisplaySize.y}};
+                    std::array<std::uint32_t, 2> mask;
+                    std::uint32_t foreground;
+                } push{{std::uint32_t(frame_index * 2), 0}, {std::uint32_t(frame_index * 2 + 1), 0}, {std::uint32_t(draw.GetTexID() - 1), 0}, {0, 0}, index_offset + draw.IdxOffset, vertex_offset + draw.VtxOffset, {2 / data.DisplaySize.x, 2 / data.DisplaySize.y}, {-1 - data.DisplayPos.x * 2 / data.DisplaySize.x, -1 - data.DisplayPos.y * 2 / data.DisplaySize.y}, {std::uint32_t(draw.GetTexID() >> 32) - 1, 0}, std::uint32_t((draw.GetTexID() >> 32) != 0)};
                 command.pushDataEXT(vk::PushDataInfoEXT{0, vk::HostAddressRangeConstEXT{&push, sizeof(push)}});
                 command.draw(draw.ElemCount, 1, 0, 0);
             }

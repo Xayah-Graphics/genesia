@@ -2,11 +2,11 @@ module genesia.classification.classify;
 import genesia.models.registry;
 import genesia.project;
 import genesia.training.samples;
-import genesia.data.transactions;
+import genesia.data.operations;
 import genesia.io.files;
 import std;
 namespace genesia::classification {
-    Classification classify(dataset::Index& index, const std::string_view key, const std::filesystem::path& input, const std::filesystem::path& journal, Predictions& predictions, const std::atomic_bool& interrupted, const std::function<void(const runtime::Progress&)>& progress) {
+    Classification classify(dataset::Index& index, const std::string_view key, const std::filesystem::path& input, Predictions& predictions, const std::atomic_bool& interrupted, const std::function<void(const runtime::Progress&)>& progress) {
         const auto root     = std::filesystem::absolute(input).lexically_normal();
         const auto text     = files::utf8(root);
         const auto relative = root.lexically_relative(project::directory);
@@ -62,6 +62,6 @@ namespace genesia::classification {
         }
         progress({runtime::BatchProgress{runtime::Stage::moving, images.size(), images.size()}});
         if (interrupted.load()) throw runtime::Stopped{};
-        return {root, dataset::move_images(std::move(moves), journal), std::move(counts)};
+        return {root, dataset::move_images(std::move(moves)), std::move(counts)};
     }
 } // namespace genesia::classification

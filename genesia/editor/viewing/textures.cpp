@@ -2,6 +2,7 @@ module;
 #include <GLFW/glfw3.h>
 module genesia.editor.viewing.textures;
 import std;
+import vulkan;
 namespace genesia::editor {
     TextureCache::TextureCache(Renderer& display) : renderer{display}, worker{[this] { read(); }} {}
     TextureCache::~TextureCache() {
@@ -11,8 +12,10 @@ namespace genesia::editor {
         }
         condition.notify_all();
         worker.join();
-        for (const auto& [sha, entry] : entries)
+        for (const auto& [sha, entry] : entries) {
             if (entry.texture) renderer.retire(entry.texture);
+            if (entry.mask) renderer.retire(entry.mask);
+        }
     }
     void TextureCache::receive() {
         std::vector<Decoded> decoded;
@@ -22,14 +25,28 @@ namespace genesia::editor {
             pending = false;
         }
         for (auto& result : decoded) {
-            auto& cached = entries[result.file.sha];
-            if (cached.texture) continue;
-            texture_bytes -= cached.bytes;
-            cached = {std::move(result.file), std::move(result.record), 0, ++clock, 0, std::move(result.error)};
-            if (cached.error.empty()) {
-                cached.texture = renderer.upload(result.image);
-                cached.bytes   = static_cast<std::size_t>(result.image.width) * result.image.height * 4;
-                texture_bytes += cached.bytes;
+            auto& cached   = entries[result.file.sha];
+            cached.file    = std::move(result.file);
+            cached.touched = ++clock;
+            if (result.mask) {
+                cached.mask_checked = true;
+                cached.mask_error   = std::move(result.error);
+                if (!cached.mask && !result.image.pixels.empty()) {
+                    cached.mask = renderer.texture({std::uint32_t(result.image.width), std::uint32_t(result.image.height)}, vk::Format::eR8Unorm);
+                    renderer.upload(cached.mask, result.image.pixels.data(), result.image.width, result.image.height, true);
+                    const auto bytes = result.image.pixels.size();
+                    cached.bytes += bytes;
+                    texture_bytes += bytes;
+                }
+            } else if (!cached.texture) {
+                cached.record = std::move(result.record);
+                cached.error  = std::move(result.error);
+                if (cached.error.empty()) {
+                    cached.texture   = renderer.upload(result.image);
+                    const auto bytes = static_cast<std::size_t>(result.image.width) * result.image.height * 4;
+                    cached.bytes += bytes;
+                    texture_bytes += bytes;
+                }
             }
         }
         condition.notify_all();
@@ -42,27 +59,32 @@ namespace genesia::editor {
             cached.touched = ++clock;
         } else {
             const auto bytes = static_cast<std::size_t>(file.width) * file.height * 4;
-            texture_bytes -= cached.bytes;
-            cached = {file, record, std::exchange(texture, 0), ++clock, bytes, {}};
+            cached.file      = file;
+            cached.record    = record;
+            cached.texture   = std::exchange(texture, 0);
+            cached.touched   = ++clock;
+            cached.bytes += bytes;
+            cached.error.clear();
             texture_bytes += bytes;
         }
         {
             const std::lock_guard lock{mutex};
-            std::erase_if(requested, [&](const auto& pending) { return pending.sha == file.sha; });
-            std::erase_if(results, [&](const auto& pending) { return pending.file.sha == file.sha; });
+            std::erase_if(requested, [&](const auto& pending) { return !pending.mask && pending.file.sha == file.sha; });
+            std::erase_if(results, [&](const auto& pending) { return !pending.mask && pending.file.sha == file.sha; });
             pending = !results.empty();
         }
         condition.notify_all();
     }
 
-    void TextureCache::request(std::vector<dataset::File> files) {
+    void TextureCache::request(std::vector<dataset::File> files, const bool masks) {
         std::set<std::string> pinned;
-        std::vector<dataset::File> missing;
+        std::vector<Load> missing;
         for (const auto& file : files) {
             if (!pinned.insert(file.sha).second) continue;
             const auto cached = entries.find(file.sha);
             if (cached != entries.end()) cached->second.touched = ++clock;
-            else if (!paused) missing.push_back(file);
+            if (!paused && (cached == entries.end() || (!cached->second.texture && cached->second.error.empty()))) missing.push_back({file});
+            if (!paused && masks && (cached == entries.end() || !cached->second.mask_checked)) missing.push_back({file, true});
         }
         while (texture_bytes > 512ULL * 1024 * 1024) {
             auto oldest = entries.end();
@@ -70,15 +92,25 @@ namespace genesia::editor {
                 if (!pinned.contains(entry->first) && (oldest == entries.end() || entry->second.touched < oldest->second.touched)) oldest = entry;
             if (oldest == entries.end()) break;
             if (oldest->second.texture) renderer.retire(oldest->second.texture);
+            if (oldest->second.mask) renderer.retire(oldest->second.mask);
             texture_bytes -= oldest->second.bytes;
             entries.erase(oldest);
         }
         {
             const std::lock_guard lock{mutex};
+            std::erase_if(missing, [&](const Load& load) { return std::ranges::any_of(results, [&](const Decoded& result) { return result.file == load.file && result.mask == load.mask; }); });
             if (requested == missing) return;
             requested = std::move(missing);
         }
         condition.notify_all();
+    }
+
+    void TextureCache::mask_ready(const std::string& sha) {
+        const auto entry = entries.find(sha);
+        if (entry != entries.end() && !entry->second.mask) entry->second.mask_checked = false;
+        const std::lock_guard lock{mutex};
+        std::erase_if(requested, [&](const auto& load) { return load.mask && load.file.sha == sha; });
+        std::erase_if(results, [&](const auto& result) { return result.mask && result.file.sha == sha; });
     }
 
     void TextureCache::discard(const std::span<const std::filesystem::path> paths) {
@@ -86,12 +118,13 @@ namespace genesia::editor {
             const auto& cached = item.second;
             if (!std::ranges::contains(paths, cached.file.path)) return false;
             if (cached.texture) renderer.retire(cached.texture);
+            if (cached.mask) renderer.retire(cached.mask);
             texture_bytes -= cached.bytes;
             return true;
         });
         {
             const std::lock_guard lock{mutex};
-            std::erase_if(requested, [&](const auto& file) { return std::ranges::contains(paths, file.path); });
+            std::erase_if(requested, [&](const auto& file) { return std::ranges::contains(paths, file.file.path); });
             std::erase_if(results, [&](const auto& result) { return std::ranges::contains(paths, result.file.path); });
             pending = !results.empty();
         }
@@ -108,6 +141,8 @@ namespace genesia::editor {
                 cached.file.path = found->second->destination;
                 if (cached.record) cached.record->path = cached.file.path;
                 if (!cached.error.empty()) {
+                    if (cached.mask) renderer.retire(cached.mask);
+                    texture_bytes -= cached.bytes;
                     entry = entries.erase(entry);
                     continue;
                 }
@@ -124,30 +159,29 @@ namespace genesia::editor {
     }
 
     void TextureCache::read() {
-        std::vector<dataset::File> delivered;
         for (;;) {
-            dataset::File task;
+            Load task;
             {
                 std::unique_lock lock{mutex};
-                condition.wait(lock, [&] {
-                    if (closing) return true;
-                    std::erase_if(delivered, [&](const auto& file) { return !std::ranges::contains(requested, file); });
-                    return results.size() < 2 && std::ranges::any_of(requested, [&](const auto& file) { return !std::ranges::contains(delivered, file); });
-                });
+                condition.wait(lock, [&] { return closing || (results.size() < 2 && !requested.empty()); });
                 if (closing) break;
-                task = *std::ranges::find_if(requested, [&](const auto& file) { return !std::ranges::contains(delivered, file); });
+                task = requested.front();
             }
-            Decoded result{task};
+            Decoded result{.file = task.file, .mask = task.mask};
             try {
-                result.record = read_image_info(task.path).record;
-                result.image  = read_image(task.path);
+                if (task.mask) {
+                    if (auto cached = foreground::read_cached(task.file)) result.image = std::move(*cached);
+                } else {
+                    result.record = read_image_info(task.file.path).record;
+                    result.image  = read_image(task.file.path);
+                }
             } catch (const std::exception& error) {
-                result.error = std::format("{}: {}", task.path.string(), error.what());
+                result.error = std::format("{}: {}", task.file.path.string(), error.what());
             }
             {
                 const std::lock_guard lock{mutex};
                 if (!std::ranges::contains(requested, task)) continue;
-                delivered.push_back(task);
+                std::erase(requested, task);
                 results.push_back(std::move(result));
                 pending = true;
             }

@@ -36,8 +36,7 @@ namespace genesia {
     } // namespace
 
     dataset::File save_image(dataset::Index& index, const sdxl::Output& output, const Record& record) {
-        const auto started = std::chrono::steady_clock::now();
-        const auto model   = record.model.u8string();
+        const auto model = record.model.u8string();
         nlohmann::json metadata{{"version", 1}, {"model", std::string{model.begin(), model.end()}}, {"seed", record.seed}, {"steps", record.parameters.steps}, {"cfg", record.parameters.cfg}, {"sampler", "euler"}, {"scheduler", "simple"}};
         if (!record.parameters.loras.empty()) metadata["loras"] = record.parameters.loras;
         if (!record.source.empty()) {
@@ -94,7 +93,6 @@ namespace genesia {
             std::filesystem::remove(temporary);
             throw;
         }
-        std::println(std::cerr, "SAVE {} {:.3f}s", path.string(), std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
         index.insert(resource);
         return resource;
     }

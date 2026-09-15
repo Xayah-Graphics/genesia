@@ -79,8 +79,8 @@ namespace genesia::editor {
                     if (!available) ImGui::TextDisabled("Reading concept data...");
                     else {
                         const auto registered = workspace.library.loras.find(workspace.collection_key);
-                        const bool published = lora ? registered != workspace.library.loras.end() && registered->second.has_value() : classifier->second.model.has_value();
-                        const bool active = lora ? workspace.lora_controls[workspace.collection_key].active : std::ranges::contains(workspace.activated, workspace.collection_key);
+                        const bool published  = lora ? registered != workspace.library.loras.end() && registered->second.has_value() : classifier->second.model.has_value();
+                        const bool active     = workspace.model_settings.at(workspace.collection_key).active;
                         if (!workspace.choosing_type && workspace.type_error.empty()) ImGui::SameLine(0, 8 * scale);
                         if (published) ImGui::TextColored(color, "%s", active ? "Active" : "Model available");
                         else ImGui::TextDisabled("%s", lora ? "No imported model" : "No published model");
@@ -134,7 +134,7 @@ namespace genesia::editor {
                 ImGui::BeginDisabled(workspace.session_state.active.has_value());
                 if (ImGui::Button("Normalize Dataset", {-FLT_MIN, 0})) workspace.submit_task({runtime::Normalize{workspace.collection_key}});
                 ImGui::EndDisabled();
-                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Merge identical PNG copies into hard links, then number each folder's images\n00001.png, 00002.png, ... by modification time. Dot directories are excluded.\nImage bytes stay unchanged. Renamed concepts lose their old audit undo history.\nRenaming changes training fingerprints; existing models remain available.");
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Merge identical PNG copies into hard links, then number each folder's images\n00001.png, 00002.png, ... by modification time. Dot directories are excluded.\nImage bytes stay unchanged.\nRenaming changes training fingerprints; existing models remain available.");
                 operation_activity(workspace, {runtime::Kind::normalize}, workspace.collection_key);
             }
             if (!workspace.root->ready) ImGui::TextColored({0.95F, 0.49F, 0.42F, 1}, "Index error / details below");
@@ -194,7 +194,9 @@ namespace genesia::editor {
                     const bool lora_type    = metadata != workspace.library.concepts.end() && metadata->second.type == dataset::ConceptType::lora;
                     const auto lora_model   = workspace.library.loras.find(item.key);
                     const bool published    = lora_type ? lora_model != workspace.library.loras.end() && lora_model->second.has_value() : info != workspace.library.classifiers.end() && info->second.model.has_value();
-                    const bool enabled      = lora_type ? workspace.lora_controls[item.key].active : std::ranges::contains(workspace.activated, item.key);
+                    const auto controls     = workspace.model_settings.find(item.key);
+                    const bool enabled      = published && controls != workspace.model_settings.end() && controls->second.active;
+                    const bool replacing    = workspace.session_state.active && workspace.session_state.active->concept_key == item.key && (workspace.session_state.active->kind == runtime::Kind::lora || workspace.session_state.active->kind == runtime::Kind::assign);
                     const auto origin       = ImGui::GetCursorScreenPos();
                     const float width       = ImGui::GetContentRegionAvail().x;
                     const float height      = ImGui::GetTextLineHeight() + 8 * scale;
@@ -203,37 +205,35 @@ namespace genesia::editor {
                     const ImVec2 maximum{std::min(origin.x + width, draw->GetClipRectMax().x), origin.y + height};
                     if (ImGui::Selectable("##Concept", workspace.collection_key == item.key, ImGuiSelectableFlags_None, {width, height})) selected = item.key;
                     const bool hovered = ImGui::IsItemHovered();
-                    if (published && ImGui::IsItemClicked(ImGuiMouseButton_Middle)) {
-                        if (lora_type) workspace.lora_controls[item.key].active = !enabled;
-                        else if (enabled) std::erase(workspace.activated, item.key);
-                        else workspace.activated.push_back(item.key);
+                    if (published && !replacing && failure == workspace.library.concept_errors.end() && controls != workspace.model_settings.end() && ImGui::IsItemClicked(ImGuiMouseButton_Middle)) {
+                        controls->second.active = !enabled;
+                        controls->second.dirty  = true;
+                        workspace.save_model_settings(item.key);
                     }
                     const float y    = origin.y + 4 * scale;
                     const auto count = std::to_string(item.images.size());
                     float right      = maximum.x - 6 * scale - ImGui::CalcTextSize(count.c_str()).x;
                     draw->AddText({right, y}, ImGui::GetColorU32(ImGuiCol_TextDisabled), count.c_str());
                     right -= 8 * scale;
+                    float left = minimum.x + 6 * scale;
+                    if (enabled) draw->AddCircleFilled({left - 4 * scale, (minimum.y + maximum.y) / 2}, 2 * scale, ImGui::GetColorU32(ImGuiCol_Text));
                     if (failure != workspace.library.concept_errors.end() || lora_invalid) {
                         right -= ImGui::CalcTextSize("!").x;
                         draw->AddText({right, y}, ImGui::GetColorU32(ImVec4{0.95F, 0.49F, 0.42F, 1}), "!");
                         right -= 8 * scale;
                     } else if (metadata != workspace.library.concepts.end() && metadata->second.type != dataset::ConceptType::none) {
                         const bool classifier_type = metadata->second.type == dataset::ConceptType::classifier;
-                        const char* tag            = classifier_type ? "C" : "LoRA";
+                        const char* tag            = classifier_type ? "C" : "L";
                         const auto color           = classifier_type ? ImVec4{0.44F, 0.80F, 0.87F, 1} : ImVec4{0.92F, 0.69F, 0.36F, 1};
                         const float width          = ImGui::CalcTextSize(tag).x + 10 * scale;
-                        right -= width;
-                        draw->AddRectFilled({right, y - scale}, {right + width, y + ImGui::GetFontSize() + scale}, ImGui::GetColorU32(ImVec4{color.x, color.y, color.z, 0.12F}), 4 * scale);
-                        draw->AddText({right + 5 * scale, y}, ImGui::GetColorU32(color), tag);
-                        right -= 8 * scale;
+                        draw->AddRectFilled({left, y - scale}, {left + width, y + ImGui::GetFontSize() + scale}, ImGui::GetColorU32(ImVec4{color.x, color.y, color.z, 0.12F}), 4 * scale);
+                        draw->AddText({left + 5 * scale, y}, ImGui::GetColorU32(color), tag);
+                        left += width + 8 * scale;
                         if (published) {
-                            right -= 12 * scale;
-                            ImGui::RenderCheckMark(draw, {right, y + 2 * scale}, ImGui::GetColorU32(color), 10 * scale);
-                            right -= 6 * scale;
+                            ImGui::RenderCheckMark(draw, {left, y + 2 * scale}, ImGui::GetColorU32(color), 10 * scale);
+                            left += 18 * scale;
                         }
                     }
-                    const float left = minimum.x + 6 * scale;
-                    if (enabled) draw->AddCircleFilled({left - 4 * scale, (minimum.y + maximum.y) / 2}, 2 * scale, ImGui::GetColorU32(ImGuiCol_Text));
                     ImGui::RenderTextEllipsis(draw, {left, y}, {std::max(left, right), y + ImGui::GetFontSize()}, std::max(left, right), item.name.c_str(), nullptr, nullptr);
                     if (hovered) {
                         ImGui::BeginTooltip();
@@ -294,7 +294,7 @@ namespace genesia::editor {
                 ImGui::ProgressBar(float(batch->completed) / batch->total, {-1, 3 * workspace.renderer.dpi}, "");
                 ImGui::Text("%zu / %zu", batch->completed, batch->total);
             }
-            const bool committing = task->kind == runtime::Kind::fix || task->kind == runtime::Kind::undo || task->kind == runtime::Kind::assign || task->kind == runtime::Kind::lora || (batch && batch->stage == runtime::Stage::moving);
+            const bool committing = task->kind == runtime::Kind::fix || task->kind == runtime::Kind::assign || task->kind == runtime::Kind::lora || (batch && batch->stage == runtime::Stage::moving);
             if (!committing && ImGui::Button("Stop", {-FLT_MIN, 0})) workspace.runtime.session.cancel(task->id);
         }
         if (!task->error.empty()) ImGui::TextWrapped("%s", task->error.c_str());
@@ -482,9 +482,11 @@ namespace genesia::editor {
         const bool changed  = editor.key != identity;
         if (changed) editor = {.key = identity, .input = text, .saved = text};
         else if (!editor.task && editor.input == editor.saved) editor.input = editor.saved = text;
-        const auto& folder = workspace.caption_folder;
-        const auto red     = ImVec4{0.98F, 0.34F, 0.32F, 1};
-        const auto status  = std::format("{} / {} directories complete{}", source.folders.size() - source.missing_tags.size(), source.folders.size(), source.missing_tags.empty() ? std::string{} : std::format(" / {} missing tags", source.missing_tags.size()));
+        const auto& folder  = workspace.caption_folder;
+        const auto red      = ImVec4{0.98F, 0.34F, 0.32F, 1};
+        const auto bypassed = std::ranges::count(source.folders, true, &caption::Folder::excluded);
+        const auto included = source.folders.size() - bypassed;
+        const auto status   = std::format("{} / {} directories complete / {} bypassed{}", included - source.missing_tags.size(), included, bypassed, source.missing_tags.empty() ? std::string{} : std::format(" / {} missing tags", source.missing_tags.size()));
         ImGui::PushStyleColor(ImGuiCol_Text, source.missing_tags.empty() ? ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled) : red);
         ImGui::TextWrapped("%s", status.c_str());
         ImGui::PopStyleColor();
@@ -493,7 +495,7 @@ namespace genesia::editor {
         const float gap         = 12 * scale;
         const float tree_width  = horizontal ? (available.x - gap) * 0.40F : available.x;
         const float tree_height = std::max(1.0F, horizontal ? available.y : (available.y - gap) * 0.45F);
-        std::optional<std::string> selected;
+        std::optional<std::string> selected, toggled;
         if (ImGui::BeginChild("##CaptionTree", {tree_width, tree_height}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground)) {
             const bool reveal = ImGui::IsWindowAppearing();
             std::map<std::string, std::vector<const caption::Folder*>> children;
@@ -525,10 +527,11 @@ namespace genesia::editor {
                 if (missing) draw->AddRectFilled(position, {position.x + width, position.y + height}, ImGui::GetColorU32(ImVec4{red.x, red.y, red.z, 0.10F}), 3 * scale);
                 const bool ancestor = directory.path == "." || folder.starts_with(directory.path + "/");
                 ImGui::SetNextItemOpen(true, reveal && ancestor ? ImGuiCond_Always : ImGuiCond_Once);
-                ImGui::PushStyleColor(ImGuiCol_Text, missing ? red : ImGui::GetStyleColorVec4(ImGuiCol_Text));
+                ImGui::PushStyleColor(ImGuiCol_Text, missing ? red : ImGui::GetStyleColorVec4(directory.excluded ? ImGuiCol_TextDisabled : ImGuiCol_Text));
                 ImGui::PushStyleColor(ImGuiCol_HeaderHovered, missing ? ImVec4{red.x, red.y, red.z, 0.18F} : ImVec4{0.92F, 0.69F, 0.36F, 0.10F});
                 const bool open = ImGui::TreeNodeEx("##Directory", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding | ImGuiTreeNodeFlags_NoTreePushOnOpen | (branch ? 0 : ImGuiTreeNodeFlags_Leaf), "");
                 if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) selected = directory.path;
+                if (ImGui::IsItemClicked(ImGuiMouseButton_Middle) && !workspace.session_state.active) toggled = directory.path;
                 const bool hovered = ImGui::IsItemHovered();
                 if (current && reveal) ImGui::SetScrollHereY(0.5F);
                 const float y         = position.y + 4 * scale;
@@ -552,9 +555,14 @@ namespace genesia::editor {
                 }
                 const float left        = position.x + ImGui::GetTreeNodeToLabelSpacing();
                 const auto label        = files::utf8(files::path(directory.path == "." ? source.key : directory.path).filename());
-                const auto own_tags     = missing ? std::string{} : caption::compose(source.document.folders.at(directory.path));
+                const auto tags         = source.document.folders.find(directory.path);
+                const auto own_tags     = tags == source.document.folders.end() ? std::string{} : caption::compose(tags->second);
                 const float label_right = own_tags.empty() ? std::max(left, right) : left + std::min(ImGui::CalcTextSize(label.data(), label.data() + label.size()).x, std::max(0.0F, (right - left - 8 * scale) * 0.5F));
                 ImGui::RenderTextEllipsis(draw, {left, y}, {label_right, y + ImGui::GetFontSize()}, label_right, label.data(), label.data() + label.size(), nullptr);
+                if (directory.excluded) {
+                    const float end = std::min(label_right, left + ImGui::CalcTextSize(label.c_str()).x);
+                    if (end > left) draw->AddLine({left, y + ImGui::GetFontSize() * 0.5F}, {end, y + ImGui::GetFontSize() * 0.5F}, ImGui::GetColorU32(ImGuiCol_Text), scale);
+                }
                 const float tags_left = label_right + 8 * scale;
                 if (!own_tags.empty() && tags_left < right) {
                     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
@@ -567,6 +575,8 @@ namespace genesia::editor {
                     ImGui::BeginTooltip();
                     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 420 * scale);
                     ImGui::TextUnformatted((source.key + (directory.path == "." ? "" : "/" + directory.path)).c_str());
+                    if (directory.excluded) ImGui::TextDisabled(source.document.bypass.contains(directory.path) ? "Bypassed: this folder and its descendants are excluded from export." : "Excluded from export by a parent folder's bypass.");
+                    ImGui::TextDisabled(workspace.session_state.active ? "Finish the current operation before changing bypass." : "Middle-click toggles this folder's own bypass. A parent's bypass still applies.");
                     if (missing) ImGui::TextColored(red, "This directory needs its own tags, even when empty.");
                     else ImGui::TextWrapped("%s", own_tags.c_str());
                     if (incomplete != missing_descendants.end()) ImGui::TextColored(red, "%zu descendant directories still need tags.", incomplete->second);
@@ -586,6 +596,17 @@ namespace genesia::editor {
             ImGui::PopStyleVar(2);
         }
         ImGui::EndChild();
+        if (toggled) {
+            const auto toggle = [&workspace, key = source.key, path = *toggled, bypass = !source.document.bypass.contains(*toggled)] {
+                try {
+                    workspace.caption_editor.task = workspace.submit_task({runtime::Caption{key, path, std::nullopt, bypass}});
+                    workspace.caption_editor.error.clear();
+                } catch (const std::exception& failure) {
+                    workspace.caption_editor.error = failure.what();
+                }
+            };
+            if (workspace.save_caption(toggle)) toggle();
+        }
         if (selected && *selected != folder) {
             workspace.select_collection(source.key + (*selected == "." ? "" : "/" + *selected));
             if (workspace.caption_editor.key != identity) return;
@@ -598,6 +619,7 @@ namespace genesia::editor {
             ImGui::TextWrapped("%s", folder == "." ? "Concept root" : folder.c_str());
             const auto directory = std::ranges::find(source.folders, folder, &caption::Folder::path);
             ImGui::TextDisabled("%zu direct / %zu including descendants", directory->direct, directory->total);
+            if (directory->excluded) ImGui::TextDisabled("Bypassed / excluded from export");
             if (folder != ".") {
                 const auto path      = files::path(folder);
                 const auto inherited = caption::compose(caption::resolve(source.document, source.key, path.has_parent_path() ? files::utf8(path.parent_path()) : "."));
@@ -651,19 +673,21 @@ namespace genesia::editor {
     void export_controls(Workspace& workspace, const caption::Dataset& source) {
         auto& path = workspace.export_paths.try_emplace(source.key, files::utf8(project::directory.parent_path() / "exports" / "lora" / files::path(source.key))).first->second;
         ImGui::Spacing();
-        ImGui::TextDisabled("Export entire concept");
+        ImGui::TextDisabled("Export concept");
         ImGui::TextWrapped("%s", source.key.c_str());
         ImGui::TextDisabled("New output directory");
         ImGui::SetNextItemWidth(-1);
         ImGui::InputText("##ExportPath", &path);
-        ImGui::TextWrapped("Independent PNG copies with complete .txt captions. Source images stay unchanged.");
+        ImGui::TextWrapped("Independent PNG copies, complete .txt captions and foreground -masklabel.png files for OneTrainer. Missing masks are computed automatically. Source images stay unchanged.");
+        const auto total = std::ranges::find(source.folders, std::string_view{"."}, &caption::Folder::path)->total;
+        ImGui::TextDisabled("%zu images to export / %zu bypassed", source.export_images, total - source.export_images);
         if (!source.issue.empty()) {
             ImGui::TextColored({0.95F, 0.49F, 0.42F, 1}, "Duplicate images / export unavailable");
             if (ImGui::TreeNodeEx("Conflict paths", ImGuiTreeNodeFlags_NoTreePushOnOpen)) ImGui::TextWrapped("%s", source.issue.c_str());
         }
         if (!source.missing_tags.empty()) {
             ImGui::TextColored({0.98F, 0.34F, 0.32F, 1}, "%zu directories need their own tags", source.missing_tags.size());
-            ImGui::TextWrapped("Inherited tags do not count. Empty directories also need their own tags.");
+            ImGui::TextWrapped("Inherited tags do not count. Empty directories also need their own tags. Bypassed subtrees are excluded from this check.");
             for (const auto& folder : source.missing_tags) {
                 const auto label = folder == "." ? std::string{"Concept root"} : folder;
                 ImGui::PushID(folder.c_str());
@@ -683,8 +707,7 @@ namespace genesia::editor {
                 }
             }
         }
-        const auto total = std::ranges::find(source.folders, std::string_view{"."}, &caption::Folder::path)->total;
-        ImGui::BeginDisabled(workspace.session_state.active.has_value() || !source.issue.empty() || !source.missing_tags.empty() || !workspace.root->ready || total == 0 || path.empty());
+        ImGui::BeginDisabled(workspace.session_state.active.has_value() || !source.issue.empty() || !source.missing_tags.empty() || !workspace.root->ready || source.export_images == 0 || path.empty());
         if (ImGui::Button("Export", {-FLT_MIN, 0})) {
             try {
                 workspace.submit_task({runtime::Export{source.key, files::path(path)}});
@@ -704,30 +727,58 @@ namespace genesia::editor {
     }
 
     void model_controls(Workspace& workspace) {
-        const auto& key = workspace.collection_key;
-        auto& controls = workspace.lora_controls[key];
+        const auto& key       = workspace.collection_key;
+        auto& controls        = workspace.model_settings.at(key);
+        auto& path            = workspace.lora_paths[key];
+        const bool replacing  = workspace.session_state.active && workspace.session_state.active->concept_key == key && workspace.session_state.active->kind == runtime::Kind::lora;
         const auto registered = workspace.library.loras.find(key);
-        const auto* model = registered != workspace.library.loras.end() && registered->second ? &*registered->second : nullptr;
+        const auto* model     = registered != workspace.library.loras.end() && registered->second ? &*registered->second : nullptr;
         if (model) {
             ImGui::TextWrapped("%s", model->name.c_str());
             ImGui::TextDisabled("SHA %.12s", model->sha.c_str());
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", model->sha.c_str());
-            ImGui::TextUnformatted("Strength");
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            ImGui::InputFloat("##LoraWeight", &controls.weight, 0.05F, 0.1F, "%.2f");
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("LoRA strength for the next submission. 0 disables it; 1 uses its original strength.");
+            ImGui::BeginDisabled(replacing);
+            // Keep the numeric value current so closing the window can save an active edit.
+            ImGui::PushItemFlag(ImGuiItemFlags_LiveEditOnInputScalar, true);
+            for (const bool start : {false, true}) {
+                const char* id   = start ? "##LoraStart" : "##LoraWeight";
+                auto& value      = start ? controls.lora->start : controls.lora->weight;
+                const auto input = ImGui::GetID(id);
+                ImGui::TextUnformatted(start ? "Start" : "Strength");
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                const bool changed = ImGui::InputFloat(id, &value, start ? 5 : 0.05F, start ? 10 : 0.1F, start ? "%.1f%%" : "%.2f");
+                if (changed && start) value = std::clamp(value, 0.0F, 100.0F);
+                controls.dirty |= changed;
+                const bool editing = ImGui::GetActiveID() == input;
+                if (editing) workspace.editing_model = key;
+                if ((changed && !editing) || ImGui::IsItemDeactivatedAfterEdit()) workspace.save_model_settings(key);
+                if (ImGui::IsItemHovered()) {
+                    if (start) ImGui::SetTooltip("Enable LoRA at this point in the full denoising schedule.\n0%%: entire image; 100%%: never.\nRepaint starts at its existing noise level. Changes apply to the next submission.");
+                    else ImGui::SetTooltip("LoRA strength for the next submission. 0 disables it; 1 uses its original strength.");
+                }
+            }
+            ImGui::PopItemFlag();
+            ImGui::EndDisabled();
             ImGui::TextDisabled("%s", controls.active ? "Active / middle-click concept to deactivate" : "Middle-click concept to activate");
         }
         ImGui::Spacing();
         ImGui::TextDisabled("Drop a .safetensors file here or paste its path");
         ImGui::BeginDisabled(workspace.session_state.active.has_value());
         ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::InputTextWithHint("##LoraPath", "Model path", controls.path.data(), controls.path.size());
-        ImGui::BeginDisabled(controls.path[0] == '\0');
-        if (ImGui::Button(model ? "Replace model" : "Import model", {-FLT_MIN, 0})) workspace.submit_task({runtime::LoraModel{key, files::path(controls.path.data())}});
+        ImGui::InputTextWithHint("##LoraPath", "Model path", path.data(), path.size());
+        ImGui::BeginDisabled(path[0] == '\0');
+        const bool import_model = ImGui::Button(model ? "Replace model" : "Import model", {-FLT_MIN, 0});
         ImGui::EndDisabled();
-        if (model && ImGui::Button("Remove model", {-FLT_MIN, 0})) workspace.submit_task({runtime::LoraModel{key, {}, true}});
+        const bool remove = model && ImGui::Button("Remove model", {-FLT_MIN, 0});
         ImGui::EndDisabled();
+        if (import_model || remove) {
+            try {
+                workspace.submit_task({runtime::LoraModel{key, remove ? std::filesystem::path{} : files::path(path.data()), remove}});
+            } catch (const std::exception& failure) {
+                workspace.action_error = failure.what();
+                workspace.shown_error.clear();
+            }
+        }
         operation_activity(workspace, {runtime::Kind::lora}, key);
     }
 
@@ -754,13 +805,8 @@ namespace genesia::editor {
             ImGui::EndCombo();
         }
         const bool busy = workspace.session_state.active.has_value();
-        ImGui::BeginDisabled(busy);
-        ImGui::BeginDisabled(!source.model);
+        ImGui::BeginDisabled(busy || !source.model);
         if (ImGui::Button("Refresh audit", {-FLT_MIN, 0})) workspace.open_audit(workspace.audit_key, true);
-        ImGui::EndDisabled();
-        if (ImGui::Button("Undo move", {-FLT_MIN, 0})) {
-            workspace.submit_task({runtime::Undo{workspace.audit_key}});
-        }
         ImGui::EndDisabled();
         if (!workspace.audit_report.concept_key.empty() && !workspace.audit_collection.images.empty()) {
             const auto& file = workspace.audit_collection.images[workspace.audit_position.index];
@@ -785,6 +831,6 @@ namespace genesia::editor {
                 ImGui::EndDisabled();
             }
         }
-        operation_activity(workspace, {runtime::Kind::audit, runtime::Kind::fix, runtime::Kind::undo}, workspace.audit_key);
+        operation_activity(workspace, {runtime::Kind::audit, runtime::Kind::fix}, workspace.audit_key);
     }
 } // namespace genesia::editor

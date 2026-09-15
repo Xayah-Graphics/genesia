@@ -4,7 +4,6 @@ module;
 #include <genesia/cuda.h>
 #include <nlohmann/json.hpp>
 module genesia.models.sdxl.weights;
-import genesia.models.sdxl.lora;
 import genesia.project;
 import std;
 
@@ -13,19 +12,62 @@ namespace genesia::sdxl {
         if (std::ranges::equal(applied, loras)) return;
         files::SafeFile base{checkpoint};
         std::vector<std::unique_ptr<Adapter>> adapters;
-        std::set<std::string> changed = patched;
+        std::map<std::string, Target> changed;
+        for (const auto& name : patched) changed.emplace(name, targets.at(name));
         for (const auto& selection : loras) {
             auto adapter = std::make_unique<Adapter>(project::directory / files::path(selection.concept_key) / ".genesia" / "models" / (selection.sha + ".safetensors"), base);
-            for (const auto& [name, layer] : adapter->layers) changed.insert(name);
+            for (const auto& [name, layer] : adapter->layers) changed.emplace(name, targets.at(name));
             adapters.push_back(std::move(adapter));
         }
+        merge(base, loras, adapters, changed, runtime);
+        patched.clear();
+        for (const auto& adapter : adapters)
+            for (const auto& [name, layer] : adapter->layers) patched.insert(name);
+        applied.assign(loras.begin(), loras.end());
+    }
+
+    Weights::Variant Weights::variant(const std::filesystem::path& checkpoint, const std::span<const generation::Lora> loras, const std::span<const generation::Lora> added, const Variant& previous, compute::InferenceRuntime& runtime) {
+        files::SafeFile base{checkpoint};
+        std::vector<std::unique_ptr<Adapter>> adapters;
+        std::map<std::string, Target> changed;
+        std::set<std::size_t> blocks;
+        for (const auto& selection : loras) {
+            auto adapter = std::make_unique<Adapter>(project::directory / files::path(selection.concept_key) / ".genesia" / "models" / (selection.sha + ".safetensors"), base);
+            if (std::ranges::contains(added, selection.concept_key, &generation::Lora::concept_key))
+                for (const auto& [name, layer] : adapter->layers) {
+                    const auto& target = targets.at(name);
+                    changed.emplace(name, target);
+                    blocks.insert(target.block);
+                }
+            adapters.push_back(std::move(adapter));
+        }
+        Variant result;
+        result.bindings = previous.bindings;
+        // Fused QKV matrices share an allocation; preserve its untouched slices.
+        for (const auto block : blocks) {
+            const auto& original = storage[block];
+            auto& copy           = result.storage.emplace_back(runtime.stream, ::cuda::device_default_memory_pool(runtime.stream.device()), original.size(), ::cuda::no_init);
+            const auto parent    = previous.bindings.find(original.data());
+            const auto* source   = parent == previous.bindings.end() ? original.data() : static_cast<const std::byte*>(parent->second);
+            ::cuda::copy_bytes(runtime.stream, ::cuda::std::span<const std::byte>{source, original.size()}, copy);
+            result.bindings[original.data()] = copy.data();
+        }
+        for (auto& [name, target] : changed) {
+            const auto* original = storage[target.block].data();
+            const auto offset    = static_cast<const std::byte*>(target.view.data) - original;
+            target.view.data     = static_cast<std::byte*>(result.bindings.at(original)) + offset;
+        }
+        merge(base, loras, adapters, changed, runtime);
+        return result;
+    }
+
+    void Weights::merge(const files::SafeFile& base, const std::span<const generation::Lora> loras, const std::span<const std::unique_ptr<Adapter>> adapters, const std::map<std::string, Target>& destinations, compute::InferenceRuntime& runtime) {
         runtime.begin_preparation();
         const auto stream = runtime.stream;
         const auto pool   = ::cuda::device_default_memory_pool(stream.device());
         static const std::map<std::string, compute::Scalar> types{{"F16", compute::Scalar::f16}, {"F32", compute::Scalar::f32}, {"BF16", compute::Scalar::bf16}};
         try {
-            for (const auto& name : changed) {
-                const auto& target = targets.at(name);
+            for (const auto& [name, target] : destinations) {
                 const auto& entry  = base.header.at(name);
                 const auto shape   = entry.at("shape").get<std::vector<int>>();
                 const auto offsets = entry.at("data_offsets").get<std::array<std::size_t, 2>>();
@@ -47,10 +89,6 @@ namespace genesia::sdxl {
             throw;
         }
         stream.sync();
-        patched.clear();
-        for (const auto& adapter : adapters)
-            for (const auto& [name, layer] : adapter->layers) patched.insert(name);
-        applied.assign(loras.begin(), loras.end());
     }
 
     Checkpoint::Checkpoint(const std::filesystem::path& path, compute::InferenceRuntime& execution, Weights& storage) : runtime{execution}, file{path}, weights{storage} {}
@@ -109,6 +147,6 @@ namespace genesia::sdxl {
             else if (transpose) compute::kernels::convert_layout(runtime.stream, destination.data, source.data(), 1, destination.w, destination.c, int(scalar), int(destination.scalar));
             else compute::kernels::convert(runtime.stream, destination.data, source.data(), destination.elements(), int(scalar), int(destination.scalar));
         }
-        if (name.starts_with("model.diffusion_model.") && name.ends_with(".weight") && entry.at("shape").size() >= 2) weights.targets.emplace(name, Weights::Target{destination, convolution});
+        if (name.starts_with("model.diffusion_model.") && name.ends_with(".weight") && entry.at("shape").size() >= 2) weights.targets.emplace(name, Weights::Target{destination, weights.storage.size() - 1, convolution});
     }
 } // namespace genesia::sdxl

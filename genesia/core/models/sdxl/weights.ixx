@@ -5,6 +5,7 @@ module;
 
 export module genesia.models.sdxl.weights;
 import genesia.io.safetensors;
+import genesia.models.sdxl.lora;
 import std;
 import genesia.compute.inference;
 import genesia.generation.settings;
@@ -14,13 +15,21 @@ export namespace genesia::sdxl {
         std::deque<::cuda::device_buffer<std::byte>> storage;
         struct Target final {
             compute::TensorView view;
+            std::size_t block;
             bool convolution{};
         };
         std::map<std::string, Target> targets;
         std::vector<generation::Lora> applied;
+        struct Variant final {
+            std::vector<::cuda::device_buffer<std::byte>> storage;
+            std::map<const void*, void*> bindings;
+        };
         void apply(const std::filesystem::path& checkpoint, std::span<const generation::Lora> loras, compute::InferenceRuntime& runtime);
+        Variant variant(const std::filesystem::path& checkpoint, std::span<const generation::Lora> loras, std::span<const generation::Lora> added, const Variant& previous, compute::InferenceRuntime& runtime);
+
     private:
         std::set<std::string> patched;
+        void merge(const files::SafeFile& base, std::span<const generation::Lora> loras, std::span<const std::unique_ptr<Adapter>> adapters, const std::map<std::string, Target>& destinations, compute::InferenceRuntime& runtime);
     };
 
     struct Checkpoint final {

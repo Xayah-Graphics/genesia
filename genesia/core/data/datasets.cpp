@@ -35,6 +35,7 @@ namespace genesia::dataset {
             const auto issue = lora_issue(root, result.key);
             if (!issue.empty()) throw std::runtime_error{issue};
         }
+        if (result.type != type) std::filesystem::remove(result.path / ".genesia" / "editor.json");
         result.type = type;
         files::write_json(result.path / ".genesia" / "concept.json", result);
         return result;
@@ -43,7 +44,7 @@ namespace genesia::dataset {
         if (!dirty) return;
         nlohmann::json files = nlohmann::json::object();
         for (const auto& [entity, entry] : cache) files[entity] = {{"modified", entry.modified}, {"bytes", entry.bytes}, {"sha", entry.sha}, {"width", entry.width}, {"height", entry.height}};
-        files::write_json(project::state_directory / "hashes.json", {{"version", 1}, {"files", std::move(files)}});
+        files::write_json(std::filesystem::path{project::cache} / "hashes.json", {{"version", 1}, {"files", std::move(files)}});
         dirty = false;
     }
     void Index::scan(const std::string_view name) {
@@ -181,7 +182,7 @@ namespace genesia::dataset {
     }
     void Index::load_cache() {
         if (loaded) return;
-        const auto cache_path = project::state_directory / "hashes.json";
+        const auto cache_path = std::filesystem::path{project::cache} / "hashes.json";
         if (std::filesystem::exists(cache_path)) {
             std::ifstream input{cache_path};
             input.exceptions(std::ios::badbit | std::ios::failbit);

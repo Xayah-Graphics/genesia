@@ -5,8 +5,8 @@ build*
 /install/
 /data/
 /assets/classifier/
+/assets/birefnet/
 /assets/prompts/
 AGENTS.md
 TODO.md
-/.genesia/
 /exports/

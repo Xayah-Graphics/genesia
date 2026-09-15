@@ -52,14 +52,16 @@ export namespace genesia::sdxl {
         std::vector<SpatialTransformer> transformers;
         compute::Conv resize;
     };
-    struct UNetState final {
-        ::cuda::std::span<__half> current;
-        ::cuda::std::span<__half> sequence;
-        std::vector<::cuda::device_buffer<__half>> skips;
+    struct UNetCondition final {
         std::vector<::cuda::device_buffer<__half>> time_storage;
         std::vector<compute::TensorView> time;
         std::vector<::cuda::device_buffer<__half>> context_storage;
         std::vector<std::array<compute::TensorView, 2>> context;
+    };
+    struct UNetState final {
+        ::cuda::std::span<__half> current;
+        ::cuda::std::span<__half> sequence;
+        std::vector<::cuda::device_buffer<__half>> skips;
         ::cuda::device_buffer<std::int32_t> lengths;
         int height;
         int width;
@@ -81,7 +83,8 @@ export namespace genesia::sdxl {
         compute::Conv output;
 
         explicit UNet(Checkpoint& source);
-        void prepare(UNetState& state, compute::TensorView context, compute::TensorView condition, const float* times, int steps, compute::InferenceRuntime& runtime, const Workspace& scratch) const;
-        void forward(compute::TensorView output, compute::TensorView input, const int* step, UNetState& state, compute::InferenceRuntime& runtime, const Workspace& scratch) const;
+        void bind(const std::map<const void*, void*>& weights);
+        void prepare(UNetCondition& state, compute::TensorView context, compute::TensorView condition, const float* times, int steps, compute::InferenceRuntime& runtime, const Workspace& scratch) const;
+        void forward(compute::TensorView output, compute::TensorView input, const int* step, UNetState& state, const UNetCondition& condition, compute::InferenceRuntime& runtime, const Workspace& scratch) const;
     };
 } // namespace genesia::sdxl

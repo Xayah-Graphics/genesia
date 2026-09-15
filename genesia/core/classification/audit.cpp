@@ -1,7 +1,7 @@
 module genesia.classification.audit;
 import genesia.models.registry;
 import genesia.training.samples;
-import genesia.data.transactions;
+import genesia.data.operations;
 import genesia.io.files;
 import std;
 namespace genesia::classification {
@@ -60,9 +60,6 @@ namespace genesia::classification {
             const auto directory = (source.root / files::path(category) / path.lexically_relative(old_class)).parent_path();
             moves.push_back({path, directory / std::format("{:05}.png", ++numbers[directory]), sample->file.sha});
         }
-        return dataset::move_images(std::move(moves), source.root / ".genesia" / "audit-moves.json");
-    }
-    dataset::MoveResult undo(const training::TrainingData& source) {
-        return dataset::undo_moves(source.root / ".genesia" / "audit-moves.json");
+        return dataset::move_images(std::move(moves));
     }
 } // namespace genesia::classification

@@ -42,10 +42,6 @@ namespace genesia::sdxl {
         stream.sync();
     }
 
-    void Model::apply_loras(const std::span<const generation::Lora> loras) {
-        weights.apply(checkpoint, loras, runtime);
-    }
-
     Model::Network::Network(Checkpoint&& checkpoint) : clip_l{checkpoint, false}, clip_g{checkpoint, true}, unet{checkpoint}, vae{checkpoint} {}
 
     Output::Output(const ::cuda::stream_ref stream, const int w, const int h) : pixels{stream, ::cuda::pinned_default_memory_pool(), std::size_t(w) * h * 3, ::cuda::no_init}, width{w}, height{h}, stream{stream} {}
@@ -62,6 +58,30 @@ namespace genesia::sdxl {
             resident_bytes  = total - free;
             prepare_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
             return;
+        }
+        // Repaint runs the tail of the same full schedule used by prepare_schedule.
+        const int total = static_cast<int>(parameters.steps / double(parameters.denoise));
+        std::map<int, std::vector<generation::Lora>> starts{{0, {}}};
+        for (auto selection : parameters.loras) {
+            if (selection.weight == 0) continue;
+            for (int i = 0; i < parameters.steps; ++i)
+                if (float(total - parameters.steps + i) / total >= selection.start) {
+                    selection.start = 0;
+                    starts[i].push_back(std::move(selection));
+                    break;
+                }
+        }
+        std::vector<generation::Lora> active;
+        for (auto current = starts.begin(); current != starts.end(); ++current) {
+            active.append_range(current->second);
+            std::ranges::sort(active, {}, &generation::Lora::concept_key);
+            const auto next = std::next(current);
+            const int end   = next == starts.end() ? parameters.steps : next->first;
+            Weights::Variant weights;
+            if (phases.empty()) model.weights.apply(model.checkpoint, active, model.runtime);
+            else weights = model.weights.variant(model.checkpoint, active, current->second, phases.back().weights, model.runtime);
+            auto& phase = phases.emplace_back(end, std::move(weights), model.network.unet);
+            phase.network.bind(phase.weights.bindings);
         }
         // The sampling and decoder phases reuse the same activation storage.
         auto* activation                   = reinterpret_cast<__half*>(decoder.data());
@@ -90,17 +110,18 @@ namespace genesia::sdxl {
         kernels::time_embedding(stream, geometry.data(), geometry_input.data(), 6, 256, 0);
         kernels::conditions(stream, condition.data(), g.pooled.data(), geometry.data());
         kernels::prepare_schedule(stream, schedule.data(), times.data(), model.training.data(), parameters.steps, parameters.denoise);
-        model.network.unet.prepare(unet, {context.data(), 2, 1, length, 2048}, {condition.data(), 2, 1, 1, 2816}, times.data(), parameters.steps, model.runtime, unet_layout.view(workspace.data()));
+        for (auto& phase : phases) phase.network.prepare(phase.condition, {context.data(), 2, 1, length, 2048}, {condition.data(), 2, 1, 1, 2816}, times.data(), parameters.steps, model.runtime, unet_layout.view(workspace.data()));
         ::cuda::fill_bytes(stream, seed, 0u);
         kernels::initialize(stream, latent.data(), input.data(), step.data(), seed.data(), schedule.data(), static_cast<int>(latent.size()), source ? source->latent.data() : nullptr, parameters.denoise == 1);
-        denoise();
+        // All phases have identical operator shapes and share the prepared plans.
+        denoise(phases.front());
         decode();
         operator_workspace = model.runtime.finish_preparation();
         compute::check(cudaEventCreate(std::out_ptr(initialized)));
         compute::check(cudaEventCreate(std::out_ptr(sampled)));
         compute::check(cudaEventCreate(std::out_ptr(decoded_event)));
         compute::check(cudaGraphCreate(std::out_ptr(graph), 0));
-        compute::check(cudaGraphConditionalHandleCreate(&loop, graph.get(), 1, cudaGraphCondAssignDefault));
+        for (auto& phase : phases) compute::check(cudaGraphConditionalHandleCreate(&phase.loop, graph.get(), 1, cudaGraphCondAssignDefault));
         compute::check(cudaGraphConditionalHandleCreate(&decode_condition, graph.get(), 0, cudaGraphCondAssignDefault));
         try {
             compute::check(cudaStreamBeginCaptureToGraph(stream.get(), graph.get(), nullptr, nullptr, 0, cudaStreamCaptureModeThreadLocal));
@@ -108,23 +129,26 @@ namespace genesia::sdxl {
             cudaStreamCaptureStatus status;
             const cudaGraphNode_t* dependencies{};
             std::size_t dependency_count{};
-            compute::check(cudaStreamGetCaptureInfo(stream.get(), &status, nullptr, nullptr, &dependencies, nullptr, &dependency_count));
-            const std::vector<cudaGraphNode_t> prefix{dependencies, dependencies + dependency_count};
             cudaGraph_t captured{};
-            compute::check(cudaStreamEndCapture(stream.get(), &captured));
             cudaGraphNodeParams node{};
-            node.type               = cudaGraphNodeTypeConditional;
-            node.conditional.handle = loop;
-            node.conditional.type   = cudaGraphCondTypeWhile;
-            node.conditional.size   = 1;
-            cudaGraphNode_t while_node{};
-            compute::check(cudaGraphAddNode(&while_node, graph.get(), prefix.data(), nullptr, prefix.size(), &node));
-            const cudaGraph_t body = node.conditional.phGraph_out[0];
-            compute::check(cudaStreamBeginCaptureToGraph(stream.get(), body, nullptr, nullptr, 0, cudaStreamCaptureModeThreadLocal));
-            denoise();
-            kernels::advance(stream, step.data(), parameters.steps, loop, decode_condition, &control);
-            compute::check(cudaStreamEndCapture(stream.get(), &captured));
-            compute::check(cudaStreamBeginCaptureToGraph(stream.get(), graph.get(), &while_node, nullptr, 1, cudaStreamCaptureModeThreadLocal));
+            node.type             = cudaGraphNodeTypeConditional;
+            node.conditional.size = 1;
+            for (const auto& phase : phases) {
+                if (&phase != &phases.front()) kernels::enter_phase(stream, phase.loop, &control);
+                compute::check(cudaStreamGetCaptureInfo(stream.get(), &status, nullptr, nullptr, &dependencies, nullptr, &dependency_count));
+                const std::vector<cudaGraphNode_t> prefix{dependencies, dependencies + dependency_count};
+                compute::check(cudaStreamEndCapture(stream.get(), &captured));
+                node.conditional.handle = phase.loop;
+                node.conditional.type   = cudaGraphCondTypeWhile;
+                cudaGraphNode_t while_node{};
+                compute::check(cudaGraphAddNode(&while_node, graph.get(), prefix.data(), nullptr, prefix.size(), &node));
+                const cudaGraph_t body = node.conditional.phGraph_out[0];
+                compute::check(cudaStreamBeginCaptureToGraph(stream.get(), body, nullptr, nullptr, 0, cudaStreamCaptureModeThreadLocal));
+                denoise(phase);
+                kernels::advance(stream, step.data(), phase.end, parameters.steps, phase.loop, decode_condition, &control);
+                compute::check(cudaStreamEndCapture(stream.get(), &captured));
+                compute::check(cudaStreamBeginCaptureToGraph(stream.get(), graph.get(), &while_node, nullptr, 1, cudaStreamCaptureModeThreadLocal));
+            }
             compute::check(cudaEventRecordWithFlags(sampled.get(), stream.get(), cudaEventRecordExternal));
             compute::check(cudaStreamGetCaptureInfo(stream.get(), &status, nullptr, nullptr, &dependencies, nullptr, &dependency_count));
             const std::vector<cudaGraphNode_t> decode_prefix{dependencies, dependencies + dependency_count};
@@ -200,10 +224,10 @@ namespace genesia::sdxl {
         return result;
     }
 
-    void Inference::denoise() {
+    void Inference::denoise(const Phase& phase) {
         const int height = parameters.height / 8;
         const int width  = parameters.width / 8;
-        model.network.unet.forward({epsilon.data(), 2, height, width, 4}, {input.data(), 2, height, width, 4}, step.data(), unet, model.runtime, unet_layout.view(workspace.data()));
+        phase.network.forward({epsilon.data(), 2, height, width, 4}, {input.data(), 2, height, width, 4}, step.data(), unet, phase.condition, model.runtime, unet_layout.view(workspace.data()));
         if (snapshots) kernels::snapshot_begin(model.runtime.stream, snapshots->selected.data(), snapshots->slots.data());
         kernels::euler(model.runtime.stream, latent.data(), input.data(), epsilon.data(), schedule.data(), step.data(), parameters.cfg, height * width * 4, snapshots ? snapshots->latent.data() : nullptr, snapshots ? snapshots->selected.data() : nullptr);
         if (snapshots) kernels::snapshot_publish(model.runtime.stream, snapshots->selected.data(), snapshots->slots.data(), step.data());

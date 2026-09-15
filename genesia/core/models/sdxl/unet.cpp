@@ -134,7 +134,32 @@ namespace genesia::sdxl {
         output = source.convolution(root + "out.2", compute::Scalar::f16);
     }
 
-    void UNet::prepare(UNetState& state, const compute::TensorView context, const compute::TensorView condition, const float* times, const int steps, compute::InferenceRuntime& runtime, const Workspace& scratch) const {
+    void UNet::bind(const std::map<const void*, void*>& weights) {
+        const auto matrix = [&](compute::TensorView& view) {
+            if (const auto found = weights.find(view.data); found != weights.end()) view.data = found->second;
+        };
+        const auto residual = [&](Residual& block) {
+            for (auto* view : {&block.conv1.weight, &block.conv2.weight, &block.time.weight, &block.shortcut.weight}) matrix(*view);
+        };
+        const auto transformer = [&](SpatialTransformer& block) {
+            matrix(block.input.weight);
+            for (auto& layer : block.blocks)
+                for (auto* view : {&layer.qkv.weight, &layer.self_output.weight, &layer.query.weight, &layer.kv.weight, &layer.cross_output.weight, &layer.expand.weight, &layer.contract.weight}) matrix(*view);
+            matrix(block.output.weight);
+        };
+        for (auto* view : {&time_input.weight, &time_output.weight, &label_input.weight, &label_output.weight, &input.weight, &output.weight}) matrix(*view);
+        for (auto* stages : {&down, &up})
+            for (auto& stage : *stages) {
+                for (auto& block : stage.residuals) residual(block);
+                for (auto& block : stage.transformers) transformer(block);
+                matrix(stage.resize.weight);
+            }
+        residual(middle_input);
+        transformer(middle);
+        residual(middle_output);
+    }
+
+    void UNet::prepare(UNetCondition& state, const compute::TensorView context, const compute::TensorView condition, const float* times, const int steps, compute::InferenceRuntime& runtime, const Workspace& scratch) const {
         auto embeddings                         = ::cuda::device_buffer<__half>{runtime.stream, ::cuda::device_default_memory_pool(runtime.stream.device()), steps * 320uz, ::cuda::no_init};
         const compute::TensorView expanded      = scratch.hidden.reshape(steps, 1, 1, 1280);
         const compute::TensorView time          = scratch.output.reshape(steps, 1, 1, 1280);
@@ -179,7 +204,7 @@ namespace genesia::sdxl {
         }
     }
 
-    void UNet::forward(const compute::TensorView result, const compute::TensorView model_input, const int* step, UNetState& state, compute::InferenceRuntime& runtime, const Workspace& scratch) const {
+    void UNet::forward(const compute::TensorView result, const compute::TensorView model_input, const int* step, UNetState& state, const UNetCondition& condition, compute::InferenceRuntime& runtime, const Workspace& scratch) const {
         compute::TensorView current{state.skips[0].data(), 2, state.height, state.width, 320};
         const compute::TensorView sequence{state.sequence.data(), 2, 1, 1, 1};
         std::size_t skip_index{};
@@ -191,7 +216,7 @@ namespace genesia::sdxl {
             ++skip_index;
         };
         const auto transform = [&](const SpatialTransformer& transformer) {
-            transformer.forward(current, sequence, std::span{state.context}.subspan(context_index, transformer.blocks.size()), state.lengths.data(), runtime, scratch);
+            transformer.forward(current, sequence, std::span{condition.context}.subspan(context_index, transformer.blocks.size()), state.lengths.data(), runtime, scratch);
             context_index += transformer.blocks.size();
         };
         runtime.convolution(current, model_input, input);
@@ -201,7 +226,7 @@ namespace genesia::sdxl {
                 compute::TensorView next = current;
                 next.data                = state.skips[skip_index].data();
                 next.c                   = stage.residuals[i].conv1.weight.n;
-                stage.residuals[i].forward(next, current, state.time[time_index++], step, runtime, scratch);
+                stage.residuals[i].forward(next, current, condition.time[time_index++], step, runtime, scratch);
                 current = next;
                 if (!stage.transformers.empty()) transform(stage.transformers[i]);
                 save_skip();
@@ -214,17 +239,17 @@ namespace genesia::sdxl {
             }
         }
         const compute::TensorView middle_result{state.current.data(), 2, current.h, current.w, current.c};
-        middle_input.forward(middle_result, current, state.time[time_index++], step, runtime, scratch);
+        middle_input.forward(middle_result, current, condition.time[time_index++], step, runtime, scratch);
         current = middle_result;
         transform(middle);
-        middle_output.forward(current, current, state.time[time_index++], step, runtime, scratch);
+        middle_output.forward(current, current, condition.time[time_index++], step, runtime, scratch);
         for (const auto& stage : up) {
             for (std::size_t i = 0; i < stage.residuals.size(); ++i) {
                 const compute::TensorView skip   = skips[--skip_index];
                 const compute::TensorView joined = scratch.combined.reshape(2, current.h, current.w, current.c + skip.c);
                 compute::kernels::group_moments(runtime.stream, scratch.statistics, current.data, skip.data, joined.data, nullptr, nullptr, 2, current.h * current.w, current.c + skip.c, current.c, 1);
                 current.c = stage.residuals[i].conv1.weight.n;
-                stage.residuals[i].forward(current, joined, state.time[time_index++], step, runtime, scratch, true);
+                stage.residuals[i].forward(current, joined, condition.time[time_index++], step, runtime, scratch, true);
                 if (!stage.transformers.empty()) transform(stage.transformers[i]);
             }
             if (stage.resize.weight.data) {

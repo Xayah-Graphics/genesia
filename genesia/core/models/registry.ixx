@@ -15,5 +15,5 @@ export namespace genesia::models {
     Descriptor resolve(std::string_view concept_key, dataset::ConceptType type);
     Descriptor publish(std::string_view concept_key, const std::filesystem::path& file, std::string fingerprint, int step);
     Descriptor import_lora(std::string_view concept_key, const std::filesystem::path& file);
-    void unpublish(std::string_view concept_key);
+    void unpublish(std::string_view concept_key, bool replacing = false);
 } // namespace genesia::models

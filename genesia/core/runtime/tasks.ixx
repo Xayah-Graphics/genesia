@@ -1,5 +1,6 @@
 export module genesia.runtime.tasks;
 export import genesia.data.images;
+export import genesia.segmentation.foreground;
 export import genesia.training;
 export import genesia.classification.audit;
 export import genesia.classification.classify;
@@ -37,9 +38,6 @@ export namespace genesia::runtime {
     struct Fix final {
         std::string concept_key, sha, category;
     };
-    struct Undo final {
-        std::string concept_key;
-    };
     struct Classify final {
         std::string concept_key;
         std::filesystem::path input;
@@ -57,6 +55,7 @@ export namespace genesia::runtime {
     struct Caption final {
         std::string concept_key, folder{"."};
         std::optional<std::vector<std::string>> tags;
+        std::optional<bool> bypass;
     };
     struct Export final {
         std::string concept_key;
@@ -70,17 +69,17 @@ export namespace genesia::runtime {
     struct LoraModelResult final {
         std::optional<models::Descriptor> model;
     };
-    enum class Kind { generate, train, infer, audit, fix, undo, classify, assign, erase, normalize, caption, export_dataset, lora };
-    inline constexpr std::array<std::string_view, 13> kinds{"generate", "train", "infer", "audit", "fix", "undo", "classify", "assign", "delete", "normalize", "caption", "export", "lora"};
-    struct Request final {
-        std::variant<Generate, Train, Infer, Audit, Fix, Undo, Classify, Assign, Delete, Normalize, Caption, Export, LoraModel> operation;
+    struct Mask final {
+        std::filesystem::path input, output;
+        std::optional<dataset::File> file;
     };
-    struct Generated final {
-        std::filesystem::path path;
-        std::uint64_t seed{};
+    enum class Kind { generate, train, infer, audit, fix, classify, assign, erase, normalize, caption, export_dataset, lora, mask };
+    inline constexpr std::array<std::string_view, 13> kinds{"generate", "train", "infer", "audit", "fix", "classify", "assign", "delete", "normalize", "caption", "export", "lora", "mask"};
+    struct Request final {
+        std::variant<Generate, Train, Infer, Audit, Fix, Classify, Assign, Delete, Normalize, Caption, Export, LoraModel, Mask> operation;
     };
     struct Result final {
-        std::variant<std::monostate, Generated, training::State, classification::Result, classification::Audit, dataset::MoveResult, classification::Classification, dataset::Concept, dataset::DeleteResult, dataset::NormalizeResult, caption::Result, caption::Exported, LoraModelResult> value;
+        std::variant<std::monostate, training::State, classification::Result, classification::Audit, dataset::MoveResult, classification::Classification, dataset::Concept, dataset::DeleteResult, dataset::NormalizeResult, caption::Result, caption::Exported, LoraModelResult, foreground::Result> value;
     };
     struct TaskStatus final {
         std::uint64_t id{};
@@ -96,6 +95,9 @@ export namespace genesia::runtime {
         std::shared_ptr<const Request> request;
     };
     enum class EventKind { generated, saved, task };
+    struct GenerationTiming final {
+        double sample{}, decode{}, save{};
+    };
     struct Event final {
         EventKind kind;
         std::uint64_t id{};
@@ -103,6 +105,7 @@ export namespace genesia::runtime {
         std::shared_ptr<const void> frame;
         TaskStatus task;
         std::optional<dataset::File> file;
+        GenerationTiming timing;
     };
     struct PreviewFrame final {
         std::uint64_t id{};

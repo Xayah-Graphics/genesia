@@ -2,6 +2,7 @@ module;
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <nlohmann/json.hpp>
 module genesia.editor.workspace;
 import genesia.project;
 import genesia.generation.defaults;
@@ -90,11 +91,12 @@ namespace genesia::editor {
         if (!changed_roots.empty()) std::ranges::sort(library.roots, [](const dataset::Root& a, const dataset::Root& b) { return a.all.key == "raw" ? b.all.key != "raw" : b.all.key == "raw" ? false : a.all.key < b.all.key; });
         for (auto& [key, info] : changed.concepts) {
             library.concept_errors.erase(key);
+            if (const auto previous = library.concepts.find(key); info.type == dataset::ConceptType::none || (previous != library.concepts.end() && previous->second.type != info.type)) model_settings.erase(key);
             if (info.type != dataset::ConceptType::classifier) library.classifiers.erase(key);
             if (info.type != dataset::ConceptType::lora) {
                 library.captions.erase(key);
                 library.loras.erase(key);
-                lora_controls.erase(key);
+                lora_paths.erase(key);
                 if (key == collection_key) {
                     caption_folder = ".";
                     caption_editor = {};
@@ -106,11 +108,45 @@ namespace genesia::editor {
         }
         for (auto& [key, info] : changed.classifiers) library.classifiers[key] = std::move(info);
         for (auto& [key, info] : changed.captions) library.captions[key] = std::move(info);
-        for (auto& [key, info] : changed.loras) {
-            if (!info) lora_controls[key].active = false;
-            library.loras[key] = std::move(info);
-        }
+        for (auto& [key, info] : changed.loras) library.loras[key] = std::move(info);
         for (auto& [key, error] : changed.concept_errors) library.concept_errors[key] = std::move(error);
+        // Restore each concept only after its model registration has arrived.
+        for (const auto& [key, info] : changed.concepts) {
+            const auto& assigned = library.concepts.at(key);
+            if (assigned.type == dataset::ConceptType::none || library.concept_errors.contains(key)) continue;
+            const auto path = assigned.path / ".genesia" / "editor.json";
+            try {
+                const bool restoring = !model_settings.contains(key);
+                if (restoring) {
+                    ModelSettings controls;
+                    if (assigned.type == dataset::ConceptType::lora) controls.lora.emplace();
+                    if (std::filesystem::exists(path)) {
+                        const auto saved = files::read_json(path);
+                        controls.active  = saved.at("active").get<bool>();
+                        if (controls.lora) {
+                            controls.lora->weight = saved.at("strength").get<float>();
+                            controls.lora->start  = saved.at("start_percent").get<float>();
+                        }
+                    }
+                    model_settings.emplace(key, std::move(controls));
+                }
+                auto& controls            = model_settings.at(key);
+                const bool available      = controls.lora ? library.loras.at(key).has_value() : library.classifiers.at(key).model.has_value();
+                const auto training_state = controls.lora ? nullptr : &library.classifiers.at(key).training;
+                const bool restarting     = training_state && *training_state && (*training_state)->phase != training::Phase::complete;
+                if (!available && !restarting && controls.active) {
+                    controls.active = false;
+                    if (restoring) {
+                        controls.dirty = true;
+                        save_model_settings(key);
+                    }
+                }
+            } catch (const std::exception& failure) {
+                library.concept_errors[key] = files::utf8(path) + ": " + failure.what();
+                action_error                = library.concept_errors.at(key);
+                shown_error.clear();
+            }
+        }
         library.ready |= changed.ready;
         {
             for (const auto& key : changed_roots) {
@@ -136,10 +172,6 @@ namespace genesia::editor {
                     position.selected = candidate->images[index].sha;
                 }
             }
-        }
-        for (const auto& [key, info] : changed.concepts) {
-            const auto found = library.classifiers.find(key);
-            if (found == library.classifiers.end() || !found->second.model) std::erase(activated, key);
         }
         if (!audit_key.empty() && (changed.classifiers.contains(audit_key) || changed.concepts.contains(audit_key))) rebuild_audit();
         if (!changed_roots.empty()) folder_collection = {};
@@ -198,6 +230,28 @@ namespace genesia::editor {
             }
         }
         textures.receive();
+    }
+
+    bool Workspace::save_model_settings(const std::string_view key) {
+        bool saved = true;
+        for (auto& [name, controls] : model_settings) {
+            if (!controls.dirty || (!key.empty() && name != key)) continue;
+            const auto path = library.concepts.at(name).path / ".genesia" / "editor.json";
+            try {
+                nlohmann::json value{{"active", controls.active}};
+                if (controls.lora) {
+                    value["strength"]      = controls.lora->weight;
+                    value["start_percent"] = controls.lora->start;
+                }
+                files::write_json(path, value);
+                controls.dirty = false;
+            } catch (const std::exception& failure) {
+                action_error = files::utf8(path) + ": " + failure.what();
+                shown_error.clear();
+                saved = false;
+            }
+        }
+        return saved;
     }
 
     void Workspace::synchronize_collection() {
@@ -495,8 +549,8 @@ namespace genesia::editor {
         parameters.positive = prompt::compose(*prompt_catalog, submitted.positive);
         parameters.negative = prompt::compose(*prompt_catalog, submitted.negative);
         parameters.loras.clear();
-        for (const auto& [key, controls] : lora_controls)
-            if (controls.active) parameters.loras.push_back({key, {}, controls.weight});
+        for (const auto& [key, controls] : model_settings)
+            if (controls.active && controls.lora) parameters.loras.push_back({key, {}, controls.lora->weight, controls.lora->start / 100});
         if (random_seed) {
             std::random_device random;
             seed = std::uniform_int_distribution<std::uint64_t>{}(random);
@@ -546,11 +600,12 @@ namespace genesia::editor {
         audit_dirty = false;
     }
     std::uint64_t Workspace::submit_task(runtime::Request request) {
-        const bool relocating = std::holds_alternative<runtime::Normalize>(request.operation) || std::holds_alternative<runtime::Fix>(request.operation) || std::holds_alternative<runtime::Undo>(request.operation);
+        if ((std::holds_alternative<runtime::Assign>(request.operation) || std::holds_alternative<runtime::LoraModel>(request.operation)) && !save_model_settings()) throw std::runtime_error{action_error};
+        const bool relocating = std::holds_alternative<runtime::Normalize>(request.operation) || std::holds_alternative<runtime::Fix>(request.operation);
         if (relocating) {
             textures.paused = true;
             textures.request({});
-            runtime.session.observe({});
+            runtime.session.observe({}, {}, false);
         }
         runtime::TaskStatus submitted;
         try {
@@ -569,16 +624,26 @@ namespace genesia::editor {
         const auto id    = event.id;
         const auto state = event.state;
         const auto& key  = event.concept_key;
-        if (kind != runtime::Kind::infer && kind != runtime::Kind::erase) {
+        if (kind != runtime::Kind::infer && kind != runtime::Kind::mask && kind != runtime::Kind::erase) {
             auto& latest = activity[{key, kind}];
             latest       = event;
-            if (kind == runtime::Kind::audit || kind == runtime::Kind::fix || kind == runtime::Kind::undo) latest.result = {};
+            if (kind == runtime::Kind::audit || kind == runtime::Kind::fix) latest.result = {};
+        }
+        if (kind == runtime::Kind::mask) {
+            if (state == runtime::State::complete) {
+                textures.mask_ready(event.image_sha);
+                mask_errors.erase(event.image_sha);
+            } else if (state == runtime::State::failed) mask_errors[event.image_sha] = event.error;
+            return;
         }
         if (kind == runtime::Kind::caption && caption_editor.task == id && state >= runtime::State::complete) {
             caption_editor.task.reset();
             if (state == runtime::State::complete) {
-                caption_editor.saved    = caption::compose(std::get<caption::Result>(event.result.value).tags);
-                caption_editor.input    = caption_editor.saved;
+                const auto& result = std::get<caption::Result>(event.result.value);
+                if (caption_editor.key == key + "/" + result.folder) {
+                    caption_editor.saved = caption::compose(result.tags);
+                    caption_editor.input = caption_editor.saved;
+                }
                 caption_editor.saved_at = glfwGetTime();
                 caption_editor.error.clear();
                 auto continuation = std::exchange(caption_continuation, {});
@@ -591,7 +656,7 @@ namespace genesia::editor {
                 dataset_sidebar.open = true;
             }
         }
-        if ((kind == runtime::Kind::normalize || kind == runtime::Kind::fix || kind == runtime::Kind::undo) && state >= runtime::State::complete) {
+        if ((kind == runtime::Kind::normalize || kind == runtime::Kind::fix) && state >= runtime::State::complete) {
             std::span<const dataset::Move> moves;
             if (const auto* normalized = std::get_if<dataset::NormalizeResult>(&event.result.value)) moves = normalized->renamed;
             else if (const auto* moved = std::get_if<dataset::MoveResult>(&event.result.value)) moves = moved->paths;
@@ -706,12 +771,13 @@ namespace genesia::editor {
 
     void Workspace::observe_inference() {
         if (pending_delete || textures.paused) {
-            runtime.session.observe({});
+            runtime.session.observe({}, {}, false);
             return;
         }
         std::vector<runtime::Infer> wanted;
         for (const auto& file : visible_images)
-            for (const auto& key : activated) {
+            for (const auto& [key, controls] : model_settings) {
+                if (!controls.active || controls.lora) continue;
                 const auto found = library.classifiers.find(key);
                 if (found == library.classifiers.end() || !found->second.model) continue;
                 const auto& model   = *found->second.model;
@@ -719,9 +785,16 @@ namespace genesia::editor {
                 if (prediction_cache.entries.contains({model.sha, file.sha}) || prediction_errors.contains(identity)) continue;
                 if (!prediction_cache.find(model, file.sha)) wanted.push_back({.concept_key = key, .descriptor = model, .file = file});
             }
-        runtime.session.observe(std::move(wanted));
+        std::vector<dataset::File> masks;
+        if (show_foreground)
+            for (const auto& file : visible_images) {
+                const auto cached = textures.entries.find(file.sha);
+                if (mask_visible.contains(file.sha) && cached != textures.entries.end() && cached->second.mask_checked && !cached->second.mask && cached->second.mask_error.empty() && !mask_errors.contains(file.sha)) masks.push_back(file);
+            }
+        runtime.session.observe(std::move(wanted), std::move(masks), show_foreground);
     }
     void Workspace::draw() {
+        const auto previous_model_edit = std::exchange(editing_model, {});
         if (parameter_edit.id && ImGui::GetActiveID() != parameter_edit.id) commit_parameters();
         refresh_at                = std::numeric_limits<double>::infinity();
         frame_time                = glfwGetTime();
@@ -736,22 +809,28 @@ namespace genesia::editor {
         canvas_origin = {dataset_sidebar.width * dataset_sidebar.amount, 0};
         canvas_size   = {std::max(1.0F, size.x - dataset_sidebar.width * dataset_sidebar.amount - prompt_sidebar.width * prompt_sidebar.amount), size.y};
         if (!window.dropped.empty()) {
-            const auto info = library.classifiers.find(collection_key);
-            if (session_state.active) action_error = "Finish the current operation first.";
-            else if (window.dropped.size() != 1) action_error = "Drop one item at a time.";
-            else if (dataset_sidebar.open && concept_tool == ConceptTool::model && library.loras.contains(collection_key)) submit_task({runtime::LoraModel{collection_key, window.dropped.front()}});
-            else if (dataset_sidebar.open && concept_tool == ConceptTool::classify && info != library.classifiers.end() && info->second.model) submit_task({runtime::Classify{collection_key, window.dropped.front()}});
-            else action_error = "Open Model to import a LoRA file, or Classify to classify a folder.";
+            try {
+                const auto info = library.classifiers.find(collection_key);
+                if (session_state.active) action_error = "Finish the current operation first.";
+                else if (window.dropped.size() != 1) action_error = "Drop one item at a time.";
+                else if (dataset_sidebar.open && concept_tool == ConceptTool::model && library.loras.contains(collection_key)) submit_task({runtime::LoraModel{collection_key, window.dropped.front()}});
+                else if (dataset_sidebar.open && concept_tool == ConceptTool::classify && info != library.classifiers.end() && info->second.model) submit_task({runtime::Classify{collection_key, window.dropped.front()}});
+                else action_error = "Open Model to import a LoRA file, or Classify to classify a folder.";
+            } catch (const std::exception& failure) {
+                action_error = failure.what();
+                shown_error.clear();
+            }
             window.dropped.clear();
         }
-        std::string error = action_error;
         {
             auto& session = runtime.session;
-            session.activate(activated);
+            std::vector<std::string> classifiers;
+            for (const auto& [key, controls] : model_settings)
+                if (controls.active && !controls.lora && library.classifiers.at(key).model) classifiers.push_back(key);
+            session.activate(std::move(classifiers));
             const auto* generate = session_state.active ? std::get_if<runtime::Generate>(&session_state.active->request->operation) : nullptr;
             const bool visible   = renderer.visible && generate && ((!generate->source && page == Page::generation) || (repaint && repaint->result.task == session_state.active->id && (viewing == View::comparison || viewing == View::result)));
             session.configure_preview(preview_enabled, visible);
-            if (!session_state.error.empty()) error = session_state.error;
         }
         const auto selected = library.classifiers.find(collection_key);
         runtime.session.select(selected != library.classifiers.end() && ((dataset_sidebar.open && concept_tool == ConceptTool::train) || page == Page::audit) ? collection_key : std::string{});
@@ -765,7 +844,12 @@ namespace genesia::editor {
             return std::pair{editor && editor->escape_owned, editor && editor->focus_input};
         };
         bool dismissing = escape_owned || parameter_edit.id || ImGui::IsAnyItemActive() || ImGui::GetDragDropPayload() || ImGui::GetIO().WantTextInput || (prompt_sidebar.open && editor_state().first) || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
-        if (!renderer.visible) return;
+        if (!renderer.visible) {
+            if (!previous_model_edit.empty()) save_model_settings(previous_model_edit);
+            return;
+        }
+        if (ImGui::Shortcut(ImGuiKey_F1, ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverActive)) show_foreground = false;
+        if (ImGui::Shortcut(ImGuiKey_F2, ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverActive)) show_foreground = true;
         canvas(*this, scale, size);
         sidebar(*this, true, scale, size, {});
         Picture image;
@@ -775,6 +859,7 @@ namespace genesia::editor {
         const auto controls = control_layout(*this, scale, size, image);
         sidebar(*this, false, scale, size, image);
         bottom_controls(*this, scale, size, controls, image);
+        if (!previous_model_edit.empty() && previous_model_edit != editing_model) save_model_settings(previous_model_edit);
         observe_inference();
         top_strip(*this, scale, size);
         preset_dialogs(*this, scale);
@@ -814,6 +899,7 @@ namespace genesia::editor {
             }
             ImGui::EndPopup();
         }
+        const auto& error = session_state.error.empty() ? action_error : session_state.error;
         if (!error.empty() && error != shown_error && !ImGui::IsPopupOpen("Delete image?")) {
             shown_error = error;
             ImGui::OpenPopup("Genesia error");

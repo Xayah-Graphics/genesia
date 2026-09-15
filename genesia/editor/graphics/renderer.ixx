@@ -24,7 +24,7 @@ export namespace genesia::editor {
         void present();
         std::uint64_t texture(vk::Extent2D extent, vk::Format format = vk::Format::eR8G8B8A8Srgb);
         std::uint64_t upload(const Image& image);
-        void upload(std::uint64_t id, const void* rgba, int width, int height, bool initial);
+        void upload(std::uint64_t id, const void* pixels, int width, int height, bool initial);
         void copy(std::uint64_t id, const graphics::Buffer& source, vk::Semaphore semaphore, std::uint64_t ready);
         void discard(vk::Semaphore semaphore, std::uint64_t ready);
         void retire(std::uint64_t id);
