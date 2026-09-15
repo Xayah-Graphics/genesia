@@ -6,7 +6,7 @@ module genesia.editor.panels.sidebars;
 import genesia.editor.widgets.controls;
 import genesia.editor.widgets.tags;
 import genesia.editor.panels.datasets;
-import genesia.editor.prompt.library;
+import genesia.prompt.library;
 import std;
 namespace genesia::editor {
     void preset_dialogs(Workspace& workspace, const float scale) {

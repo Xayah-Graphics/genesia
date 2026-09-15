@@ -12,7 +12,7 @@ import genesia.editor.panels.datasets;
 import genesia.runtime.session;
 import genesia.runtime.catalog;
 import genesia.project;
-import genesia.editor.prompt.library;
+import genesia.prompt.library;
 import genesia.editor.graphics.bridge;
 import std;
 namespace genesia::editor {

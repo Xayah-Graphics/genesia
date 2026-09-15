@@ -1,5 +1,5 @@
 export module genesia.editor.panels.prompts;
-export import genesia.editor.prompt.library;
+export import genesia.prompt.library;
 import genesia.editor.prompt.previews;
 import genesia.editor.platform.window;
 import genesia.editor.graphics.renderer;

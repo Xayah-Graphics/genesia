@@ -1,8 +1,8 @@
-export module genesia.editor.prompt.library;
+export module genesia.prompt.library;
 export import genesia.prompt;
 import std;
 
-export namespace genesia::editor::prompts {
+export namespace genesia::prompts {
     struct Part final {
         std::string name, initial;
         std::vector<std::string> order;
@@ -52,4 +52,4 @@ export namespace genesia::editor::prompts {
     void write_preset(const std::filesystem::path& directory, const Preset& preset, const prompt::Catalog& catalog, bool replace = true);
     std::vector<std::string> list_presets(const std::filesystem::path& directory);
     void export_prompt(const std::filesystem::path& directory, std::string_view name, const Composition& composition);
-} // namespace genesia::editor::prompts
+} // namespace genesia::prompts

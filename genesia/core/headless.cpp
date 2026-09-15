@@ -4,6 +4,7 @@ module;
 module genesia.headless;
 import genesia.runtime.session;
 import genesia.io.files;
+import genesia.prompt.library;
 import std;
 namespace genesia::headless {
     namespace {
@@ -71,10 +72,10 @@ namespace genesia::headless {
         if (arguments.empty() || arguments.front() == "--help") {
             std::println(R"(Genesia {}
 genesia --gui [--preset NAME] [--dataset ROOT[/CONCEPT]]
-genesia generate --prompt-file FILE [--count N] [--seed SEED]
+genesia generate (--preset NAME | --prompt-file FILE) [--count N] [--seed SEED]
                  [--width N] [--height N] [--steps N] [--cfg VALUE] [--activate ROOT/CONCEPT ...]
                  [--lora ROOT/CONCEPT WEIGHT ...] [--lora-start ROOT/CONCEPT FRACTION ...]
-genesia repaint --source PNG --denoise VALUE [--prompt-file FILE]
+genesia repaint --source PNG --denoise VALUE [--preset NAME | --prompt-file FILE]
                 [--count N] [--seed SEED] [--steps N] [--cfg VALUE] [--activate ROOT/CONCEPT ...]
                 [--lora ROOT/CONCEPT WEIGHT ...] [--lora-start ROOT/CONCEPT FRACTION ...]
 genesia concept ROOT/CONCEPT --type none|classifier|lora
@@ -117,8 +118,12 @@ Normalize replaces identical PNG copies in ROOT with hard links and numbers each
 direct images as 00001.png, 00002.png, ... by modification time. Dot directories are skipped.
 All generation outputs are saved into the project data/raw directory.
 Dataset PNG images do not require a Genesia generation record.
-Prompt files contain final positive and negative strings. Headless does not load Editor presets.
-Repaint requires a version 2 Genesia generation record, including when --prompt-file is supplied.
+Prompt files contain final positive and negative strings.
+--preset NAME reads assets/prompts/presets/NAME.json using the same character, category, rule,
+and free prompt composition as the Editor. Preview images are not loaded.
+Choose either --preset or --prompt-file. Generate requires one; neither is selected implicitly.
+Repaint keeps the source prompt unless either option replaces both positive and negative strings.
+Repaint requires a version 2 Genesia generation record, including when either option is supplied.
 Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
                 GENESIA_VERSION);
             return 0;
@@ -149,6 +154,7 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
         std::optional<std::uint64_t> first_seed;
         std::optional<int> width, height, steps;
         std::optional<float> cfg, denoise;
+        std::optional<std::string> preset_name;
         std::vector<std::string> activated;
         std::vector<generation::Lora> loras;
         std::map<std::string, float> lora_starts;
@@ -167,6 +173,7 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
                 if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) throw std::runtime_error{"Invalid value for " + std::string{option}};
             };
             if (option == "--prompt-file" && generating) prompt_file = files::path(argument());
+            else if (option == "--preset" && generating) preset_name = argument();
             else if (option == "--count" && generating) number(count);
             else if (option == "--seed" && generating) number(first_seed.emplace());
             else if (option == "--width" && command == "generate") number(width.emplace());
@@ -214,7 +221,8 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
             else throw std::runtime_error{"Unknown option for this command: " + std::string{option}};
         }
         if (count <= 0) throw std::runtime_error{"Count must be positive"};
-        if (command == "generate" && prompt_file.empty()) throw std::runtime_error{"Generate requires --prompt-file"};
+        if (preset_name && !prompt_file.empty()) throw std::runtime_error{"Choose --preset or --prompt-file"};
+        if (command == "generate" && !preset_name && prompt_file.empty()) throw std::runtime_error{"Generate requires --preset or --prompt-file"};
         if (repaint && (source.empty() || !denoise || *denoise < 0 || *denoise > 1)) throw std::runtime_error{"Repaint requires --source and --denoise in [0,1]"};
         if (command == "train" && !steps_set) throw std::runtime_error{"Training requires --steps"};
         if (command == "concept" && !type_set) throw std::runtime_error{"Specify --type none, classifier or lora"};
@@ -236,6 +244,13 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
                 const auto json = nlohmann::json::parse(file);
                 operation.parameters.positive = json.at("positive").get<std::string>();
                 operation.parameters.negative = json.at("negative").get<std::string>();
+            } else if (preset_name) {
+                const prompt::Catalog catalog;
+                const prompts::Library library{std::filesystem::path{project::assets} / "prompts"};
+                const auto preset = prompts::read_preset(library.directory, *preset_name, catalog);
+                auto text = prompts::compose(library, preset.recipe, catalog).text;
+                operation.parameters.positive = std::move(text[0]);
+                operation.parameters.negative = std::move(text[1]);
             }
             if (width) operation.parameters.width = *width;
             if (height) operation.parameters.height = *height;

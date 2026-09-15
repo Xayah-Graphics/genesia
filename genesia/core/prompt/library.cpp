@@ -1,10 +1,10 @@
 module;
 #include <nlohmann/json.hpp>
-module genesia.editor.prompt.library;
+module genesia.prompt.library;
 import genesia.io.files;
 import std;
 
-namespace genesia::editor::prompts {
+namespace genesia::prompts {
     namespace {
         nlohmann::json read_json(const std::filesystem::path& path) {
             try {
@@ -163,4 +163,4 @@ namespace genesia::editor::prompts {
         file << nlohmann::json{{"positive", composition.text[0]}, {"negative", composition.text[1]}}.dump(2) << '\n';
         file.close();
     }
-} // namespace genesia::editor::prompts
+} // namespace genesia::prompts

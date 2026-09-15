@@ -6,7 +6,7 @@ module;
 module genesia.editor.workspace;
 import genesia.project;
 import genesia.generation.defaults;
-import genesia.editor.prompt.library;
+import genesia.prompt.library;
 import genesia.generation.output;
 import genesia.editor.platform.window;
 import genesia.editor.graphics.renderer;

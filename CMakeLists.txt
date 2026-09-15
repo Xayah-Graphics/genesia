@@ -114,6 +114,7 @@ target_sources(genesia_core
         genesia/core/models/sdxl/weights.cpp
         genesia/core/models/sdxl/workspace.cpp
         genesia/core/prompt/catalog.cpp
+        genesia/core/prompt/library.cpp
         genesia/core/prompt/prompt.cpp
         genesia/core/prompt/search.cpp
         genesia/core/runtime/catalog.cpp
@@ -156,6 +157,7 @@ target_sources(genesia_core
         genesia/core/models/sdxl/workspace.ixx
         genesia/core/project.ixx
         genesia/core/prompt/catalog.ixx
+        genesia/core/prompt/library.ixx
         genesia/core/prompt/prompt.ixx
         genesia/core/prompt/search.ixx
         genesia/core/runtime/catalog.ixx
@@ -213,7 +215,6 @@ if (GENESIA_BUILD_UI)
             genesia/editor/panels/datasets.cpp
             genesia/editor/panels/prompts.cpp
             genesia/editor/panels/sidebars.cpp
-            genesia/editor/prompt/library.cpp
             genesia/editor/prompt/previews.cpp
             genesia/editor/platform/window.cpp
             genesia/editor/viewing/camera.cpp
@@ -235,7 +236,6 @@ if (GENESIA_BUILD_UI)
             genesia/editor/panels/datasets.ixx
             genesia/editor/panels/prompts.ixx
             genesia/editor/panels/sidebars.ixx
-            genesia/editor/prompt/library.ixx
             genesia/editor/prompt/previews.ixx
             genesia/editor/platform/window.ixx
             genesia/editor/viewing/camera.ixx
