@@ -35,9 +35,10 @@ namespace genesia::editor::prompts {
             read_options(json.at("options"), category.order, category.options);
         }
         for (const auto& name : character_order) {
-            const auto root = directory / "characters" / files::path(name);
-            const auto json = read_json(root / "character.json");
-            auto& character = characters[name];
+            const auto root       = directory / "characters" / files::path(name);
+            const auto json       = read_json(root / "character.json");
+            auto& character       = characters[name];
+            character.description = json.at("description");
             for (const auto& input : json.at("parts")) {
                 auto& part   = character.parts.emplace_back();
                 part.name    = input.at("name");

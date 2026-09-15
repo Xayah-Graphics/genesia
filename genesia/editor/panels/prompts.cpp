@@ -148,15 +148,20 @@ namespace genesia::editor {
         constexpr auto card_flags   = ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_Borders;
         constexpr auto window_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
         if (!error.empty()) ImGui::TextWrapped("%s", error.c_str());
+        const auto& style          = ImGui::GetStyle();
+        const float padding_height = 2 * (style.WindowPadding.y + style.CellPadding.y);
+        const float profile_height = 480 * scale;
+        ImGui::SetNextWindowSizeConstraints({0, profile_height}, {std::numeric_limits<float>::max(), std::numeric_limits<float>::max()});
         if (ImGui::BeginChild("##CharacterCard", {0, 0}, card_flags, window_flags)) {
-            const float portrait = std::min(192 * scale, ImGui::GetContentRegionAvail().x * 0.34F);
+            const float portrait_height = profile_height - padding_height;
+            const float portrait        = std::min(portrait_height / 1.5F, ImGui::GetContentRegionAvail().x * 0.44F);
             if (ImGui::BeginTable("##CharacterProfile", 3, ImGuiTableFlags_SizingStretchProp)) {
                 ImGui::TableSetupColumn("Portrait", ImGuiTableColumnFlags_WidthFixed, portrait);
                 ImGui::TableSetupColumn("Gap", ImGuiTableColumnFlags_WidthFixed, 16 * scale);
                 ImGui::TableSetupColumn("Character");
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
-                if (location) picture(location->directory / "profile.png", recipe.character, portrait, portrait * 1.5F, scale);
+                if (location) picture(location->directory / "profile.png", recipe.character, portrait, portrait_height, scale);
                 ImGui::TableSetColumnIndex(2);
                 ImGui::PushFont(nullptr, 20);
                 if (library.character_order.size() == 1) ImGui::TextWrapped("%s", recipe.character.c_str());
@@ -170,10 +175,25 @@ namespace genesia::editor {
                     ImGui::EndCombo();
                 }
                 ImGui::PopFont();
-                ImGui::Dummy({0, 2 * scale});
+                if (!character.description.empty()) {
+                    ImGui::Dummy({0, 4 * scale});
+                    const auto origin = ImGui::GetCursorScreenPos();
+                    ImGui::BeginGroup();
+                    ImGui::Indent(12 * scale);
+                    ImGui::PushFont(nullptr, 11);
+                    ImGui::TextDisabled("ABOUT");
+                    ImGui::PopFont();
+                    ImGui::PushStyleColor(ImGuiCol_Text, {0.69F, 0.73F, 0.79F, 1});
+                    ImGui::TextWrapped("%s", character.description.c_str());
+                    ImGui::PopStyleColor();
+                    ImGui::Unindent(12 * scale);
+                    ImGui::EndGroup();
+                    ImGui::GetWindowDrawList()->AddLine({origin.x, origin.y + 2 * scale}, {origin.x, ImGui::GetItemRectMax().y - 2 * scale}, ImGui::GetColorU32(ImVec4{0.40F, 0.51F, 0.63F, 0.6F}), 2 * scale);
+                }
+                ImGui::Dummy({0, 10 * scale});
                 if (ImGui::BeginTable("##Parts", 2, ImGuiTableFlags_SizingStretchProp)) {
                     ImGui::TableSetupColumn("Part", ImGuiTableColumnFlags_WidthFixed, std::min(108 * scale, ImGui::GetContentRegionAvail().x * 0.36F));
-                    ImGui::TableSetupColumn("Prompt");
+                    ImGui::TableSetupColumn("Option");
                     for (const auto& part : character.parts) {
                         ImGui::PushID(part.name.c_str());
                         const auto& selected = recipe.parts.at(part.name);
@@ -186,7 +206,7 @@ namespace genesia::editor {
                         ImGui::PopTextWrapPos();
                         ImGui::TableSetColumnIndex(1);
                         ImGui::AlignTextToFramePadding();
-                        const auto content = [&](const float width) { option_text(text, "part." + part.name, selected, scale, width); };
+                        const auto content = [&](const float width) { option_text(text, "part." + part.name, selected, scale, width, true); };
                         if (part.options.size() == 1) {
                             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 6 * scale);
                             content(ImGui::GetContentRegionAvail().x);
@@ -235,7 +255,7 @@ namespace genesia::editor {
                             if (option(choice, selected == choice)) next.categories.at(name) = choice;
                         ImGui::EndCombo();
                     }
-                    if (selected) option_text(category.options.at(*selected), "category." + name, *selected, scale, ImGui::GetContentRegionAvail().x);
+                    if (selected) option_text(category.options.at(*selected), "category." + name, *selected, scale, ImGui::GetContentRegionAvail().x, false);
                     ImGui::EndTable();
                 }
             }
@@ -329,7 +349,7 @@ namespace genesia::editor {
         ImGui::PopID();
     }
 
-    void PromptPanel::option_text(const std::array<std::string, 2>& value, const std::string& key, const std::string& name, const float scale, const float width) const {
+    void PromptPanel::option_text(const std::array<std::string, 2>& value, const std::string& key, const std::string& name, const float scale, const float width, const bool name_only) const {
         const std::vector<std::size_t>* reasons{};
         if (composition) {
             const auto found = composition->disabled.find(key);
@@ -338,13 +358,13 @@ namespace genesia::editor {
         ImGui::BeginGroup();
         if (reasons) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0, 0});
-        if (value[0].empty() && value[1].empty()) {
+        if (!name_only && value[0].empty() && value[1].empty()) {
             ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width);
             ImGui::TextDisabled("%s", name.c_str());
             ImGui::PopTextWrapPos();
         }
-        for (std::size_t side = 0; side < 2; ++side) {
-            const auto& text = value[side];
+        for (std::size_t side = 0; side < (name_only ? 1U : value.size()); ++side) {
+            const auto& text = name_only ? name : value[side];
             if (text.empty()) continue;
             if (side) {
                 ImGui::TextDisabled("Negative:");
@@ -377,9 +397,18 @@ namespace genesia::editor {
         if (ImGui::IsItemHovered()) {
             ImGui::BeginTooltip();
             ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28);
-            ImGui::TextUnformatted(name.c_str());
-            if (reasons)
+            if (name_only) {
+                if (value[0].empty() && value[1].empty()) ImGui::TextDisabled("No prompt");
+                for (std::size_t side = 0; side < 2; ++side) {
+                    if (value[side].empty()) continue;
+                    ImGui::TextDisabled(side ? "Negative" : "Positive");
+                    ImGui::TextWrapped("%s", value[side].c_str());
+                }
+            } else ImGui::TextUnformatted(name.c_str());
+            if (reasons) {
+                ImGui::Separator();
                 for (const auto index : *reasons) ImGui::TextWrapped("%s", library.rules[index].reason.c_str());
+            }
             ImGui::PopTextWrapPos();
             ImGui::EndTooltip();
         }

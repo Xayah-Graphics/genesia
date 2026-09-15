@@ -13,6 +13,7 @@ export namespace genesia::editor::prompts {
         std::map<std::string, std::array<std::string, 2>> options;
     };
     struct Character final {
+        std::string description;
         std::vector<Part> parts;
     };
     struct Rule final {

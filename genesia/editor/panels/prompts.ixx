@@ -25,6 +25,6 @@ export namespace genesia::editor {
         std::optional<previews::Location> location;
 
         void picture(const std::filesystem::path& path, const std::string& name, float width, float height, float scale);
-        void option_text(const std::array<std::string, 2>& text, const std::string& key, const std::string& name, float scale, float width) const;
+        void option_text(const std::array<std::string, 2>& text, const std::string& key, const std::string& name, float scale, float width, bool name_only) const;
     };
 } // namespace genesia::editor
