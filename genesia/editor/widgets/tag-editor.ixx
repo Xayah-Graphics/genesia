@@ -3,7 +3,6 @@ module;
 export module genesia.editor.widgets.tags;
 import genesia.prompt;
 export import genesia.prompt.search;
-import genesia.prompt.document;
 import std;
 
 export namespace genesia::editor {
@@ -11,18 +10,6 @@ export namespace genesia::editor {
         std::size_t from_group, from_tag, to_group, to_tag;
     };
     struct TagEditor;
-    struct TagChange final {
-        std::optional<prompt::Tag> original;
-        std::size_t group{}, index{};
-        bool removed{};
-        bool operator==(const TagChange&) const = default;
-    };
-    struct GroupChange final {
-        std::optional<std::size_t> original;
-        bool enabled{true};
-        std::vector<TagChange> tags;
-        bool operator==(const GroupChange&) const = default;
-    };
     struct TagLayout final {
         struct Item final {
             std::string_view text;
@@ -30,16 +17,14 @@ export namespace genesia::editor {
             ImVec2 position;
             float width, weight_width;
             bool input;
-            bool added{};
         };
         std::vector<Item> items;
         float width, height;
         bool input_expanded{};
 
-        TagLayout(const prompt::Group& group, const prompt::Catalog& catalog, float width, float scale, const TagEditor* editor);
+        TagLayout(const prompt::Group& group, const prompt::Catalog& catalog, float width, float scale, const TagEditor& editor);
     };
     struct TagEditor final {
-        std::optional<GroupChange> change;
         std::uint32_t id{};
         bool background_hovered{};
         std::string input;
@@ -67,16 +52,10 @@ export namespace genesia::editor {
         static int input_callback(ImGuiInputTextCallbackData* data);
     };
     struct PromptEditor final {
-        struct Snapshot final {
-            prompt::Pair prompt;
-            std::array<std::vector<std::optional<GroupChange>>, 2> changes;
-            bool operator==(const Snapshot&) const = default;
-        };
         std::array<std::vector<TagEditor>, 2> groups;
         std::array<TagEditor, 2> additions;
         std::array<bool, 2> adding{};
-        std::vector<Snapshot> undo, redo;
-        bool tracking{};
+        std::vector<prompt::Pair> undo, redo;
         std::uint32_t next_id{};
         bool negative_open{};
         bool valid{true};
@@ -84,12 +63,9 @@ export namespace genesia::editor {
 
         void reset(const prompt::Pair& prompt, bool clear_history = true);
         void suspend();
-        Snapshot snapshot(const prompt::Pair& prompt) const;
-        prompt::Pair materialize(const prompt::Pair& prompt) const;
-        void remember(Snapshot before, const prompt::Pair& after);
+        void remember(prompt::Pair before, const prompt::Pair& after);
         bool commit(prompt::Pair& prompt, const prompt::Catalog& catalog);
         void draw_groups(prompt::Side& side, std::size_t side_index, const prompt::TagSearch& search, const prompt::Catalog& catalog, float scale);
         void draw(prompt::Pair& prompt, const prompt::TagSearch& search, const prompt::Catalog& catalog, float scale);
     };
-    void show_prompt(const prompt::Pair& prompt, const prompt::Catalog& catalog, float scale);
 } // namespace genesia::editor

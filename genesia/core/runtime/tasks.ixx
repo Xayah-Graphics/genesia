@@ -15,8 +15,6 @@ export namespace genesia::runtime {
     struct Generate final {
         generation::Settings parameters;
         std::uint64_t seed{};
-        prompt::Pair prompt;
-        std::shared_ptr<const prompt::Catalog> catalog;
         std::optional<RepaintSource> source;
         int count{1};
         bool random_seed{};

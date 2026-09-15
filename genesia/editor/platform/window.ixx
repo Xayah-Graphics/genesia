@@ -2,6 +2,7 @@ module;
 
 #include <Windows.h>
 #include <GLFW/glfw3.h>
+#include <ole2.h>
 
 export module genesia.editor.platform.window;
 
@@ -27,7 +28,9 @@ namespace genesia::editor {
         HWND native_window{};
         std::array<float, 4> drag_region{};
         bool redraw{true};
-        std::vector<std::filesystem::path> dropped;
+        std::vector<std::filesystem::path> dragged, dropped;
+        std::array<float, 2> drop_position{};
+        std::string drop_error;
         std::array<GLFWcursor*, 2> hand_cursors{};
 
     private:
@@ -40,10 +43,28 @@ namespace genesia::editor {
             GlfwLifetime& operator=(const GlfwLifetime&) = delete;
             GlfwLifetime& operator=(GlfwLifetime&&)      = delete;
         };
+        struct OleLifetime {
+            OleLifetime();
+            ~OleLifetime();
+        };
+        struct DropTarget final : IDropTarget {
+            explicit DropTarget(WindowPlatform& window);
+            HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override;
+            ULONG STDMETHODCALLTYPE AddRef() override;
+            ULONG STDMETHODCALLTYPE Release() override;
+            HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* data, DWORD keys, POINTL point, DWORD* effect) override;
+            HRESULT STDMETHODCALLTYPE DragOver(DWORD keys, POINTL point, DWORD* effect) override;
+            HRESULT STDMETHODCALLTYPE DragLeave() override;
+            HRESULT STDMETHODCALLTYPE Drop(IDataObject* data, DWORD keys, POINTL point, DWORD* effect) override;
+
+            WindowPlatform& window;
+            std::atomic<ULONG> references{1};
+        };
 
         static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
         struct {
             GlfwLifetime glfw{};
+            OleLifetime ole{};
             std::unique_ptr<GLFWwindow, decltype(&glfwDestroyWindow)> glfw_window{nullptr, glfwDestroyWindow};
             WNDPROC original_window_proc{};
             WINDOWPLACEMENT windowed_placement{sizeof(WINDOWPLACEMENT)};
@@ -51,5 +72,6 @@ namespace genesia::editor {
             bool fullscreen{};
             bool close_requested{};
         } state;
+        DropTarget drop_target{*this};
     };
 } // namespace genesia::editor

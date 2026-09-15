@@ -12,6 +12,7 @@ export namespace genesia::editor {
             std::uint64_t texture{}, touched{};
             std::size_t bytes{};
             std::string error;
+            std::string record_error;
             std::uint64_t mask{};
             bool mask_checked{};
             std::string mask_error;
@@ -39,6 +40,7 @@ export namespace genesia::editor {
             Image image;
             std::optional<Record> record;
             std::string error;
+            std::string record_error;
             bool mask{};
         };
         Renderer& renderer;

@@ -37,26 +37,11 @@ namespace genesia {
 
     dataset::File save_image(dataset::Index& index, const sdxl::Output& output, const Record& record) {
         const auto model = record.model.u8string();
-        nlohmann::json metadata{{"version", 1}, {"model", std::string{model.begin(), model.end()}}, {"seed", record.seed}, {"steps", record.parameters.steps}, {"cfg", record.parameters.cfg}, {"sampler", "euler"}, {"scheduler", "simple"}};
+        nlohmann::json metadata{{"version", 2}, {"model", std::string{model.begin(), model.end()}}, {"seed", record.seed}, {"steps", record.parameters.steps}, {"cfg", record.parameters.cfg}, {"sampler", "euler"}, {"scheduler", "simple"}, {"prompt", {{"positive", record.parameters.positive}, {"negative", record.parameters.negative}}}};
         if (!record.parameters.loras.empty()) metadata["loras"] = record.parameters.loras;
         if (!record.source.empty()) {
             const auto source   = record.source.u8string();
             metadata["repaint"] = {{"source", std::string{source.begin(), source.end()}}, {"denoise", record.parameters.denoise}};
-        }
-        for (const auto& [name, side, text] : {std::tuple{"positive", &record.prompt.sides[0], &record.parameters.positive}, std::tuple{"negative", &record.prompt.sides[1], &record.parameters.negative}}) {
-            auto& saved     = metadata["prompt"][name];
-            saved["text"]   = *text;
-            saved["fixed"]  = side->fixed;
-            saved["groups"] = nlohmann::json::array();
-            for (const auto& group : side->groups) {
-                nlohmann::json tags = nlohmann::json::array();
-                for (const auto& tag : group.tags) {
-                    const auto& entry = tag;
-                    auto& saved_tag   = tags.emplace_back(nlohmann::json{{"name", entry.name}, {"weight", tag.weight}});
-                    saved_tag["text"] = entry.text;
-                }
-                saved["groups"].push_back({{"enabled", group.enabled}, {"tags", std::move(tags)}});
-            }
         }
         std::string text{"genesia"};
         // iTXt: keyword terminator, compression flag/method, empty language and translated keyword.

@@ -12,7 +12,7 @@ import genesia.editor.panels.datasets;
 import genesia.runtime.session;
 import genesia.runtime.catalog;
 import genesia.project;
-import genesia.prompt.preset;
+import genesia.editor.prompt.library;
 import genesia.editor.graphics.bridge;
 import std;
 namespace genesia::editor {
@@ -189,6 +189,14 @@ namespace genesia::editor {
             ImGui::MenuItem("Live preview", nullptr, &workspace.preview_enabled);
             ImGui::Separator();
             if (ImGui::MenuItem("Save prompt", "Ctrl+S", false, workspace.page == Workspace::Page::generation)) workspace.save_prompt();
+            if (ImGui::MenuItem("View final prompt", nullptr, false, workspace.page == Workspace::Page::generation)) workspace.final_prompt_requested = true;
+            if (ImGui::MenuItem("Export final prompt", nullptr, false, workspace.page == Workspace::Page::generation) && workspace.prepare_prompt()) {
+                try {
+                    prompts::export_prompt(workspace.prompt_library->directory, workspace.preset.name, *workspace.prompt_panel.composition);
+                } catch (const std::exception& failure) {
+                    workspace.preset_error = failure.what();
+                }
+            }
             if (ImGui::MenuItem("Open output folder")) ShellExecuteW(workspace.window.native_window, L"open", project::raw.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
             ImGui::EndPopup();
         }
@@ -230,7 +238,7 @@ namespace genesia::editor {
             ImGui::EndDisabled();
         }
         if (submission) {
-            const bool valid   = workspace.repaint ? workspace.root && workspace.root->ready && workspace.repaints.at(workspace.repaint->source.sha)->editor.valid : workspace.prompt_editor.valid;
+            const bool valid   = workspace.repaint ? workspace.root && workspace.root->ready : workspace.prompt_editor.valid && workspace.prompt_panel.ready;
             const bool enabled = workspace.library.ready && !active && !unavailable && !ImGui::GetTopMostPopupModal() && valid;
             if (ImGui::IsPopupOpen("Generation settings") && ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::IsMouseHoveringRect({maximum.x - primary_width, minimum.y}, maximum) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                 workspace.commit_parameters();

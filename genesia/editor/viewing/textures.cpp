@@ -40,6 +40,7 @@ namespace genesia::editor {
                 }
             } else if (!cached.texture) {
                 cached.record = std::move(result.record);
+                cached.record_error = std::move(result.record_error);
                 cached.error  = std::move(result.error);
                 if (cached.error.empty()) {
                     cached.texture   = renderer.upload(result.image);
@@ -65,6 +66,7 @@ namespace genesia::editor {
             cached.touched   = ++clock;
             cached.bytes += bytes;
             cached.error.clear();
+            cached.record_error.clear();
             texture_bytes += bytes;
         }
         {
@@ -172,8 +174,12 @@ namespace genesia::editor {
                 if (task.mask) {
                     if (auto cached = foreground::read_cached(task.file)) result.image = std::move(*cached);
                 } else {
-                    result.record = read_image_info(task.file.path).record;
                     result.image  = read_image(task.file.path);
+                    try {
+                        result.record = read_record(task.file.path);
+                    } catch (const std::exception& error) {
+                        result.record_error = error.what();
+                    }
                 }
             } catch (const std::exception& error) {
                 result.error = std::format("{}: {}", task.file.path.string(), error.what());

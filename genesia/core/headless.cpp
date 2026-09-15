@@ -3,7 +3,6 @@ module;
 #include <nlohmann/json.hpp>
 module genesia.headless;
 import genesia.runtime.session;
-import genesia.prompt.preset;
 import genesia.io.files;
 import std;
 namespace genesia::headless {
@@ -72,10 +71,10 @@ namespace genesia::headless {
         if (arguments.empty() || arguments.front() == "--help") {
             std::println(R"(Genesia {}
 genesia --gui [--preset NAME] [--dataset ROOT[/CONCEPT]]
-genesia generate [--preset NAME | --prompt-file FILE] [--count N] [--seed SEED]
+genesia generate --prompt-file FILE [--count N] [--seed SEED]
                  [--width N] [--height N] [--steps N] [--cfg VALUE] [--activate ROOT/CONCEPT ...]
                  [--lora ROOT/CONCEPT WEIGHT ...] [--lora-start ROOT/CONCEPT FRACTION ...]
-genesia repaint --source PNG --denoise VALUE [--preset NAME | --prompt-file FILE]
+genesia repaint --source PNG --denoise VALUE [--prompt-file FILE]
                 [--count N] [--seed SEED] [--steps N] [--cfg VALUE] [--activate ROOT/CONCEPT ...]
                 [--lora ROOT/CONCEPT WEIGHT ...] [--lora-start ROOT/CONCEPT FRACTION ...]
 genesia concept ROOT/CONCEPT --type none|classifier|lora
@@ -118,7 +117,8 @@ Normalize replaces identical PNG copies in ROOT with hard links and numbers each
 direct images as 00001.png, 00002.png, ... by modification time. Dot directories are skipped.
 All generation outputs are saved into the project data/raw directory.
 Dataset PNG images do not require a Genesia generation record.
-Repaint without a generation record requires --preset or --prompt-file.
+Prompt files contain final positive and negative strings. Headless does not load Editor presets.
+Repaint requires a version 2 Genesia generation record, including when --prompt-file is supplied.
 Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
                 GENESIA_VERSION);
             return 0;
@@ -153,8 +153,8 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
         std::vector<generation::Lora> loras;
         std::map<std::string, float> lora_starts;
         std::filesystem::path source, prompt_file, config_file;
-        std::string name{defaults::preset}, category;
-        bool named_preset{}, steps_set{}, type_set{};
+        std::string category;
+        bool steps_set{}, type_set{};
         for (std::size_t i = begin; i < arguments.size(); ++i) {
             const auto option   = arguments[i];
             const auto argument = [&]() {
@@ -166,10 +166,7 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
                 const auto parsed = std::from_chars(text.data(), text.data() + text.size(), destination);
                 if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) throw std::runtime_error{"Invalid value for " + std::string{option}};
             };
-            if (option == "--preset" && generating) {
-                name         = argument();
-                named_preset = true;
-            } else if (option == "--prompt-file" && generating) prompt_file = files::path(argument());
+            if (option == "--prompt-file" && generating) prompt_file = files::path(argument());
             else if (option == "--count" && generating) number(count);
             else if (option == "--seed" && generating) number(first_seed.emplace());
             else if (option == "--width" && command == "generate") number(width.emplace());
@@ -217,7 +214,7 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
             else throw std::runtime_error{"Unknown option for this command: " + std::string{option}};
         }
         if (count <= 0) throw std::runtime_error{"Count must be positive"};
-        if (named_preset && !prompt_file.empty()) throw std::runtime_error{"Choose a preset or a prompt file"};
+        if (command == "generate" && prompt_file.empty()) throw std::runtime_error{"Generate requires --prompt-file"};
         if (repaint && (source.empty() || !denoise || *denoise < 0 || *denoise > 1)) throw std::runtime_error{"Repaint requires --source and --denoise in [0,1]"};
         if (command == "train" && !steps_set) throw std::runtime_error{"Training requires --steps"};
         if (command == "concept" && !type_set) throw std::runtime_error{"Specify --type none, classifier or lora"};
@@ -225,25 +222,21 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
         if (command == "lora" && std::get<runtime::LoraModel>(request.operation).remove && !std::get<runtime::LoraModel>(request.operation).input.empty()) throw std::runtime_error{"Choose --import or --remove"};
         if (generating) {
             auto& operation   = std::get<runtime::Generate>(request.operation);
-            operation.catalog = std::make_shared<const prompt::Catalog>();
             if (repaint) {
                 source           = std::filesystem::absolute(source).lexically_normal();
-                const auto image = read_image_info(source);
-                if (image.record) {
-                    auto resolved        = prompt::resolve(image.record->prompt, operation.catalog);
-                    operation.parameters = image.record->parameters;
-                    operation.prompt     = std::move(resolved.prompt);
-                    operation.catalog    = std::move(resolved.catalog);
-                } else if (!named_preset && prompt_file.empty()) throw std::runtime_error{"Repaint of a PNG without a generation record requires --preset or --prompt-file"};
-                operation.parameters.width  = image.width;
-                operation.parameters.height = image.height;
+                const auto record = read_record(source);
+                operation.parameters = record.parameters;
                 dataset::Index index;
-                operation.source             = runtime::RepaintSource{index.identify(source, std::array{image.width, image.height}).sha, source};
+                operation.source             = runtime::RepaintSource{index.identify(source, std::array{record.parameters.width, record.parameters.height}).sha, source};
                 operation.parameters.denoise = *denoise;
             }
-            if (!repaint || named_preset || !prompt_file.empty()) operation.prompt = prompt_file.empty() ? prompt::read_preset(name, *operation.catalog).prompt : prompt::read_prompt(prompt_file, *operation.catalog);
-            operation.parameters.positive = prompt::compose(*operation.catalog, operation.prompt.positive);
-            operation.parameters.negative = prompt::compose(*operation.catalog, operation.prompt.negative);
+            if (!prompt_file.empty()) {
+                std::ifstream file{prompt_file};
+                file.exceptions(std::ios::badbit | std::ios::failbit);
+                const auto json = nlohmann::json::parse(file);
+                operation.parameters.positive = json.at("positive").get<std::string>();
+                operation.parameters.negative = json.at("negative").get<std::string>();
+            }
             if (width) operation.parameters.width = *width;
             if (height) operation.parameters.height = *height;
             if (steps) operation.parameters.steps = *steps;

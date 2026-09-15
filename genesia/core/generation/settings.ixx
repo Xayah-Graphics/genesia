@@ -17,7 +17,7 @@ export namespace genesia::generation {
         json.at("concept").get_to(value.concept_key);
         json.at("sha").get_to(value.sha);
         json.at("weight").get_to(value.weight);
-        value.start = json.value("start", 0.0F);
+        json.at("start").get_to(value.start);
     }
     struct Settings final {
         std::string positive;

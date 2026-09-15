@@ -10,7 +10,6 @@ import genesia.io.files;
 import genesia.runtime.session;
 import genesia.runtime.catalog;
 import genesia.project;
-import genesia.prompt.preset;
 import genesia.editor.graphics.bridge;
 import std;
 namespace genesia::editor {

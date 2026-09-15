@@ -16,6 +16,19 @@ namespace genesia {
         file.read(reinterpret_cast<char*>(signature.data()), signature.size());
         if (signature != std::array<unsigned char, 8>{137, 80, 78, 71, 13, 10, 26, 10}) throw std::runtime_error{std::format("Not a PNG: {}", path.string())};
         ImageInfo image;
+        file.seekg(16);
+        std::array<std::uint32_t, 2> dimensions;
+        file.read(reinterpret_cast<char*>(dimensions.data()), 8);
+        image.width  = static_cast<int>(std::byteswap(dimensions[0]));
+        image.height = static_cast<int>(std::byteswap(dimensions[1]));
+        return image;
+    }
+
+    Record read_record(const std::filesystem::path& path) {
+        const auto image = read_image_info(path);
+        std::ifstream file{path, std::ios::binary};
+        file.exceptions(std::ios::badbit | std::ios::failbit);
+        file.seekg(8);
         std::optional<nlohmann::json> stored;
         for (;;) {
             std::uint32_t length;
@@ -25,13 +38,7 @@ namespace genesia {
             length = std::byteswap(length);
             const std::string_view chunk{type.data(), type.size()};
             if (chunk == "IEND") break;
-            if (chunk == "IHDR") {
-                std::array<std::uint32_t, 2> dimensions;
-                file.read(reinterpret_cast<char*>(dimensions.data()), 8);
-                image.width  = static_cast<int>(std::byteswap(dimensions[0]));
-                image.height = static_cast<int>(std::byteswap(dimensions[1]));
-                file.seekg(length - 8, std::ios::cur);
-            } else if (chunk == "iTXt" || chunk == "tEXt" || chunk == "zTXt") {
+            if (chunk == "iTXt" || chunk == "tEXt" || chunk == "zTXt") {
                 std::string text(length, '\0');
                 file.read(text.data(), text.size());
                 if (std::string_view{text}.substr(0, text.find('\0')) == "genesia") {
@@ -41,38 +48,25 @@ namespace genesia {
             } else file.seekg(length, std::ios::cur);
             file.seekg(4, std::ios::cur);
         }
-        if (!stored) return image;
+        if (!stored) throw std::runtime_error{"PNG has no Genesia generation record"};
         const auto& metadata     = *stored;
-        auto& result             = image.record.emplace();
+        Record result;
         result.path              = path;
         result.parameters.width  = image.width;
         result.parameters.height = image.height;
-        if (metadata.at("version") != 1) throw std::runtime_error{"Unsupported Genesia PNG metadata version"};
+        if (metadata.at("version") != 2) throw std::runtime_error{"Unsupported Genesia PNG metadata version"};
         result.model            = files::path(metadata.at("model").get<std::string>());
         result.seed             = metadata.at("seed");
         result.parameters.steps = metadata.at("steps");
         result.parameters.cfg   = metadata.at("cfg");
         if (metadata.contains("loras")) metadata.at("loras").get_to(result.parameters.loras);
-        for (const auto& [name, side] : {std::pair{"positive", &result.prompt.sides[0]}, std::pair{"negative", &result.prompt.sides[1]}}) {
-            const auto& saved = metadata.at("prompt").at(name);
-            side->text        = saved.at("text");
-            side->fixed       = saved.at("fixed");
-            for (const auto& group : saved.at("groups").get_ref<const nlohmann::json::array_t&>()) {
-                auto& parsed = side->groups.emplace_back(group.at("enabled").get<bool>());
-                for (const auto& tag : group.at("tags").get_ref<const nlohmann::json::array_t&>()) {
-                    auto& item = parsed.tags.emplace_back(tag.at("name").get<std::string>(), std::string{}, tag.at("weight").get<float>());
-                    item.text  = tag.value("text", item.name);
-                    if (!tag.contains("text")) std::ranges::replace(item.text, '_', ' ');
-                }
-            }
-        }
+        result.parameters.positive = metadata.at("prompt").at("positive").get<std::string>();
+        result.parameters.negative = metadata.at("prompt").at("negative").get<std::string>();
         if (metadata.contains("repaint")) {
             result.source             = files::path(metadata.at("repaint").at("source").get<std::string>());
             result.parameters.denoise = metadata.at("repaint").at("denoise");
         }
-        result.parameters.positive = result.prompt.sides[0].text;
-        result.parameters.negative = result.prompt.sides[1].text;
-        return image;
+        return result;
     }
 
 

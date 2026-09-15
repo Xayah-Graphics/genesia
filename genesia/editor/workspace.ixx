@@ -2,7 +2,7 @@ module;
 #include <imgui.h>
 export module genesia.editor.workspace;
 import genesia.generation.defaults;
-import genesia.prompt.preset;
+import genesia.editor.panels.prompts;
 import genesia.generation.output;
 import genesia.editor.platform.window;
 import genesia.editor.graphics.interop;
@@ -19,9 +19,8 @@ import std;
 export namespace genesia::editor {
     struct Workspace final {
         struct RepaintDraft final {
-            prompt::Resolved document;
-            PromptEditor editor;
-            RepaintDraft(const std::optional<Record>& source, std::shared_ptr<const prompt::Catalog> catalog);
+            std::array<std::string, 2> text;
+            explicit RepaintDraft(const Record& source);
         };
         struct TrainingDraft final {
             int steps{400};
@@ -65,6 +64,7 @@ export namespace genesia::editor {
             bool preview{};
             Role role{Role::image};
             std::optional<float> confidence;
+            std::string_view record_error;
         };
         struct ImageResult final {
             std::string summary, annotation;
@@ -81,20 +81,23 @@ export namespace genesia::editor {
         };
 
         const std::shared_ptr<const prompt::Catalog> catalog;
-        prompt::Preset preset;
+        const std::shared_ptr<const prompts::Library> prompt_library;
+        prompts::Preset preset;
         std::vector<std::string> preset_names;
         std::string pending_preset;
         std::array<char, 128> new_preset_name{};
         bool save_as_requested{};
+        bool final_prompt_requested{};
         std::string preset_error;
         bool preview_enabled{defaults::preview_enabled};
         WindowPlatform& window;
         Renderer& renderer;
+        PromptPanel prompt_panel;
         runtime::CatalogState library;
         TextureCache textures;
         WorkspaceRuntime runtime;
         generation::Settings draft;
-        prompt::Pair prompt;
+        prompts::Recipe prompt;
         prompt::TagSearch tag_search;
         PromptEditor prompt_editor;
         std::map<std::string, std::unique_ptr<RepaintDraft>> repaints;
@@ -164,7 +167,7 @@ export namespace genesia::editor {
         std::string shown_error, action_error;
         bool escape_owned{};
 
-        Workspace(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, WindowPlatform& platform, Renderer& renderer, std::string dataset);
+        Workspace(prompts::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, std::shared_ptr<const prompts::Library> prompt_library, WindowPlatform& platform, Renderer& renderer, std::string dataset);
         ~Workspace();
         void receive();
         bool save_model_settings(std::string_view key = {});
@@ -175,11 +178,12 @@ export namespace genesia::editor {
         Position& current_position();
         void center_image(std::size_t index);
         void start_repaint(const dataset::File& source);
-        bool leave_repaint();
+        void leave_repaint();
         void back();
         Picture resolve_image(const dataset::File& file, Role role = Role::image) const;
         Picture resolve_output(const Output& output, Role role = Role::image) const;
         void commit_parameters();
+        bool prepare_prompt();
         bool save_prompt();
         void switch_preset();
         void begin_output(Output& output, std::uint64_t task, int width, int height);

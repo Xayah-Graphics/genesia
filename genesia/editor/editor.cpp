@@ -7,7 +7,9 @@ module genesia.editor;
 import genesia.editor.platform.window;
 import genesia.editor.graphics.renderer;
 import genesia.editor.workspace;
-import genesia.prompt.preset;
+import genesia.editor.prompt.library;
+import genesia.project;
+import genesia.generation.defaults;
 import genesia.io.files;
 import std;
 
@@ -18,11 +20,11 @@ namespace genesia::editor {
         Workspace ui;
         bool closing{};
 
-        Application(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, std::string dataset);
+        Application(prompts::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, std::shared_ptr<const prompts::Library> library, std::string dataset);
         void run();
     };
 
-    Application::Application(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, std::string dataset) : ui{std::move(preset), std::move(catalog), window, renderer, std::move(dataset)} {}
+    Application::Application(prompts::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, std::shared_ptr<const prompts::Library> library, std::string dataset) : ui{std::move(preset), std::move(catalog), std::move(library), window, renderer, std::move(dataset)} {}
 
     void Application::run() {
         std::uint32_t previous_stage{}, previous_step{};
@@ -34,7 +36,7 @@ namespace genesia::editor {
                     ui.runtime.session.shutdown();
                 } else window.redraw = true;
             }
-            bool busy{}, done{true}, pending{ui.textures.pending.load()};
+            bool busy{}, done{true}, pending{ui.textures.pending.load() || ui.prompt_panel.images.pending.load() || ui.prompt_panel.images.saving};
             std::uint32_t stage{}, step{};
             {
                 const auto state = ui.runtime.session.snapshot();
@@ -84,8 +86,9 @@ namespace genesia::editor {
             dataset = files::utf8(path);
         }
         auto catalog = std::make_shared<const prompt::Catalog>();
-        auto preset  = prompt::read_preset(name, *catalog);
-        Application application{std::move(preset), std::move(catalog), std::move(dataset)};
+        auto library = std::make_shared<const prompts::Library>(std::filesystem::path{project::assets} / "prompts");
+        auto preset  = prompts::read_preset(library->directory, name, *catalog);
+        Application application{std::move(preset), std::move(catalog), std::move(library), std::move(dataset)};
         application.run();
         return 0;
     }

@@ -108,7 +108,7 @@ namespace genesia::generation {
                     for (auto& snapshot : snapshots->slots) ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{snapshot.state}.store(std::uint32_t(sdxl::SnapshotState::free), ::cuda::memory_order_release);
             }
             if (!output.cancelled) {
-                Record record{request.parameters, request.seed, {}, std::filesystem::path{project::checkpoint}.filename(), prompt::store(request.prompt, *request.catalog), request.source ? request.source->path.lexically_relative(project::directory) : std::filesystem::path{}};
+                Record record{request.parameters, request.seed, {}, std::filesystem::path{project::checkpoint}.filename(), request.source ? request.source->path.lexically_relative(project::directory) : std::filesystem::path{}};
                 const auto ready = visuals.publish ? visuals.publish(false, output.device_pixels, output.width, output.height, output.stream, slot) : nullptr;
                 report({runtime::EventKind::task, id, {}, {}, {.id = id, .state = runtime::State::saving}});
                 if (ready) report({runtime::EventKind::generated, id, record, ready});

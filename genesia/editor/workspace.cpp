@@ -6,7 +6,7 @@ module;
 module genesia.editor.workspace;
 import genesia.project;
 import genesia.generation.defaults;
-import genesia.prompt.preset;
+import genesia.editor.prompt.library;
 import genesia.generation.output;
 import genesia.editor.platform.window;
 import genesia.editor.graphics.renderer;
@@ -21,11 +21,7 @@ import genesia.io.files;
 
 namespace genesia::editor {
 
-    Workspace::RepaintDraft::RepaintDraft(const std::optional<Record>& source, std::shared_ptr<const prompt::Catalog> catalog) : document{std::move(catalog)} {
-        if (source) document = prompt::resolve(source->prompt, document.catalog);
-        editor.tracking = true;
-        editor.reset(document.prompt);
-    }
+    Workspace::RepaintDraft::RepaintDraft(const Record& source) : text{source.parameters.positive, source.parameters.negative} {}
 
     Workspace::TrainingDraft::TrainingDraft(const training::TrainingData& source) {
         if (source.training) {
@@ -37,8 +33,8 @@ namespace genesia::editor {
         if (!history.evaluations.empty()) metrics = history.evaluations.back();
     }
 
-    Workspace::Workspace(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, WindowPlatform& platform, Renderer& display, std::string dataset) : catalog{std::move(catalog)}, preset{std::move(preset)}, window{platform}, renderer{display}, textures{display}, runtime{display.device}, prompt{this->preset.prompt}, tag_search{*this->catalog} {
-        prompt_editor.reset(prompt);
+    Workspace::Workspace(prompts::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, std::shared_ptr<const prompts::Library> prompt_library, WindowPlatform& platform, Renderer& display, std::string dataset) : catalog{std::move(catalog)}, prompt_library{std::move(prompt_library)}, preset{std::move(preset)}, window{platform}, renderer{display}, prompt_panel{*this->prompt_library, display, platform}, textures{display}, runtime{display.device}, prompt{this->preset.recipe}, tag_search{*this->catalog} {
+        prompt_editor.reset(prompt.free);
         if (!dataset.empty()) {
             page           = Page::dataset;
             collection_key = std::move(dataset);
@@ -308,8 +304,8 @@ namespace genesia::editor {
     void Workspace::select_collection(std::string key, std::string sha) {
         if (!save_caption([this, key, sha] { select_collection(key, sha); })) return;
         commit_parameters();
-        if (!leave_repaint()) return;
-        if (page == Page::generation && !prompt_editor.commit(prompt, *catalog)) {
+        leave_repaint();
+        if (page == Page::generation && !prompt_editor.commit(prompt.free, *catalog)) {
             prompt_sidebar.open = true;
             return;
         }
@@ -392,36 +388,34 @@ namespace genesia::editor {
         }
         const auto cached = textures.entries.find(source.sha);
         if (cached == textures.entries.end() || !cached->second.texture) return;
+        if (!cached->second.record) {
+            action_error = cached->second.record_error;
+            return;
+        }
         const Page return_page  = repaint ? repaint->return_page : page;
         View return_view        = repaint ? repaint->return_view : viewing;
         ImageView return_camera = repaint ? repaint->return_camera : view;
-        if (!leave_repaint()) return;
+        leave_repaint();
         if (page == Page::generation) {
             select_collection("raw", source.sha);
             if (page != Page::dataset) return;
         }
         auto& edits = repaints[source.sha];
-        if (!edits) edits = std::make_unique<RepaintDraft>(cached->second.record, catalog);
+        if (!edits) edits = std::make_unique<RepaintDraft>(*cached->second.record);
         repaint.emplace(source, return_page, return_view, return_camera);
         viewing             = View::repaint;
         view                = {};
         prompt_sidebar.open = true;
     }
 
-    bool Workspace::leave_repaint() {
-        if (!repaint) return true;
-        auto& edits = *repaints.at(repaint->source.sha);
-        if (!edits.editor.commit(edits.document.prompt, *edits.document.catalog)) {
-            prompt_sidebar.open = true;
-            return false;
-        }
-        edits.editor.suspend();
+    void Workspace::leave_repaint() {
+        if (!repaint) return;
+        ImGui::ClearActiveID();
         page    = repaint->return_page;
         viewing = repaint->return_view;
         view    = repaint->return_camera;
         if (repaint->result.texture) renderer.retire(repaint->result.texture);
         repaint.reset();
-        return true;
     }
 
     void Workspace::back() {
@@ -460,8 +454,9 @@ namespace genesia::editor {
         }
         const auto cached = textures.entries.find(file.sha);
         if (cached != textures.entries.end() && cached->second.error.empty()) {
-            picture.texture = cached->second.texture;
-            picture.record  = cached->second.record ? &*cached->second.record : nullptr;
+            picture.texture      = cached->second.texture;
+            picture.record       = cached->second.record ? &*cached->second.record : nullptr;
+            picture.record_error = cached->second.record_error;
         }
         return picture;
     }
@@ -484,11 +479,24 @@ namespace genesia::editor {
         parameter_edit = {};
     }
 
+    bool Workspace::prepare_prompt() {
+        if (!prompt_editor.commit(prompt.free, *catalog)) {
+            prompt_sidebar.open = true;
+            return false;
+        }
+        prompt_panel.update(prompt, *catalog);
+        if (!prompt_panel.ready) {
+            preset_error = prompt_panel.error.empty() ? "Wait for the character previews to finish loading." : prompt_panel.error;
+            return false;
+        }
+        return true;
+    }
+
     bool Workspace::save_prompt() {
-        if (!prompt_editor.commit(prompt, *catalog)) return false;
+        if (!prompt_editor.commit(prompt.free, *catalog)) return false;
         try {
-            prompt::write_preset({preset.name, prompt}, *catalog);
-            preset.prompt = prompt;
+            prompts::write_preset(prompt_library->directory, {preset.name, prompt}, *catalog);
+            preset.recipe = prompt;
             preset_error.clear();
             return true;
         } catch (const std::exception& failure) {
@@ -499,10 +507,11 @@ namespace genesia::editor {
 
     void Workspace::switch_preset() {
         try {
-            auto next = prompt::read_preset(pending_preset, *catalog);
+            auto next = prompts::read_preset(prompt_library->directory, pending_preset, *catalog);
             preset    = std::move(next);
-            prompt    = preset.prompt;
-            prompt_editor.reset(prompt);
+            prompt    = preset.recipe;
+            prompt_editor.reset(prompt.free);
+            prompt_panel.update(prompt, *catalog);
             preset_error.clear();
         } catch (const std::exception& failure) {
             preset_error = failure.what();
@@ -521,33 +530,23 @@ namespace genesia::editor {
 
     void Workspace::submit() {
         commit_parameters();
-        auto parameters     = draft;
-        auto prompt_catalog = catalog;
-        prompt::Pair submitted;
+        auto parameters = draft;
         std::optional<runtime::RepaintSource> source;
         if (repaint) {
-            auto& edits = *repaints.at(repaint->source.sha);
-            if (!edits.editor.commit(edits.document.prompt, *edits.document.catalog)) {
-                prompt_sidebar.open = true;
-                return;
-            }
-            parameters.width   = repaint->source.width;
-            parameters.height  = repaint->source.height;
-            parameters.denoise = denoise;
-            submitted          = edits.editor.materialize(edits.document.prompt);
-            prompt_catalog     = edits.document.catalog;
+            const auto& edits   = *repaints.at(repaint->source.sha);
+            parameters.width    = repaint->source.width;
+            parameters.height   = repaint->source.height;
+            parameters.denoise  = denoise;
+            parameters.positive = edits.text[0];
+            parameters.negative = edits.text[1];
             source.emplace(repaint->source.sha, repaint->source.path);
         } else {
             if (page != Page::generation) return;
-            if (!prompt_editor.commit(prompt, *catalog)) {
-                prompt_sidebar.open = true;
-                return;
-            }
-            submitted          = prompt;
-            parameters.denoise = 1;
+            if (!prepare_prompt()) return;
+            parameters.positive = prompt_panel.composition->text[0];
+            parameters.negative = prompt_panel.composition->text[1];
+            parameters.denoise  = 1;
         }
-        parameters.positive = prompt::compose(*prompt_catalog, submitted.positive);
-        parameters.negative = prompt::compose(*prompt_catalog, submitted.negative);
         parameters.loras.clear();
         for (const auto& [key, controls] : model_settings)
             if (controls.active && controls.lora) parameters.loras.push_back({key, {}, controls.lora->weight, controls.lora->start / 100});
@@ -558,8 +557,6 @@ namespace genesia::editor {
         runtime::Generate request;
         request.parameters = parameters;
         request.seed       = seed;
-        request.prompt     = std::move(submitted);
-        request.catalog    = std::move(prompt_catalog);
         request.source     = std::move(source);
         const auto task    = submit_task({std::move(request)});
         if (repaint) {
@@ -571,7 +568,7 @@ namespace genesia::editor {
     }
 
     void Workspace::open_audit(std::string key, const bool refresh) {
-        if (!leave_repaint()) return;
+        leave_repaint();
         if (page == Page::generation || page == Page::dataset) {
             audit_return            = page;
             audit_return_collection = collection_key;
@@ -692,7 +689,7 @@ namespace genesia::editor {
                     if (page == Page::generation) view = {};
                 }
                 if (repaint && removed(repaint->source.path)) {
-                    repaints.at(repaint->source.sha)->editor.suspend();
+                    ImGui::ClearActiveID();
                     page    = repaint->return_page;
                     viewing = repaint->return_view;
                     view    = {};
@@ -794,6 +791,7 @@ namespace genesia::editor {
         runtime.session.observe(std::move(wanted), std::move(masks), show_foreground);
     }
     void Workspace::draw() {
+        prompt_panel.update(prompt, *catalog);
         const auto previous_model_edit = std::exchange(editing_model, {});
         if (parameter_edit.id && ImGui::GetActiveID() != parameter_edit.id) commit_parameters();
         refresh_at                = std::numeric_limits<double>::infinity();
@@ -802,26 +800,13 @@ namespace genesia::editor {
         const auto size           = ImGui::GetIO().DisplaySize;
         const float interpolation = std::min(1.0F, ImGui::GetIO().DeltaTime / 0.045F);
         for (auto* panel : {&dataset_sidebar, &prompt_sidebar}) {
-            panel->amount = std::lerp(panel->amount, float(panel->open), interpolation);
-            if (std::abs(panel->amount - float(panel->open)) < 0.01F) panel->amount = float(panel->open);
+            const float target = float(panel->open || (panel == &prompt_sidebar && prompt_panel.incoming));
+            panel->amount      = std::lerp(panel->amount, target, interpolation);
+            if (std::abs(panel->amount - target) < 0.01F) panel->amount = target;
             panel->width = std::min(800.0F * scale, size.x * 0.40F);
         }
         canvas_origin = {dataset_sidebar.width * dataset_sidebar.amount, 0};
         canvas_size   = {std::max(1.0F, size.x - dataset_sidebar.width * dataset_sidebar.amount - prompt_sidebar.width * prompt_sidebar.amount), size.y};
-        if (!window.dropped.empty()) {
-            try {
-                const auto info = library.classifiers.find(collection_key);
-                if (session_state.active) action_error = "Finish the current operation first.";
-                else if (window.dropped.size() != 1) action_error = "Drop one item at a time.";
-                else if (dataset_sidebar.open && concept_tool == ConceptTool::model && library.loras.contains(collection_key)) submit_task({runtime::LoraModel{collection_key, window.dropped.front()}});
-                else if (dataset_sidebar.open && concept_tool == ConceptTool::classify && info != library.classifiers.end() && info->second.model) submit_task({runtime::Classify{collection_key, window.dropped.front()}});
-                else action_error = "Open Model to import a LoRA file, or Classify to classify a folder.";
-            } catch (const std::exception& failure) {
-                action_error = failure.what();
-                shown_error.clear();
-            }
-            window.dropped.clear();
-        }
         {
             auto& session = runtime.session;
             std::vector<std::string> classifiers;
@@ -840,7 +825,7 @@ namespace genesia::editor {
             if (!stopped) open_audit(audit_key);
         }
         const auto editor_state = [&] {
-            const PromptEditor* editor = page == Page::generation ? &prompt_editor : repaint ? &repaints.at(repaint->source.sha)->editor : nullptr;
+            const PromptEditor* editor = page == Page::generation ? &prompt_editor : nullptr;
             return std::pair{editor && editor->escape_owned, editor && editor->focus_input};
         };
         bool dismissing = escape_owned || parameter_edit.id || ImGui::IsAnyItemActive() || ImGui::GetDragDropPayload() || ImGui::GetIO().WantTextInput || (prompt_sidebar.open && editor_state().first) || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
@@ -858,6 +843,26 @@ namespace genesia::editor {
         else if (collection && root && root->ready && !collection->images.empty()) image = resolve_image(collection->images[current_position().index]);
         const auto controls = control_layout(*this, scale, size, image);
         sidebar(*this, false, scale, size, image);
+        if (!window.drop_error.empty()) {
+            action_error = std::exchange(window.drop_error, {});
+            shown_error.clear();
+        }
+        // PNG drops outside a preview rectangle cancel the preview operation.
+        if (prompt_panel.incoming) window.dropped.clear();
+        if (!window.dropped.empty()) {
+            try {
+                const auto info = library.classifiers.find(collection_key);
+                if (session_state.active) action_error = "Finish the current operation first.";
+                else if (window.dropped.size() != 1) action_error = "Drop one item at a time.";
+                else if (dataset_sidebar.open && concept_tool == ConceptTool::model && library.loras.contains(collection_key)) submit_task({runtime::LoraModel{collection_key, window.dropped.front()}});
+                else if (dataset_sidebar.open && concept_tool == ConceptTool::classify && info != library.classifiers.end() && info->second.model) submit_task({runtime::Classify{collection_key, window.dropped.front()}});
+                else action_error = "Open Model to import a LoRA file, or Classify to classify a folder.";
+            } catch (const std::exception& failure) {
+                action_error = failure.what();
+                shown_error.clear();
+            }
+            window.dropped.clear();
+        }
         bottom_controls(*this, scale, size, controls, image);
         if (!previous_model_edit.empty() && previous_model_edit != editing_model) save_model_settings(previous_model_edit);
         observe_inference();

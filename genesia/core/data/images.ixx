@@ -1,6 +1,5 @@
 export module genesia.data.images;
 export import genesia.generation.settings;
-export import genesia.prompt.document;
 import std;
 
 export namespace genesia {
@@ -8,14 +7,13 @@ export namespace genesia {
         generation::Settings parameters;
         std::uint64_t seed{};
         std::filesystem::path path, model;
-        prompt::Document prompt;
         std::filesystem::path source;
     };
     struct ImageInfo final {
         int width{}, height{};
-        std::optional<Record> record;
     };
     ImageInfo read_image_info(const std::filesystem::path& path);
+    Record read_record(const std::filesystem::path& path);
     struct Image final {
         int width{};
         int height{};
