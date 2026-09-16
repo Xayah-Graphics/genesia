@@ -250,7 +250,7 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
             } else if (preset_name) {
                 const prompt::Catalog catalog;
                 const prompts::Library library{std::filesystem::path{project::assets} / "prompts", catalog};
-                const auto preset = prompts::read_preset(library.directory, *preset_name, catalog);
+                const auto preset = prompts::read_preset(library, *preset_name, catalog);
                 auto composition  = prompts::compose(library, preset.recipe, catalog);
                 if (!composition.error.empty()) throw std::runtime_error{composition.error};
                 operation.parameters.positive = std::move(composition.text[0]);

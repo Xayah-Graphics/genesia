@@ -18,11 +18,8 @@ import std;
 
 export namespace genesia::editor {
     struct Workspace final {
-        struct RepaintDraft final {
-            std::array<std::string, 2> text;
-            explicit RepaintDraft(const Record& source);
-        };
         struct TrainingDraft final {
+            std::string key;
             int steps{400};
             training::Config config;
             std::optional<training::Metrics> metrics;
@@ -49,6 +46,7 @@ export namespace genesia::editor {
             Page return_page;
             View return_view;
             ImageView return_camera;
+            std::array<std::string, 2> text;
             Output result;
         };
         struct Position final {
@@ -82,9 +80,8 @@ export namespace genesia::editor {
 
         const std::shared_ptr<const prompt::Catalog> catalog;
         const std::shared_ptr<const prompts::Library> prompt_library;
-        prompts::Preset preset;
+        std::string preset_name;
         std::vector<std::string> preset_names;
-        std::string pending_preset;
         std::array<char, 128> new_preset_name{};
         bool save_as_requested{};
         bool final_prompt_requested{};
@@ -100,7 +97,6 @@ export namespace genesia::editor {
         prompts::Recipe prompt;
         prompt::TagSearch tag_search;
         PromptEditor prompt_editor;
-        std::map<std::string, std::unique_ptr<RepaintDraft>> repaints;
         Output generation;
         std::optional<Repaint> repaint;
         struct LoraSettings final {
@@ -124,7 +120,7 @@ export namespace genesia::editor {
         ConceptTool concept_tool{ConceptTool::none};
         bool choosing_type{};
         std::string type_error;
-        std::map<std::string, TrainingDraft> training_drafts;
+        std::optional<TrainingDraft> training_draft;
         std::map<std::string, std::array<char, 2048>> classify_paths;
         std::map<std::string, std::string> export_paths;
         CaptionEditor caption_editor;
@@ -185,7 +181,7 @@ export namespace genesia::editor {
         void commit_parameters();
         bool prepare_prompt();
         bool save_prompt();
-        void switch_preset();
+        void switch_preset(std::string name);
         void begin_output(Output& output, std::uint64_t task, int width, int height);
         void submit();
 

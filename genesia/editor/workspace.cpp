@@ -21,9 +21,7 @@ import genesia.io.files;
 
 namespace genesia::editor {
 
-    Workspace::RepaintDraft::RepaintDraft(const Record& source) : text{source.parameters.positive, source.parameters.negative} {}
-
-    Workspace::TrainingDraft::TrainingDraft(const training::TrainingData& source) {
+    Workspace::TrainingDraft::TrainingDraft(const training::TrainingData& source) : key{source.key} {
         if (source.training) {
             config = source.training->config;
             steps  = source.training->phase == training::Phase::complete ? source.training->step + 400 : source.training->target;
@@ -33,7 +31,7 @@ namespace genesia::editor {
         if (!history.evaluations.empty()) metrics = history.evaluations.back();
     }
 
-    Workspace::Workspace(prompts::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, std::shared_ptr<const prompts::Library> prompt_library, WindowPlatform& platform, Renderer& display, std::string dataset) : catalog{std::move(catalog)}, prompt_library{std::move(prompt_library)}, preset{std::move(preset)}, window{platform}, renderer{display}, prompt_panel{*this->prompt_library, display, platform}, textures{display}, runtime{display.device}, prompt{this->preset.recipe}, tag_search{*this->catalog} {
+    Workspace::Workspace(prompts::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, std::shared_ptr<const prompts::Library> prompt_library, WindowPlatform& platform, Renderer& display, std::string dataset) : catalog{std::move(catalog)}, prompt_library{std::move(prompt_library)}, preset_name{std::move(preset.name)}, window{platform}, renderer{display}, prompt_panel{*this->prompt_library, display, platform}, textures{display}, runtime{display.device}, prompt{std::move(preset.recipe)}, tag_search{*this->catalog} {
         prompt_editor.reset(prompt.free);
         if (!dataset.empty()) {
             page           = Page::dataset;
@@ -251,6 +249,7 @@ namespace genesia::editor {
     }
 
     void Workspace::synchronize_collection() {
+        if (training_draft && training_draft->key != collection_key) training_draft.reset();
         root       = nullptr;
         collection = nullptr;
         for (auto& entry : library.roots) {
@@ -400,9 +399,8 @@ namespace genesia::editor {
             select_collection("raw", source.sha);
             if (page != Page::dataset) return;
         }
-        auto& edits = repaints[source.sha];
-        if (!edits) edits = std::make_unique<RepaintDraft>(*cached->second.record);
-        repaint.emplace(source, return_page, return_view, return_camera);
+        const auto& parameters = cached->second.record->parameters;
+        repaint.emplace(source, return_page, return_view, return_camera, std::array{parameters.positive, parameters.negative});
         viewing             = View::repaint;
         view                = {};
         prompt_sidebar.open = true;
@@ -495,8 +493,7 @@ namespace genesia::editor {
     bool Workspace::save_prompt() {
         if (!prompt_editor.commit(prompt.free, *catalog)) return false;
         try {
-            prompts::write_preset(prompt_library->directory, {preset.name, prompt}, *catalog);
-            preset.recipe = prompt;
+            prompts::write_preset(*prompt_library, {preset_name, prompt}, *catalog);
             preset_error.clear();
             return true;
         } catch (const std::exception& failure) {
@@ -505,18 +502,18 @@ namespace genesia::editor {
         }
     }
 
-    void Workspace::switch_preset() {
+    void Workspace::switch_preset(std::string name) {
         try {
-            auto next = prompts::read_preset(prompt_library->directory, pending_preset, *catalog);
-            preset    = std::move(next);
-            prompt    = preset.recipe;
+            auto next = prompts::read_preset(*prompt_library, std::move(name), *catalog);
+            ImGui::ClearActiveID();
+            preset_name = std::move(next.name);
+            prompt      = std::move(next.recipe);
             prompt_editor.reset(prompt.free);
             prompt_panel.update(prompt, *catalog);
             preset_error.clear();
         } catch (const std::exception& failure) {
             preset_error = failure.what();
         }
-        pending_preset.clear();
     }
 
     void Workspace::begin_output(Output& output, const std::uint64_t task, const int width, const int height) {
@@ -533,12 +530,11 @@ namespace genesia::editor {
         auto parameters = draft;
         std::optional<runtime::RepaintSource> source;
         if (repaint) {
-            const auto& edits   = *repaints.at(repaint->source.sha);
             parameters.width    = repaint->source.width;
             parameters.height   = repaint->source.height;
             parameters.denoise  = denoise;
-            parameters.positive = edits.text[0];
-            parameters.negative = edits.text[1];
+            parameters.positive = repaint->text[0];
+            parameters.negative = repaint->text[1];
             source.emplace(repaint->source.sha, repaint->source.path);
         } else {
             if (page != Page::generation) return;
@@ -709,12 +705,9 @@ namespace genesia::editor {
                 shown_error.clear();
             }
         }
-        if (kind == runtime::Kind::train && state == runtime::State::running) {
-            const auto found = training_drafts.find(key);
-            if (found != training_drafts.end()) {
-                if (const auto* step = std::get_if<training::Step>(&event.progress.value)) found->second.losses.push_back(step->loss);
-                if (const auto* metrics = std::get_if<training::Metrics>(&event.progress.value)) found->second.metrics = *metrics;
-            }
+        if (kind == runtime::Kind::train && state == runtime::State::running && training_draft && training_draft->key == key) {
+            if (const auto* step = std::get_if<training::Step>(&event.progress.value)) training_draft->losses.push_back(step->loss);
+            if (const auto* metrics = std::get_if<training::Metrics>(&event.progress.value)) training_draft->metrics = *metrics;
         }
         if (state == runtime::State::complete) {
             if (kind == runtime::Kind::infer) {

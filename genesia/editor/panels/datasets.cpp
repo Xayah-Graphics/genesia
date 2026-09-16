@@ -56,7 +56,7 @@ namespace genesia::editor {
                             const auto assign = [&workspace, type = static_cast<dataset::ConceptType>(i)] {
                                 try {
                                     workspace.submit_task({runtime::Assign{workspace.collection_key, type}});
-                                    workspace.training_drafts.erase(workspace.collection_key);
+                                    workspace.training_draft.reset();
                                     workspace.concept_tool  = Workspace::ConceptTool::none;
                                     workspace.choosing_type = false;
                                     workspace.type_error.clear();
@@ -307,7 +307,8 @@ namespace genesia::editor {
     }
 
     void training_controls(Workspace& workspace, const training::TrainingData& source, const float scale) {
-        auto& edits                     = workspace.training_drafts.try_emplace(source.key, source).first->second;
+        if (!workspace.training_draft) workspace.training_draft.emplace(source);
+        auto& edits                     = *workspace.training_draft;
         const auto found                = workspace.activity.find({source.key, runtime::Kind::train});
         const runtime::TaskStatus* task = found == workspace.activity.end() ? nullptr : &found->second;
         const bool busy                 = task && task->state < runtime::State::complete;

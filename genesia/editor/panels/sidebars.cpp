@@ -10,33 +10,6 @@ import genesia.prompt.library;
 import std;
 namespace genesia::editor {
     void preset_dialogs(Workspace& workspace, const float scale) {
-        if (!workspace.pending_preset.empty() && !ImGui::IsPopupOpen("Unsaved prompt")) {
-            if (!workspace.prompt_editor.commit(workspace.prompt.free, *workspace.catalog)) workspace.pending_preset.clear();
-            else if (workspace.prompt == workspace.preset.recipe) workspace.switch_preset();
-            else ImGui::OpenPopup("Unsaved prompt");
-        }
-        ImGui::SetNextWindowSize({420 * scale, 0});
-        if (ImGui::BeginPopupModal("Unsaved prompt", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::TextWrapped("Save changes to %s before switching?", workspace.preset.name.c_str());
-            if (!workspace.preset_error.empty()) ImGui::TextWrapped("%s", workspace.preset_error.c_str());
-            ImGui::Spacing();
-            if (ImGui::Button("Save", {108 * scale, 0}) && workspace.save_prompt()) {
-                workspace.switch_preset();
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Discard", {108 * scale, 0})) {
-                workspace.switch_preset();
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Cancel", {108 * scale, 0}) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-                workspace.pending_preset.clear();
-                workspace.preset_error.clear();
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
-        }
         if (std::exchange(workspace.save_as_requested, false) && workspace.prompt_editor.commit(workspace.prompt.free, *workspace.catalog)) {
             workspace.preset_error.clear();
             workspace.new_preset_name.fill(0);
@@ -58,8 +31,8 @@ namespace genesia::editor {
             if ((ImGui::Button("Save", {108 * scale, 0}) || enter) && workspace.new_preset_name[0]) {
                 try {
                     prompts::Preset next{workspace.new_preset_name.data(), workspace.prompt};
-                    prompts::write_preset(workspace.prompt_library->directory, next, *workspace.catalog, false);
-                    workspace.preset = std::move(next);
+                    prompts::write_preset(*workspace.prompt_library, next, *workspace.catalog, false);
+                    workspace.preset_name = std::move(next.name);
                     workspace.preset_error.clear();
                     ImGui::CloseCurrentPopup();
                 } catch (const std::exception& failure) {
@@ -148,7 +121,7 @@ namespace genesia::editor {
                 ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, {0, 0.5F});
                 ImGui::PushStyleColor(ImGuiCol_Button, {0, 0, 0, 0});
                 ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-                if (ImGui::Button(workspace.preset.name.c_str(), {ImGui::CalcTextSize(workspace.preset.name.c_str()).x + 16 * scale, 0})) {
+                if (ImGui::Button(workspace.preset_name.c_str(), {ImGui::CalcTextSize(workspace.preset_name.c_str()).x + 16 * scale, 0})) {
                     try {
                         workspace.preset_names = prompts::list_presets(workspace.prompt_library->directory);
                         ImGui::OpenPopup("Prompt presets");
@@ -163,35 +136,15 @@ namespace genesia::editor {
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Choose a prompt preset\nCtrl+S: save prompt");
                 ImGui::PopStyleColor(2);
                 ImGui::PopStyleVar(2);
-                if (workspace.prompt != workspace.preset.recipe) {
-                    ImGui::SameLine(0, 8 * scale);
-                    const auto point = ImGui::GetCursorScreenPos();
-                    ImGui::Dummy({8 * scale, ImGui::GetTextLineHeight()});
-                    ImGui::GetWindowDrawList()->AddCircleFilled({point.x + 3 * scale, point.y + ImGui::GetTextLineHeight() / 2}, 2 * scale, ImGui::GetColorU32(ImGuiCol_CheckMark));
-                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Unsaved prompt changes");
-                }
                 if (ImGui::BeginPopup("Prompt presets")) {
-                    for (const auto& name : workspace.preset_names) {
-                        if (ImGui::Selectable(name.c_str(), name == workspace.preset.name) && name != workspace.preset.name) {
-                            workspace.pending_preset = name;
-                            workspace.preset_error.clear();
-                        }
-                    }
+                    for (const auto& name : workspace.preset_names)
+                        if (ImGui::Selectable(name.c_str(), name == workspace.preset_name) && name != workspace.preset_name) workspace.switch_preset(name);
                     ImGui::Separator();
                     if (ImGui::MenuItem("Save as...")) workspace.save_as_requested = true;
                     ImGui::EndPopup();
                 }
-            } else if (workspace.repaint) {
-                ImGui::TextDisabled("Repaint edits");
-                if (ImGui::BeginPopupContextItem("Repaint edits")) {
-                    if (ImGui::MenuItem("Reset changes")) {
-                        ImGui::ClearActiveID();
-                        workspace.repaints[workspace.repaint->source.sha] = std::make_unique<Workspace::RepaintDraft>(*workspace.textures.entries.at(workspace.repaint->source.sha).record);
-                    }
-                    ImGui::EndPopup();
-                }
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Temporary draft for the green source\nRight-click: Reset changes");
-            } else ImGui::TextDisabled("Image prompt");
+            } else if (workspace.repaint) ImGui::TextDisabled("Repaint edits");
+            else ImGui::TextDisabled("Image prompt");
             ImGui::PopFont();
             ImGui::SetCursorPosY(content_y);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
@@ -203,21 +156,16 @@ namespace genesia::editor {
                     workspace.prompt_panel.draw(workspace.prompt, *workspace.catalog, scale);
                     if (!temporary) workspace.prompt_editor.draw(workspace.prompt.free, workspace.tag_search, *workspace.catalog, scale);
                 } else if (workspace.repaint) {
-                    auto& edits = *workspace.repaints.at(workspace.repaint->source.sha);
+                    auto& text = workspace.repaint->text;
                     ImGui::PushID(workspace.repaint->source.sha.c_str());
                     if (ImGui::Button("Apply current prompt recipe") && workspace.prepare_prompt()) {
                         ImGui::ClearActiveID();
-                        edits.text = workspace.prompt_panel.composition.text;
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::Button("Reset")) {
-                        ImGui::ClearActiveID();
-                        edits = Workspace::RepaintDraft{*workspace.textures.entries.at(workspace.repaint->source.sha).record};
+                        text = workspace.prompt_panel.composition.text;
                     }
                     for (std::size_t side = 0; side < 2; ++side) {
                         ImGui::PushID(static_cast<int>(side));
                         ImGui::SeparatorText(side ? "Negative" : "Positive");
-                        ImGui::InputTextMultiline("##Prompt", &edits.text[side], {-1, 230 * scale}, ImGuiInputTextFlags_WordWrap);
+                        ImGui::InputTextMultiline("##Prompt", &text[side], {-1, 230 * scale}, ImGuiInputTextFlags_WordWrap);
                         ImGui::PopID();
                     }
                     ImGui::PopID();

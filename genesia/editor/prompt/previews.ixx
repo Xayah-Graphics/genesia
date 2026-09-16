@@ -19,12 +19,7 @@ export namespace genesia::editor::previews {
             bool loading{true}, exists{};
             std::string error;
         };
-        struct Undo final {
-            std::filesystem::path path, root;
-            std::optional<std::vector<std::uint8_t>> bytes;
-        };
         std::map<std::filesystem::path, Texture> textures;
-        std::optional<Undo> undo;
         std::atomic_bool pending{};
         bool saving{};
         std::string error, status;
@@ -34,14 +29,12 @@ export namespace genesia::editor::previews {
         void update(const std::set<std::filesystem::path>& wanted);
         const Texture& request(const std::filesystem::path& path);
         void edit(std::filesystem::path path, std::filesystem::path root, std::optional<std::filesystem::path> source);
-        void restore();
 
     private:
-        enum struct Operation { read, replace, clear, restore };
+        enum struct Operation { read, replace, clear };
         struct Request final {
             Operation operation{};
             std::filesystem::path path, root, source;
-            std::optional<std::vector<std::uint8_t>> bytes;
         };
         struct Result final {
             Operation operation{};
@@ -49,7 +42,6 @@ export namespace genesia::editor::previews {
             Image image;
             bool exists{}, applied{};
             std::string error, image_error;
-            std::optional<Undo> undo;
         };
         Renderer& renderer;
         std::mutex mutex;

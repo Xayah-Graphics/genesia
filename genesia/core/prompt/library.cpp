@@ -164,15 +164,18 @@ namespace genesia::prompts {
         return result;
     }
 
-    Preset read_preset(const std::filesystem::path& directory, std::string name, const prompt::Catalog& catalog) {
-        const auto path = directory / "presets" / files::path(name + ".json");
+    Preset read_preset(const Library& library, std::string name, const prompt::Catalog& catalog) {
+        const auto path = library.directory / "presets" / files::path(name + ".json");
         const auto json = read_json(path);
         Preset result{std::move(name)};
         auto& recipe     = result.recipe;
         recipe.character = json.at("character");
         recipe.parts     = json.at("parts").get<std::map<std::string, std::string>>();
+        for (const auto& part : library.characters.at(recipe.character).parts) recipe.parts.try_emplace(part.name, part.initial);
         if (!json.at("scene").is_null()) recipe.scene = json.at("scene").get<std::string>();
         recipe.variations = json.at("variations").get<std::map<std::string, std::string>>();
+        if (recipe.scene)
+            for (const auto& variation : library.scenes.at(*recipe.scene).variations) recipe.variations.try_emplace(variation.name, variation.initial);
         for (const auto& [key, side] : {std::pair{"positive", &recipe.free.positive}, std::pair{"negative", &recipe.free.negative}}) {
             const auto& input = json.at("free").at(key);
             side->fixed       = input.at("fixed");
@@ -190,9 +193,18 @@ namespace genesia::prompts {
         return result;
     }
 
-    void write_preset(const std::filesystem::path& directory, const Preset& preset, const prompt::Catalog& catalog, const bool replace) {
+    void write_preset(const Library& library, const Preset& preset, const prompt::Catalog& catalog, const bool replace) {
         const auto& recipe = preset.recipe;
-        nlohmann::json json{{"character", recipe.character}, {"parts", recipe.parts}, {"scene", recipe.scene ? nlohmann::json(*recipe.scene) : nlohmann::json{}}, {"variations", recipe.variations}};
+        nlohmann::json json{{"character", recipe.character}, {"parts", nlohmann::json::object()}, {"scene", recipe.scene ? nlohmann::json(*recipe.scene) : nlohmann::json{}}, {"variations", nlohmann::json::object()}};
+        for (const auto& part : library.characters.at(recipe.character).parts) {
+            const auto& option = recipe.parts.at(part.name);
+            if (option != part.initial) json["parts"][part.name] = option;
+        }
+        if (recipe.scene)
+            for (const auto& variation : library.scenes.at(*recipe.scene).variations) {
+                const auto& option = recipe.variations.at(variation.name);
+                if (option != variation.initial) json["variations"][variation.name] = option;
+            }
         for (const auto& [key, side] : {std::pair{"positive", &recipe.free.positive}, std::pair{"negative", &recipe.free.negative}}) {
             auto& output     = json["free"][key];
             output["fixed"]  = side->fixed;
@@ -203,8 +215,8 @@ namespace genesia::prompts {
                 output["groups"].push_back({{"enabled", group.enabled}, {"tags", std::move(tags)}});
             }
         }
-        std::filesystem::create_directories(directory / "presets");
-        std::ofstream file{directory / "presets" / files::path(preset.name + ".json"), std::ios::out | (replace ? std::ios::trunc : std::ios::noreplace)};
+        std::filesystem::create_directories(library.directory / "presets");
+        std::ofstream file{library.directory / "presets" / files::path(preset.name + ".json"), std::ios::out | (replace ? std::ios::trunc : std::ios::noreplace)};
         file.exceptions(std::ios::badbit | std::ios::failbit);
         file << json.dump(2) << '\n';
         file.close();

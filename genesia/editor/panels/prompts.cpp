@@ -61,13 +61,6 @@ namespace genesia::editor {
         if (!images.error.empty()) ImGui::TextWrapped("%s", images.error.c_str());
         if (images.saving) ImGui::TextDisabled("Saving preview...");
         else if (!images.status.empty()) ImGui::TextDisabled("%s", images.status.c_str());
-        if (images.undo) {
-            if (images.saving || !images.status.empty()) ImGui::SameLine();
-            ImGui::BeginDisabled(images.saving);
-            if (ImGui::SmallButton("Undo preview")) images.restore();
-            ImGui::EndDisabled();
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Undo the last preview change\n%s", files::utf8(images.undo->path).c_str());
-        }
     }
 
     void PromptPanel::draw(prompts::Recipe& recipe, const prompt::Catalog& catalog, const float scale) {
@@ -345,13 +338,22 @@ namespace genesia::editor {
     }
 
     void PromptPanel::selection_preview(const std::string& name, const bool scene, const prompts::Recipe& recipe, const float scale, const std::string* group) {
-        auto candidate = recipe;
-        if (group) (scene ? candidate.variations : candidate.parts).at(*group) = name;
-        else if (scene) {
-            if (candidate.scene != name) prompts::select_scene(library, candidate, name);
-        } else if (candidate.character != name) prompts::select_character(library, candidate, name);
-        const previews::Location target{library.directory / "characters" / files::path(candidate.character) / "images", candidate.parts};
-        hovered_preview     = scene ? target.scene(*candidate.scene, candidate.variations) : target.directory / "profile.png";
+        const auto& character = !scene && !group ? name : recipe.character;
+        auto parts            = recipe.parts;
+        if (character != recipe.character) {
+            parts.clear();
+            for (const auto& part : library.characters.at(character).parts) parts.emplace(part.name, part.initial);
+        } else if (group && !scene) parts.at(*group) = name;
+        const previews::Location target{library.directory / "characters" / files::path(character) / "images", parts};
+        if (scene) {
+            const auto& scene_name = group ? *recipe.scene : name;
+            auto variations        = recipe.variations;
+            if (recipe.scene != scene_name) {
+                variations.clear();
+                for (const auto& variation : library.scenes.at(scene_name).variations) variations.emplace(variation.name, variation.initial);
+            } else if (group) variations.at(*group) = name;
+            hovered_preview = target.scene(scene_name, variations);
+        } else hovered_preview = target.directory / "profile.png";
         hover_frame         = ImGui::GetFrameCount();
         const auto& texture = images.request(hovered_preview);
         ImGui::BeginTooltip();

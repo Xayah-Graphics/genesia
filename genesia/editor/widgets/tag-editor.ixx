@@ -31,8 +31,7 @@ export namespace genesia::editor {
         std::string analyzed_input;
         std::size_t cursor{}, analyzed_cursor{}, completion_begin{}, completion_end{};
         std::optional<prompt::Error> error;
-        std::set<std::size_t> selection;
-        std::size_t anchor{};
+        std::optional<std::size_t> selection;
         std::optional<std::size_t> editing;
         bool valid{true};
         bool menu_open{};
@@ -45,27 +44,23 @@ export namespace genesia::editor {
         std::string query;
         std::vector<prompt::TagSuggestion> suggestions;
 
-        void replace(prompt::Group& group, std::vector<prompt::Tag> tags);
         void erase(prompt::Group& group, std::size_t index);
         bool commit(prompt::Group& group, const prompt::Catalog& catalog, std::optional<std::uint32_t> candidate = {});
-        void draw(const char* payload_type, std::size_t group_index, prompt::Group& group, const prompt::TagSearch& search, const prompt::Catalog& catalog, const TagLayout& layout, float scale, std::optional<TagMove>& move);
+        void draw(std::size_t group_index, prompt::Group& group, const prompt::TagSearch& search, const prompt::Catalog& catalog, const TagLayout& layout, float scale, std::optional<TagMove>& move);
         static int input_callback(ImGuiInputTextCallbackData* data);
     };
     struct PromptEditor final {
         std::array<std::vector<TagEditor>, 2> groups;
-        std::array<TagEditor, 2> additions;
-        std::array<bool, 2> adding{};
-        std::vector<prompt::Pair> undo, redo;
+        TagEditor addition;
+        bool adding{};
         std::uint32_t next_id{};
-        bool negative_open{};
         bool valid{true};
         bool escape_owned{}, focus_input{};
 
-        void reset(const prompt::Pair& prompt, bool clear_history = true);
+        void reset(const prompt::Pair& prompt);
         void suspend();
-        void remember(prompt::Pair before, const prompt::Pair& after);
         bool commit(prompt::Pair& prompt, const prompt::Catalog& catalog);
-        void draw_groups(prompt::Side& side, std::size_t side_index, const prompt::TagSearch& search, const prompt::Catalog& catalog, float scale);
+        void draw_groups(prompt::Pair& prompt, const prompt::TagSearch& search, const prompt::Catalog& catalog, float scale);
         void draw(prompt::Pair& prompt, const prompt::TagSearch& search, const prompt::Catalog& catalog, float scale);
     };
 } // namespace genesia::editor

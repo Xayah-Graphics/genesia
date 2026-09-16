@@ -192,7 +192,7 @@ namespace genesia::editor {
             if (ImGui::MenuItem("View final prompt", nullptr, false, workspace.page == Workspace::Page::generation)) workspace.final_prompt_requested = true;
             if (ImGui::MenuItem("Export final prompt", nullptr, false, workspace.page == Workspace::Page::generation) && workspace.prepare_prompt()) {
                 try {
-                    prompts::export_prompt(workspace.prompt_library->directory, workspace.preset.name, workspace.prompt_panel.composition);
+                    prompts::export_prompt(workspace.prompt_library->directory, workspace.preset_name, workspace.prompt_panel.composition);
                 } catch (const std::exception& failure) {
                     workspace.preset_error = failure.what();
                 }

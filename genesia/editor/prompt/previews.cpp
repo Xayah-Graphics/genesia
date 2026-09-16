@@ -64,8 +64,7 @@ namespace genesia::editor::previews {
                 saving = false;
                 error  = std::move(result.error);
                 if (!result.applied) continue;
-                undo   = std::move(result.undo);
-                status = result.operation == Operation::restore ? "Preview change undone" : result.operation == Operation::clear ? "Preview cleared" : "Preview saved";
+                status = result.operation == Operation::clear ? "Preview cleared" : "Preview saved";
             }
             if (!wanted.contains(result.path)) continue;
             auto& texture = textures[result.path];
@@ -105,17 +104,6 @@ namespace genesia::editor::previews {
         condition.notify_one();
     }
 
-    void Images::restore() {
-        {
-            const std::lock_guard lock{mutex};
-            requested.push_back({.operation = Operation::restore, .path = undo->path, .root = undo->root, .bytes = undo->bytes});
-        }
-        saving = true;
-        error.clear();
-        status.clear();
-        condition.notify_one();
-    }
-
     void Images::read() {
         for (;;) {
             Request request;
@@ -132,25 +120,21 @@ namespace genesia::editor::previews {
             bool candidate{};
             try {
                 if (request.operation != Operation::read) {
-                    if (request.operation != Operation::restore) {
-                        result.undo.emplace(request.path, request.root);
-                        if (std::filesystem::exists(request.path)) result.undo->bytes = files::read_bytes(request.path);
-                    }
-                    if (request.operation == Operation::replace) request.bytes = files::read_bytes(request.source);
-                    if (request.bytes) {
-                        candidate = true;
+                    if (request.operation == Operation::replace) {
+                        const auto bytes = files::read_bytes(request.source);
+                        candidate        = true;
                         std::filesystem::create_directories(request.path.parent_path());
                         std::ofstream file{temporary, std::ios::binary | std::ios::trunc};
                         file.exceptions(std::ios::badbit | std::ios::failbit);
-                        file.write(reinterpret_cast<const char*>(request.bytes->data()), request.bytes->size());
+                        file.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
                         file.close();
                         // Decode before publishing: a failed drop must leave the previous file intact.
-                        if (request.operation == Operation::replace) result.image = read_image(temporary);
+                        result.image = read_image(temporary);
                         files::publish(temporary, request.path);
                         candidate = false;
                     } else std::filesystem::remove(request.path);
                     result.applied = true;
-                    if (!request.bytes) prune(request.path.parent_path(), request.root);
+                    if (request.operation == Operation::clear) prune(request.path.parent_path(), request.root);
                 }
             } catch (const std::exception& failure) {
                 result.error = std::format("{}: {}", files::utf8(request.path), failure.what());

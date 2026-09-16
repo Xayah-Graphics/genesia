@@ -57,8 +57,8 @@ export namespace genesia::prompts {
     void select_scene(const Library& library, Recipe& recipe, std::optional<std::string> scene);
     Composition compose(const Library& library, const Recipe& recipe, const prompt::Catalog& catalog);
     std::array<std::string, 2> card_prompt(const Library& library, const Recipe& recipe, const Composition& composition, bool scene);
-    Preset read_preset(const std::filesystem::path& directory, std::string name, const prompt::Catalog& catalog);
-    void write_preset(const std::filesystem::path& directory, const Preset& preset, const prompt::Catalog& catalog, bool replace = true);
+    Preset read_preset(const Library& library, std::string name, const prompt::Catalog& catalog);
+    void write_preset(const Library& library, const Preset& preset, const prompt::Catalog& catalog, bool replace = true);
     std::vector<std::string> list_presets(const std::filesystem::path& directory);
     void export_prompt(const std::filesystem::path& directory, std::string_view name, const Composition& composition);
 } // namespace genesia::prompts

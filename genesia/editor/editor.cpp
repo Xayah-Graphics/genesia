@@ -87,7 +87,7 @@ namespace genesia::editor {
         }
         auto catalog = std::make_shared<const prompt::Catalog>();
         auto library = std::make_shared<const prompts::Library>(std::filesystem::path{project::assets} / "prompts", *catalog);
-        auto preset  = prompts::read_preset(library->directory, name, *catalog);
+        auto preset  = prompts::read_preset(*library, name, *catalog);
         Application application{std::move(preset), std::move(catalog), std::move(library), std::move(dataset)};
         application.run();
         return 0;
