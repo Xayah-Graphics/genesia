@@ -1,6 +1,7 @@
 export module genesia.editor.prompt.previews;
 import genesia.editor.graphics.renderer;
 import genesia.data.images;
+import genesia.prompt.library;
 import std;
 
 export namespace genesia::editor::previews {
@@ -8,8 +9,8 @@ export namespace genesia::editor::previews {
 
     struct Location final {
         std::filesystem::path root, directory;
-        Location(std::filesystem::path root, const std::map<std::string, std::string>& parts);
-        std::filesystem::path scene(std::string_view name, const std::map<std::string, std::string>& variations) const;
+        Location(std::filesystem::path root, const std::map<std::string, prompts::Selection>& parts);
+        std::filesystem::path scene(std::string_view name, const std::map<std::string, prompts::Selection>& variations) const;
     };
 
     struct Images final {

@@ -275,25 +275,42 @@ namespace genesia::editor {
                                 ImGui::PushID(group.name.c_str());
                                 const auto& selected = scene_card ? recipe.variations.at(group.name) : recipe.parts.at(group.name);
                                 const auto effect    = composition.parts.find(group.name);
-                                ImGui::TableNextRow();
-                                ImGui::TableSetColumnIndex(0);
-                                ImGui::AlignTextToFramePadding();
-                                ImGui::PushTextWrapPos(0);
-                                ImGui::TextDisabled("%s", group.name.c_str());
-                                ImGui::PopTextWrapPos();
-                                ImGui::TableSetColumnIndex(1);
-                                ImGui::AlignTextToFramePadding();
-                                const auto content = [&](const float width) { option_text(group.options.at(selected), selected, scale, width, !scene_card && effect != composition.parts.end() ? &effect->second : nullptr); };
-                                if (group.options.size() == 1) {
-                                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 6 * scale);
-                                    content(ImGui::GetContentRegionAvail().x);
-                                } else if (choose("##Option", content)) {
-                                    for (const auto& name : group.order) {
-                                        if (option(name, selected == name)) (scene_card ? next.variations : next.parts).at(group.name) = name;
-                                        if (ImGui::IsItemHovered()) selection_preview(name, scene_card, recipe, scale, &group.name);
+                                const auto row       = [&](const prompts::Suboptions* child) {
+                                    const auto& label = child ? child->name : group.name;
+                                    const auto& value = child ? selected.suboptions.at(child->name) : selected.option;
+                                    const auto& text  = child ? child->options.at(value) : group.options.at(value).text;
+                                    const auto& order = child ? child->order : group.order;
+                                    ImGui::PushID(child ? 1 : 0);
+                                    ImGui::PushID(label.c_str());
+                                    ImGui::TableNextRow();
+                                    ImGui::TableSetColumnIndex(0);
+                                    ImGui::AlignTextToFramePadding();
+                                    if (child) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 12 * scale);
+                                    ImGui::PushTextWrapPos(0);
+                                    ImGui::TextDisabled("%s", label.c_str());
+                                    ImGui::PopTextWrapPos();
+                                    ImGui::TableSetColumnIndex(1);
+                                    ImGui::AlignTextToFramePadding();
+                                    const auto content = [&](const float width) { option_text(text, value, scale, width, !scene_card && effect != composition.parts.end() ? &effect->second : nullptr); };
+                                    if (order.size() == 1) {
+                                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 6 * scale);
+                                        content(ImGui::GetContentRegionAvail().x);
+                                    } else if (choose("##Option", content)) {
+                                        for (const auto& name : order) {
+                                            if (option(name, value == name) && value != name) {
+                                                auto& target = (scene_card ? next.variations : next.parts).at(group.name);
+                                                if (child) target.suboptions.at(child->name) = name;
+                                                else prompts::select_option(group, target, name);
+                                            }
+                                            if (ImGui::IsItemHovered()) selection_preview(name, scene_card, recipe, scale, &group, child ? &child->name : nullptr);
+                                        }
+                                        ImGui::EndCombo();
                                     }
-                                    ImGui::EndCombo();
-                                }
+                                    ImGui::PopID();
+                                    ImGui::PopID();
+                                };
+                                row(nullptr);
+                                for (const auto& child : group.options.at(selected.option).suboptions) row(&child);
                                 ImGui::PopID();
                             }
                             ImGui::EndTable();
@@ -312,7 +329,7 @@ namespace genesia::editor {
                             const auto& effect = found->second;
                             ImGui::TextDisabled(effect.disable.empty() ? "Required" : "Conflict");
                             ImGui::SameLine(0, 8 * scale);
-                            option_text(part.options.at(recipe.parts.at(part.name)), part.name, scale, ImGui::GetContentRegionAvail().x, &effect);
+                            option_text(prompts::option_prompt(part, recipe.parts.at(part.name)), part.name, scale, ImGui::GetContentRegionAvail().x, &effect);
                         }
                         if (!composition.error.empty()) {
                             ImGui::Spacing();
@@ -337,21 +354,29 @@ namespace genesia::editor {
         ImGui::PopStyleVar(6);
     }
 
-    void PromptPanel::selection_preview(const std::string& name, const bool scene, const prompts::Recipe& recipe, const float scale, const std::string* group) {
+    void PromptPanel::selection_preview(const std::string& name, const bool scene, const prompts::Recipe& recipe, const float scale, const prompts::Choices* group, const std::string* suboption) {
         const auto& character = !scene && !group ? name : recipe.character;
         auto parts            = recipe.parts;
         if (character != recipe.character) {
             parts.clear();
-            for (const auto& part : library.characters.at(character).parts) parts.emplace(part.name, part.initial);
-        } else if (group && !scene) parts.at(*group) = name;
+            for (const auto& part : library.characters.at(character).parts) prompts::select_option(part, parts[part.name], part.initial);
+        } else if (group && !scene) {
+            auto& selected = parts.at(group->name);
+            if (suboption) selected.suboptions.at(*suboption) = name;
+            else if (selected.option != name) prompts::select_option(*group, selected, name);
+        }
         const previews::Location target{library.directory / "characters" / files::path(character) / "images", parts};
         if (scene) {
             const auto& scene_name = group ? *recipe.scene : name;
             auto variations        = recipe.variations;
             if (recipe.scene != scene_name) {
                 variations.clear();
-                for (const auto& variation : library.scenes.at(scene_name).variations) variations.emplace(variation.name, variation.initial);
-            } else if (group) variations.at(*group) = name;
+                for (const auto& variation : library.scenes.at(scene_name).variations) prompts::select_option(variation, variations[variation.name], variation.initial);
+            } else if (group) {
+                auto& selected = variations.at(group->name);
+                if (suboption) selected.suboptions.at(*suboption) = name;
+                else if (selected.option != name) prompts::select_option(*group, selected, name);
+            }
             hovered_preview = target.scene(scene_name, variations);
         } else hovered_preview = target.directory / "profile.png";
         hover_frame         = ImGui::GetFrameCount();
@@ -376,7 +401,7 @@ namespace genesia::editor {
         ImGui::BeginGroup();
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 240 * scale);
         ImGui::TextWrapped("%s", name.c_str());
-        const auto& description = group ? *group : scene ? library.scenes.at(name).description : library.characters.at(name).description;
+        const auto description = suboption ? group->name + " / " + *suboption : group ? group->name : scene ? library.scenes.at(name).description : library.characters.at(name).description;
         if (!description.empty()) {
             ImGui::Spacing();
             ImGui::TextWrapped("%s", description.c_str());

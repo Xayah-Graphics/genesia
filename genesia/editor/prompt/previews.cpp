@@ -13,6 +13,15 @@ namespace genesia::editor::previews {
                 std::filesystem::remove(directory);
             }
         }
+
+        std::filesystem::path append_selections(std::filesystem::path path, const std::map<std::string, prompts::Selection>& selections) {
+            for (const auto& [group, selected] : selections) {
+                path /= files::path(group + "=" + selected.option);
+                if (!selected.suboptions.empty()) path /= "suboptions";
+                for (const auto& [name, value] : selected.suboptions) path /= files::path(name + "=" + value);
+            }
+            return path;
+        }
     } // namespace
 
     std::filesystem::path long_path(std::filesystem::path path) {
@@ -22,14 +31,10 @@ namespace genesia::editor::previews {
         return text.starts_with(L"\\\\") ? L"\\\\?\\UNC\\" + text.substr(2) : L"\\\\?\\" + text;
     }
 
-    Location::Location(std::filesystem::path base, const std::map<std::string, std::string>& parts) : root{long_path(std::move(base))}, directory{root} {
-        for (const auto& [part, option] : parts) directory /= files::path(part + "=" + option);
-    }
+    Location::Location(std::filesystem::path base, const std::map<std::string, prompts::Selection>& parts) : root{long_path(std::move(base))}, directory{append_selections(root, parts)} {}
 
-    std::filesystem::path Location::scene(const std::string_view name, const std::map<std::string, std::string>& variations) const {
-        auto path = directory / "scenes" / files::path(name);
-        for (const auto& [group, option] : variations) path /= files::path(group + "=" + option);
-        return path / "preview.png";
+    std::filesystem::path Location::scene(const std::string_view name, const std::map<std::string, prompts::Selection>& variations) const {
+        return append_selections(directory / "scenes" / files::path(name), variations) / "preview.png";
     }
 
     Images::Images(Renderer& display) : renderer{display}, worker{[this] { read(); }} {}
