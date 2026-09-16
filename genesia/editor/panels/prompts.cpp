@@ -406,6 +406,21 @@ namespace genesia::editor {
             ImGui::Spacing();
             ImGui::TextWrapped("%s", description.c_str());
         }
+        if (group) {
+            const auto& selected = (scene ? recipe.variations : recipe.parts).at(group->name);
+            const auto& parent   = group->options.at(suboption ? selected.option : name);
+            const auto& text     = suboption ? std::ranges::find(parent.suboptions, *suboption, &prompts::Suboptions::name)->options.at(name) : parent.text;
+            if (text[0].empty() && text[1].empty()) {
+                ImGui::Spacing();
+                ImGui::TextDisabled("No prompt");
+            }
+            for (std::size_t side = 0; side < 2; ++side) {
+                if (text[side].empty()) continue;
+                ImGui::Spacing();
+                ImGui::TextDisabled(side ? "Negative" : "Positive");
+                ImGui::TextWrapped("%s", text[side].c_str());
+            }
+        }
         if (!texture.error.empty()) {
             ImGui::Spacing();
             ImGui::PushStyleColor(ImGuiCol_Text, {0.91F, 0.55F, 0.51F, 1});

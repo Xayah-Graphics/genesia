@@ -6,6 +6,7 @@ import std;
 
 export namespace genesia::editor::previews {
     std::filesystem::path long_path(std::filesystem::path path);
+    void clean(const prompts::Library& library);
 
     struct Location final {
         std::filesystem::path root, directory;

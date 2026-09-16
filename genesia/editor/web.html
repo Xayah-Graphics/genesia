@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Genesia</title>
+<style>
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: #101116; color: #eae9f1; font: 15px system-ui, sans-serif; }
+  main { height: 100dvh; min-height: 280px; display: flex; flex-direction: column; padding: 20px 20px max(20px, env(safe-area-inset-bottom)); gap: 18px; }
+  header { font-size: 14px; font-weight: 600; letter-spacing: .04em; color: #a4a0b8; }
+  figure { position: relative; flex: 1; min-height: 0; margin: 0; display: grid; place-items: center; overflow: hidden; border-radius: 14px; background: #0b0c10; touch-action: pan-y pinch-zoom; user-select: none; }
+  img { width: 100%; height: 100%; min-height: 0; object-fit: contain; grid-area: 1 / 1; }
+  #empty { grid-area: 1 / 1; color: #a4a0b8; text-align: center; padding: 64px 24px 88px; overflow-wrap: anywhere; }
+  footer { width: min(100%, 460px); align-self: center; }
+  #status { margin: 0; color: #a4a0b8; text-align: center; min-height: 1.5em; overflow-wrap: anywhere; }
+  #status.error { color: #f3a4ac; }
+  button { border: 0; border-radius: 12px; background: transparent; font: inherit; cursor: pointer; touch-action: manipulation; }
+  button:disabled { cursor: default; }
+  button:focus-visible { outline: 2px solid #ede7ff; outline-offset: 3px; }
+  .icon { display: grid; place-items: center; width: 42px; height: 42px; padding: 0; color: #ece8fa; font-size: 23px; }
+  .overlay { background: #18171fe8; box-shadow: 0 2px 12px #0003; }
+  .icon:disabled { background: transparent; color: #66616f; }
+  #expand { position: absolute; top: max(12px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); }
+  #expand svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  #navigation { position: absolute; bottom: max(12px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 4px; border-radius: 12px; padding: 3px; max-width: calc(100% - 20px); }
+  #position { min-width: 70px; text-align: center; font-size: 13px; white-space: nowrap; }
+  #live { padding: 10px 12px; font-size: 12px; white-space: nowrap; color: #c9b9ff; font-weight: 500; }
+  body.expanded { overflow: hidden; }
+  body.expanded header, body.expanded footer { visibility: hidden; }
+  body.expanded #viewer { position: fixed; inset: 0; z-index: 10; width: 100%; height: 100dvh; border-radius: 0; background: #08090c; }
+  body.expanded img { position: absolute; left: 50%; top: 50%; width: var(--expanded-width); height: var(--expanded-height); transform: translate(-50%, -50%) rotate(var(--expanded-rotation)); }
+  @media (min-width: 900px) { main { padding: 24px 40px; } }
+</style>
+<main>
+  <header>GENESIA</header>
+  <figure id="viewer" title="双击图片或空白区域生图">
+    <span id="empty" role="status">等待生图</span>
+    <img id="preview" alt="当前生图预览" draggable="false" hidden>
+    <button id="expand" class="icon overlay" aria-label="全屏查看图片" title="全屏查看图片" aria-pressed="false" disabled>
+      <svg id="enter-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m8 0h5v-5"/></svg>
+      <svg id="exit-icon" viewBox="0 0 24 24" aria-hidden="true" hidden><path d="m6 6 12 12M18 6 6 18"/></svg>
+    </button>
+    <nav id="navigation" class="overlay" aria-label="图片浏览">
+      <button id="previous" class="icon" aria-label="上一张图片" title="上一张 · ←" disabled>‹</button>
+      <span id="position" aria-live="polite">实时预览</span>
+      <button id="next" class="icon" aria-label="下一张图片" title="下一张 · →" disabled>›</button>
+      <button id="live" hidden>回到实时</button>
+    </nav>
+  </figure>
+  <footer><p id="status" role="status">正在连接主机…</p></footer>
+</main>
+<script>
+  const status = document.querySelector('#status');
+  const viewer = document.querySelector('#viewer');
+  const preview = document.querySelector('#preview');
+  const empty = document.querySelector('#empty');
+  const expand = document.querySelector('#expand');
+  const previous = document.querySelector('#previous');
+  const next = document.querySelector('#next');
+  const live = document.querySelector('#live');
+  const position = document.querySelector('#position');
+  let version = null, imageUrl = null, available = false, submitting = false, polling = false, epoch = 0;
+  let historySession = null, historyCount = 0, selected = null, selectionSession = null, liveFinal = false;
+  let imageRequest = null, gesture = null, tap = null, submissionError = '';
+
+  function message(text, error = false) {
+    status.textContent = text;
+    status.classList.toggle('error', error);
+  }
+
+  function updateNavigation() {
+    const expired = selected !== null && selectionSession !== historySession;
+    previous.disabled = expired || (selected === null ? historyCount < (liveFinal ? 2 : 1) : selected <= 0);
+    next.disabled = expired || selected === null || selected >= historyCount - 1;
+    position.textContent = selected === null ? '实时预览' : expired ? '历史已失效' : `${selected + 1} / ${historyCount}`;
+    live.hidden = selected === null;
+    expand.disabled = preview.hidden && !document.body.classList.contains('expanded');
+  }
+
+  function fitPreview() {
+    if (preview.hidden || !preview.complete || !document.body.classList.contains('expanded')) return;
+    const width = preview.naturalWidth, height = preview.naturalHeight;
+    const scale = Math.min(viewer.clientWidth / width, viewer.clientHeight / height);
+    const rotatedScale = Math.min(viewer.clientWidth / height, viewer.clientHeight / width);
+    const rotated = rotatedScale > scale;
+    const bestScale = rotated ? rotatedScale : scale;
+    preview.style.setProperty('--expanded-width', `${width * bestScale}px`);
+    preview.style.setProperty('--expanded-height', `${height * bestScale}px`);
+    preview.style.setProperty('--expanded-rotation', rotated ? '90deg' : '0deg');
+  }
+
+  function clearImage(text = '等待生图') {
+    imageRequest?.abort();
+    preview.hidden = true;
+    preview.removeAttribute('src');
+    empty.textContent = text;
+    empty.hidden = false;
+    if (imageUrl) URL.revokeObjectURL(imageUrl);
+    imageUrl = null;
+    updateNavigation();
+  }
+
+  async function loadImage(url, started) {
+    imageRequest?.abort();
+    const request = new AbortController();
+    imageRequest = request;
+    const response = await fetch(url, {cache: 'no-store', signal: AbortSignal.any([request.signal, AbortSignal.timeout(5000)])});
+    if (response.status === 204) return false;
+    if (!response.ok) throw new Error(await response.text());
+    const nextUrl = URL.createObjectURL(await response.blob());
+    const decoded = new Image();
+    decoded.src = nextUrl;
+    try { await decoded.decode(); } catch (error) { URL.revokeObjectURL(nextUrl); throw error; }
+    if (started !== epoch) { URL.revokeObjectURL(nextUrl); return false; }
+    if (imageUrl) URL.revokeObjectURL(imageUrl);
+    imageUrl = nextUrl;
+    preview.src = imageUrl;
+    preview.alt = selected === null ? '当前生图预览' : `历史图片 ${selected + 1}`;
+    preview.hidden = false;
+    empty.hidden = true;
+    updateNavigation();
+    return true;
+  }
+
+  async function selectImage(index) {
+    if (index < 0 || index >= historyCount) return;
+    selected = index;
+    selectionSession = historySession;
+    const started = ++epoch;
+    clearImage('正在读取历史图片…');
+    try {
+      await loadImage(`/api/history/${selectionSession}/${index}`, started);
+    } catch (error) {
+      if (started === epoch) clearImage('无法显示历史图片：' + error.message);
+    }
+  }
+
+  function goLive() {
+    selected = null;
+    selectionSession = null;
+    version = null;
+    ++epoch;
+    clearImage();
+    poll();
+  }
+
+  function toggleExpanded() {
+    const expanded = document.body.classList.toggle('expanded');
+    expand.setAttribute('aria-pressed', String(expanded));
+    expand.setAttribute('aria-label', expanded ? '退出全屏查看' : '全屏查看图片');
+    expand.title = expanded ? '退出全屏查看' : '全屏查看图片';
+    document.querySelector('#enter-icon').hidden = expanded;
+    document.querySelector('#exit-icon').hidden = !expanded;
+    fitPreview();
+    updateNavigation();
+  }
+
+  async function poll() {
+    if (polling || submitting || document.hidden) return;
+    polling = true;
+    const started = epoch;
+    try {
+      const response = await fetch('/api/state?live=' + (selected === null ? '1' : '0'), {cache: 'no-store', signal: AbortSignal.timeout(5000)});
+      if (!response.ok) throw new Error('无法读取主机状态');
+      const state = await response.json();
+      if (started !== epoch) return;
+      available = !submitting && state.available;
+      message(submitting ? '正在提交…' : submissionError || state.status + (available ? ' · 双击预览区域生图' : ''), Boolean(submissionError) || state.error);
+      const restarted = historySession !== null && state.history_session !== historySession;
+      historySession = state.history_session;
+      historyCount = state.history_count;
+      liveFinal = state.final;
+      if (restarted) {
+        ++epoch;
+        version = null;
+        clearImage(selected === null ? '等待生图' : '主机已重启，这次运行的历史记录已结束');
+      }
+      updateNavigation();
+      if (selected === null && !restarted && state.version !== version) {
+        if (!state.image) {
+          clearImage();
+          version = state.version;
+        } else if (await loadImage('/api/preview?v=' + encodeURIComponent(state.version), started)) version = state.version;
+      }
+    } catch (error) {
+      if (started !== epoch) return;
+      available = false;
+      message('无法连接主机 · 自动重连中', true);
+      version = null;
+    } finally {
+      polling = false;
+    }
+  }
+
+  async function generate() {
+    if (submitting || !available) return;
+    submitting = true;
+    available = false;
+    if (selected === null) ++epoch;
+    submissionError = '';
+    message('正在提交…');
+    try {
+      const response = await fetch('/api/generate', {method: 'POST', headers: {'X-Genesia': 'generate'}, signal: AbortSignal.timeout(5000)});
+      if (!response.ok) throw new Error(await response.text());
+      goLive();
+    } catch (error) {
+      submissionError = error.message;
+      message(submissionError, true);
+    } finally {
+      submitting = false;
+      await poll();
+    }
+  }
+  previous.addEventListener('click', () => selectImage(selected === null ? historyCount - (liveFinal ? 2 : 1) : selected - 1));
+  next.addEventListener('click', () => selectImage(selected + 1));
+  live.addEventListener('click', goLive);
+  expand.addEventListener('click', toggleExpanded);
+  preview.addEventListener('load', fitPreview);
+  new ResizeObserver(fitPreview).observe(viewer);
+  viewer.addEventListener('pointerdown', event => {
+    if (!event.isPrimary || event.button !== 0 || event.target.closest('button, nav')) {
+      gesture = tap = null;
+      return;
+    }
+    gesture = {id: event.pointerId, type: event.pointerType, x: event.clientX, y: event.clientY, time: event.timeStamp, moved: false};
+  });
+  viewer.addEventListener('pointermove', event => {
+    if (gesture && event.pointerId === gesture.id && Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) > 12) gesture.moved = true;
+  });
+  viewer.addEventListener('pointerup', event => {
+    if (!gesture || event.pointerId !== gesture.id) return;
+    const completed = gesture;
+    const dx = event.clientX - completed.x, dy = event.clientY - completed.y;
+    gesture = null;
+    if (completed.type === 'touch' && Math.abs(dx) >= 45 && Math.abs(dx) >= Math.abs(dy) * 1.5) {
+      tap = null;
+      const target = dx > 0 ? previous : next;
+      if (!target.disabled) target.click();
+    } else if (completed.moved || Math.hypot(dx, dy) > 12 || event.timeStamp - completed.time > 300 || event.target.closest('button, nav')) {
+      tap = null;
+    } else if (tap && completed.type === tap.type && event.timeStamp - tap.time <= 400 && Math.hypot(event.clientX - tap.x, event.clientY - tap.y) <= 24) {
+      tap = null;
+      generate();
+    } else tap = {type: completed.type, x: event.clientX, y: event.clientY, time: event.timeStamp};
+  });
+  viewer.addEventListener('pointercancel', () => { gesture = tap = null; });
+  document.addEventListener('keydown', event => {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const target = event.key === 'ArrowLeft' ? previous : event.key === 'ArrowRight' ? next : null;
+    if (target) { event.preventDefault(); if (!target.disabled) target.click(); }
+  });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
+  setInterval(poll, 500);
+  poll();
+</script>
+</html>

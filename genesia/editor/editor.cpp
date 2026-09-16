@@ -7,6 +7,7 @@ module genesia.editor;
 import genesia.editor.platform.window;
 import genesia.editor.graphics.renderer;
 import genesia.editor.workspace;
+import genesia.editor.prompt.previews;
 import genesia.prompt.library;
 import genesia.project;
 import genesia.generation.defaults;
@@ -33,10 +34,11 @@ namespace genesia::editor {
             if (window.take_close_request()) {
                 if (ui.save_model_settings()) {
                     closing = true;
+                    ui.runtime.web.stop();
                     ui.runtime.session.shutdown();
                 } else window.redraw = true;
             }
-            bool busy{}, done{true}, pending{ui.textures.pending.load() || ui.prompt_panel.images.pending.load() || ui.prompt_panel.images.saving};
+            bool busy{}, done{true}, pending{ui.textures.pending.load() || ui.prompt_panel.images.pending.load() || ui.prompt_panel.images.saving || ui.runtime.web.enabled.load()};
             std::uint32_t stage{}, step{};
             {
                 const auto state = ui.runtime.session.snapshot();
@@ -63,6 +65,7 @@ namespace genesia::editor {
             }
             ui.receive();
             ui.draw();
+            ui.update_web();
             renderer.present();
             const double wait = std::min(ui.refresh_at - glfwGetTime(), glfwGetTime() < ui.animate_until || animating ? 1.0 / 120 : busy ? 0.1 : 1.0);
             if (wait > 0) glfwWaitEventsTimeout(wait);
@@ -88,6 +91,7 @@ namespace genesia::editor {
         auto catalog = std::make_shared<const prompt::Catalog>();
         auto library = std::make_shared<const prompts::Library>(std::filesystem::path{project::assets} / "prompts", *catalog);
         auto preset  = prompts::read_preset(*library, name, *catalog);
+        previews::clean(*library);
         Application application{std::move(preset), std::move(catalog), std::move(library), std::move(dataset)};
         application.run();
         return 0;

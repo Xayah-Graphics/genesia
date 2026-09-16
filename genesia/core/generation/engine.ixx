@@ -11,7 +11,7 @@ export namespace genesia::generation {
     struct Visuals final {
         std::function<void()> notify;
         std::function<void(bool, int, int, ::cuda::stream_ref)> prepare;
-        std::function<std::shared_ptr<const void>(bool, const std::uint8_t*, int, int, ::cuda::stream_ref, std::size_t)> publish;
+        std::function<std::shared_ptr<const void>(std::uint64_t, bool, const std::uint8_t*, int, int, ::cuda::stream_ref, std::size_t)> publish;
         std::function<bool(std::size_t)> available;
     };
     struct SavedImage final {

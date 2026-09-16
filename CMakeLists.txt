@@ -67,6 +67,7 @@ if (GENESIA_BUILD_UI)
     genesia_require_dependency(vulkan)
     genesia_require_dependency(slang)
     genesia_require_dependency(imgui)
+    genesia_require_dependency(httplib)
     include(cmake/Shaders.cmake)
 endif ()
 
@@ -224,6 +225,7 @@ if (GENESIA_BUILD_UI)
             genesia/editor/widgets/tag-editor.cpp
             genesia/editor/widgets/captions.cpp
             genesia/editor/workspace.cpp
+            genesia/editor/web.cpp
             PUBLIC FILE_SET cxx_modules TYPE CXX_MODULES FILES
             genesia/editor/editor.ixx
             PRIVATE FILE_SET editor_modules TYPE CXX_MODULES FILES
@@ -245,7 +247,13 @@ if (GENESIA_BUILD_UI)
             genesia/editor/widgets/tag-editor.ixx
             genesia/editor/widgets/captions.ixx
             genesia/editor/workspace.ixx
+            genesia/editor/web.ixx
     )
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/genesia/editor/web.html")
+    file(READ "${PROJECT_SOURCE_DIR}/genesia/editor/web.html" GENESIA_WEB_PAGE)
+    file(GENERATE OUTPUT "${PROJECT_BINARY_DIR}/genesia-web-page.h"
+            CONTENT "constexpr char web_page[] = R\"GENESIA_WEB(${GENESIA_WEB_PAGE})GENESIA_WEB\";\n")
+    target_include_directories(genesia_editor PRIVATE "${PROJECT_BINARY_DIR}")
     target_compile_definitions(
             genesia_editor
             PRIVATE
@@ -260,10 +268,12 @@ if (GENESIA_BUILD_UI)
             genesia::vulkan
             genesia::imgui
             genesia::stb
+            genesia::httplib
             CUDA::cudart
             dwmapi
             shell32
             ole32
+            iphlpapi
     )
     add_dependencies(genesia_editor genesia_shaders)
 endif ()

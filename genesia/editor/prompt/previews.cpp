@@ -1,4 +1,5 @@
 module;
+#include <Windows.h>
 #include <GLFW/glfw3.h>
 module genesia.editor.prompt.previews;
 import genesia.io.files;
@@ -22,6 +23,45 @@ namespace genesia::editor::previews {
             }
             return path;
         }
+
+        bool same_name(const std::filesystem::path& left, const std::filesystem::path& right) {
+            return CompareStringOrdinal(left.c_str(), -1, right.c_str(), -1, TRUE) == CSTR_EQUAL;
+        }
+
+        bool match_selections(std::filesystem::path::iterator& component, const std::filesystem::path::iterator end, const std::vector<prompts::Choices>& choices) {
+            // Preview paths follow selection-map order, independently of display order.
+            auto groups = choices | std::views::transform([](const auto& group) { return &group; }) | std::ranges::to<std::vector>();
+            std::ranges::sort(groups, {}, &prompts::Choices::name);
+            for (const auto* group : groups) {
+                if (component == end) return false;
+                const auto option = std::ranges::find_if(group->options, [&](const auto& entry) { return same_name(*component, files::path(group->name + "=" + entry.first)); });
+                if (option == group->options.end()) return false;
+                ++component;
+                auto children = option->second.suboptions | std::views::transform([](const auto& child) { return &child; }) | std::ranges::to<std::vector>();
+                std::ranges::sort(children, {}, &prompts::Suboptions::name);
+                if (!children.empty()) {
+                    if (component == end || !same_name(*component, "suboptions")) return false;
+                    ++component;
+                }
+                for (const auto* child : children) {
+                    if (component == end || !std::ranges::any_of(child->options, [&](const auto& entry) { return same_name(*component, files::path(child->name + "=" + entry.first)); })) return false;
+                    ++component;
+                }
+            }
+            return true;
+        }
+
+        bool matches_preview(const std::filesystem::path& relative, const prompts::Character& character, const prompts::Library& library) {
+            auto component = relative.begin();
+            const auto end = relative.end();
+            if (!match_selections(component, end, character.parts) || component == end) return false;
+            if (same_name(*component, "profile.png")) return ++component == end;
+            if (!same_name(*component, "scenes") || ++component == end) return false;
+            const auto scene = std::ranges::find_if(library.scenes, [&](const auto& entry) { return same_name(*component, files::path(entry.first)); });
+            if (scene == library.scenes.end()) return false;
+            ++component;
+            return match_selections(component, end, scene->second.variations) && component != end && same_name(*component, "preview.png") && ++component == end;
+        }
     } // namespace
 
     std::filesystem::path long_path(std::filesystem::path path) {
@@ -29,6 +69,28 @@ namespace genesia::editor::previews {
         const auto& text = path.native();
         if (text.starts_with(L"\\\\?\\")) return path;
         return text.starts_with(L"\\\\") ? L"\\\\?\\UNC\\" + text.substr(2) : L"\\\\?\\" + text;
+    }
+
+    void clean(const prompts::Library& library) {
+        std::vector<std::filesystem::path> obsolete, directories;
+        for (const auto& [name, character] : library.characters) {
+            const auto root = long_path(library.directory / "characters" / files::path(name) / "images");
+            if (!std::filesystem::exists(root)) continue;
+            if (!same_name(long_path(std::filesystem::canonical(root)), root)) throw std::runtime_error{"Preview cleanup cannot follow a redirected directory: " + files::utf8(root)};
+            directories.push_back(root);
+            for (const auto& entry : std::filesystem::recursive_directory_iterator{root}) {
+                if (entry.is_directory()) {
+                    const auto attributes = GetFileAttributesW(entry.path().c_str());
+                    if (attributes == INVALID_FILE_ATTRIBUTES) throw std::system_error{static_cast<int>(GetLastError()), std::system_category(), files::utf8(entry.path())};
+                    if (attributes & FILE_ATTRIBUTE_REPARSE_POINT) throw std::runtime_error{"Preview cleanup cannot follow a redirected directory: " + files::utf8(entry.path())};
+                    directories.push_back(entry.path());
+                } else if (entry.is_regular_file() && same_name(entry.path().extension(), ".png") && !matches_preview(entry.path().lexically_relative(root), character, library)) obsolete.push_back(entry.path());
+            }
+        }
+        // Finish scanning before deleting anything; remove only PNGs and empty directories.
+        for (const auto& path : obsolete) std::filesystem::remove(path);
+        for (const auto& directory : directories | std::views::reverse)
+            if (std::filesystem::is_empty(directory)) std::filesystem::remove(directory);
     }
 
     Location::Location(std::filesystem::path base, const std::map<std::string, prompts::Selection>& parts) : root{long_path(std::move(base))}, directory{append_selections(root, parts)} {}

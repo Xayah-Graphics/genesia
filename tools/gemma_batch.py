@@ -41,7 +41,7 @@ from PIL import Image, ImageOps
 
 
 SERVER = "http://127.0.0.1:1234"
-MODEL = "gemma3"
+MODEL = "qwen3.8"
 
 
 def encode_image(path: Path) -> str:

@@ -74,7 +74,8 @@ namespace genesia::editor {
 
     void Workspace::receive() {
         auto delivered = runtime.session.drain();
-        auto& changed  = delivered.catalog;
+        for (const auto& event : delivered.events) runtime.web.receive(event);
+        auto& changed = delivered.catalog;
         std::vector<std::string> changed_roots;
         for (auto& root : changed.roots) {
             changed_roots.push_back(root.all.key);
@@ -224,6 +225,32 @@ namespace genesia::editor {
             }
         }
         textures.receive();
+    }
+
+    void Workspace::update_web() {
+        auto& web = runtime.web;
+        if (!web.enabled) return;
+        auto state = runtime.session.snapshot();
+        std::string unavailable, failure;
+        if (!state.error.empty()) unavailable = state.error;
+        else if (state.finished) unavailable = "主机正在关闭";
+        else if (!library.ready) unavailable = "主机正在加载";
+        else if (page != Page::generation || repaint) unavailable = "暂不可用 · 请将主机切换到文生图界面";
+        else if (ImGui::GetTopMostPopupModal()) unavailable = "暂不可用 · 请先处理主机对话框";
+        if (web.requested) {
+            if (!unavailable.empty()) failure = unavailable;
+            else if (state.active) failure = "主机忙碌";
+            else {
+                try {
+                    if (!submit()) failure = preset_error;
+                } catch (const std::exception& error) {
+                    failure = error.what();
+                }
+            }
+            web.requested = false;
+            state         = runtime.session.snapshot();
+        }
+        web.update(state, std::move(unavailable), std::move(failure));
     }
 
     bool Workspace::save_model_settings(const std::string_view key) {
@@ -480,6 +507,11 @@ namespace genesia::editor {
     bool Workspace::prepare_prompt() {
         if (!prompt_editor.commit(prompt.free, *catalog)) {
             prompt_sidebar.open = true;
+            preset_error        = "Invalid free prompt";
+            for (const auto& side : prompt_editor.groups)
+                for (const auto& group : side)
+                    if (group.error) preset_error = group.error->message;
+            if (prompt_editor.addition.error) preset_error = prompt_editor.addition.error->message;
             return false;
         }
         prompt_panel.update(prompt, *catalog);
@@ -525,7 +557,7 @@ namespace genesia::editor {
         }
     }
 
-    void Workspace::submit() {
+    bool Workspace::submit() {
         commit_parameters();
         auto parameters = draft;
         std::optional<runtime::RepaintSource> source;
@@ -537,8 +569,8 @@ namespace genesia::editor {
             parameters.negative = repaint->text[1];
             source.emplace(repaint->source.sha, repaint->source.path);
         } else {
-            if (page != Page::generation) return;
-            if (!prepare_prompt()) return;
+            if (page != Page::generation) return false;
+            if (!prepare_prompt()) return false;
             parameters.positive = prompt_panel.composition.text[0];
             parameters.negative = prompt_panel.composition.text[1];
             parameters.denoise  = 1;
@@ -561,6 +593,7 @@ namespace genesia::editor {
             view    = {};
         }
         animate_until = glfwGetTime() + 0.2;
+        return true;
     }
 
     void Workspace::open_audit(std::string key, const bool refresh) {
@@ -608,6 +641,7 @@ namespace genesia::editor {
             throw;
         }
         const auto id = submitted.id;
+        runtime.web.receive({.kind = runtime::EventKind::task, .id = id, .task = submitted});
         session_state = runtime.session.snapshot();
         if (submitted.kind != runtime::Kind::erase) activity[{submitted.concept_key, submitted.kind}] = std::move(submitted);
         return id;
@@ -806,9 +840,10 @@ namespace genesia::editor {
             for (const auto& [key, controls] : model_settings)
                 if (controls.active && !controls.lora && library.classifiers.at(key).model) classifiers.push_back(key);
             session.activate(std::move(classifiers));
-            const auto* generate = session_state.active ? std::get_if<runtime::Generate>(&session_state.active->request->operation) : nullptr;
-            const bool visible   = renderer.visible && generate && ((!generate->source && page == Page::generation) || (repaint && repaint->result.task == session_state.active->id && (viewing == View::comparison || viewing == View::result)));
-            session.configure_preview(preview_enabled, visible);
+            const auto* generate   = session_state.active ? std::get_if<runtime::Generate>(&session_state.active->request->operation) : nullptr;
+            const bool visible     = renderer.visible && generate && ((!generate->source && page == Page::generation) || (repaint && repaint->result.task == session_state.active->id && (viewing == View::comparison || viewing == View::result)));
+            const bool web_preview = runtime.web.watching() && generate && !generate->source;
+            session.configure_preview(preview_enabled || web_preview, visible || web_preview);
         }
         const auto selected = library.classifiers.find(collection_key);
         runtime.session.select(selected != library.classifiers.end() && ((dataset_sidebar.open && concept_tool == ConceptTool::train) || page == Page::audit) ? collection_key : std::string{});
@@ -910,7 +945,7 @@ namespace genesia::editor {
             ImGui::EndPopup();
         }
         if (page == Page::generation && !ImGui::GetTopMostPopupModal() && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S, ImGuiInputFlags_RouteGlobal)) save_prompt();
-        if (ImGui::Shortcut(ImGuiKey_F11, ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverActive)) window.toggle_fullscreen();
+        if (ImGui::Shortcut(ImGuiKey_F11, ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverActive) || (!ImGui::GetIO().WantTextInput && !(prompt_sidebar.open && editor_state().second) && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && ImGui::Shortcut(ImGuiKey_F, ImGuiInputFlags_RouteGlobal))) window.toggle_fullscreen();
         if (!dismissing && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && ImGui::Shortcut(ImGuiKey_Escape, ImGuiInputFlags_RouteGlobal)) window.request_close();
         escape_owned = parameter_edit.id || ImGui::IsAnyItemActive() || ImGui::GetDragDropPayload() || (prompt_sidebar.open && editor_state().first) || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
         if (!ImGui::GetIO().WantTextInput && !(prompt_sidebar.open && editor_state().second) && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {

@@ -1,6 +1,11 @@
 include_guard(GLOBAL)
 include(FetchContent)
 set(FETCHCONTENT_TRY_FIND_PACKAGE_MODE NEVER)
+FetchContent_Declare(httplib
+        URL "https://codeload.github.com/yhirose/cpp-httplib/tar.gz/refs/tags/v0.56.0"
+        URL_HASH SHA256=41F214D844E3B9117B734A8CC305B6141C5B47D63009681944E03BC31D92B9CA
+        SOURCE_SUBDIR genesia-unused
+        SYSTEM EXCLUDE_FROM_ALL)
 FetchContent_Declare(glfw
         URL "https://codeload.github.com/glfw/glfw/zip/refs/tags/3.4"
         URL_HASH SHA256=A133DDC3D3C66143EBA9035621DB8E0BCF34DBA1EE9514A9E23E96AFD39FD57A

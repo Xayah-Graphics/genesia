@@ -166,6 +166,7 @@ export namespace genesia::editor {
         Workspace(prompts::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, std::shared_ptr<const prompts::Library> prompt_library, WindowPlatform& platform, Renderer& renderer, std::string dataset);
         ~Workspace();
         void receive();
+        void update_web();
         bool save_model_settings(std::string_view key = {});
         void synchronize_collection();
         void select_collection(std::string key, std::string sha = {});
@@ -183,7 +184,7 @@ export namespace genesia::editor {
         bool save_prompt();
         void switch_preset(std::string name);
         void begin_output(Output& output, std::uint64_t task, int width, int height);
-        void submit();
+        bool submit();
 
         void open_audit(std::string key, bool refresh = false);
         std::uint64_t submit_task(runtime::Request request);
