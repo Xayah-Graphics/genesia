@@ -283,9 +283,7 @@ endif ()
 # Runtime Resources
 # ============================================================================
 set(GENESIA_ASSET_DIRECTORY "${PROJECT_SOURCE_DIR}/assets" CACHE PATH "Runtime assets and editable prompt presets")
-genesia_require_dependency(classifier_weights)
 target_compile_definitions(genesia_core PUBLIC GENESIA_ASSET_DIRECTORY="${GENESIA_ASSET_DIRECTORY}")
-target_compile_definitions(genesia_core PRIVATE CLASSIFIER_INITIAL_MODEL="${GENESIA_CLASSIFIER_INITIAL_MODEL}")
 
 if (WIN32)
     add_custom_target(genesia_cudnn_runtime

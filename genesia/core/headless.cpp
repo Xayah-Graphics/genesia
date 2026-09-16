@@ -119,7 +119,10 @@ direct images as 00001.png, 00002.png, ... by modification time. Dot directories
 All generation outputs are saved into the project data/raw directory.
 Dataset PNG images do not require a Genesia generation record.
 Prompt files contain final positive and negative strings.
---preset NAME reads assets/prompts/presets/NAME.json using the same character, category, rule,
+Preset character, scene and free-group tags must resolve in assets/tags; fixed is appended verbatim.
+Checked tags support only single-tag weights: (tag) or (tag:1.1), without grouped or nested weights.
+Prompt files and repaint text are used verbatim without tag checks.
+--preset NAME reads assets/prompts/presets/NAME.json using the same character, scene, variation, rule,
 and free prompt composition as the Editor. Preview images are not loaded.
 Choose either --preset or --prompt-file. Generate requires one; neither is selected implicitly.
 Repaint keeps the source prompt unless either option replaces both positive and negative strings.
@@ -229,10 +232,10 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
         if (command == "export" && std::get<runtime::Export>(request.operation).output.empty()) throw std::runtime_error{"Specify --output NEW_DIRECTORY"};
         if (command == "lora" && std::get<runtime::LoraModel>(request.operation).remove && !std::get<runtime::LoraModel>(request.operation).input.empty()) throw std::runtime_error{"Choose --import or --remove"};
         if (generating) {
-            auto& operation   = std::get<runtime::Generate>(request.operation);
+            auto& operation = std::get<runtime::Generate>(request.operation);
             if (repaint) {
-                source           = std::filesystem::absolute(source).lexically_normal();
-                const auto record = read_record(source);
+                source               = std::filesystem::absolute(source).lexically_normal();
+                const auto record    = read_record(source);
                 operation.parameters = record.parameters;
                 dataset::Index index;
                 operation.source             = runtime::RepaintSource{index.identify(source, std::array{record.parameters.width, record.parameters.height}).sha, source};
@@ -241,16 +244,17 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
             if (!prompt_file.empty()) {
                 std::ifstream file{prompt_file};
                 file.exceptions(std::ios::badbit | std::ios::failbit);
-                const auto json = nlohmann::json::parse(file);
+                const auto json               = nlohmann::json::parse(file);
                 operation.parameters.positive = json.at("positive").get<std::string>();
                 operation.parameters.negative = json.at("negative").get<std::string>();
             } else if (preset_name) {
                 const prompt::Catalog catalog;
-                const prompts::Library library{std::filesystem::path{project::assets} / "prompts"};
+                const prompts::Library library{std::filesystem::path{project::assets} / "prompts", catalog};
                 const auto preset = prompts::read_preset(library.directory, *preset_name, catalog);
-                auto text = prompts::compose(library, preset.recipe, catalog).text;
-                operation.parameters.positive = std::move(text[0]);
-                operation.parameters.negative = std::move(text[1]);
+                auto composition  = prompts::compose(library, preset.recipe, catalog);
+                if (!composition.error.empty()) throw std::runtime_error{composition.error};
+                operation.parameters.positive = std::move(composition.text[0]);
+                operation.parameters.negative = std::move(composition.text[1]);
             }
             if (width) operation.parameters.width = *width;
             if (height) operation.parameters.height = *height;

@@ -12,24 +12,27 @@ namespace genesia::editor {
 
     void PromptPanel::update(const prompts::Recipe& recipe, const prompt::Catalog& catalog) {
         if (!evaluated || *evaluated != recipe) {
-            evaluated = recipe;
-            composition.reset();
+            evaluated   = recipe;
+            composition = {};
             location.reset();
-            error.clear();
+            scene_preview.clear();
             try {
-                composition = prompts::compose(library, recipe, catalog);
                 location.emplace(library.directory / "characters" / files::path(recipe.character) / "images", recipe.parts);
+                if (recipe.scene) scene_preview = location->scene(*recipe.scene, recipe.variations);
+                composition = prompts::compose(library, recipe, catalog);
             } catch (const std::exception& failure) {
-                error = std::format("Prompt configuration for {}: {}", recipe.character, failure.what());
+                composition.error = std::format("Prompt configuration for {}: {}", recipe.character, failure.what());
             }
         }
         std::set<std::filesystem::path> wanted;
         if (location) {
             wanted.insert(location->directory / "profile.png");
-            for (const auto& [name, option] : recipe.categories)
-                if (option) wanted.insert(location->directory / files::path(name) / files::path(*option + ".png"));
+            if (!scene_preview.empty()) wanted.insert(scene_preview);
         }
         const auto targets = wanted;
+        // Menu candidates stay cached while hovered, but do not affect generation readiness.
+        if (hover_frame < ImGui::GetFrameCount() - 1) hovered_preview.clear();
+        if (!hovered_preview.empty()) wanted.insert(hovered_preview);
         incoming.reset();
         const auto& dropped = window.dropped.empty() ? window.dragged : window.dropped;
         if (dropped.size() == 1) {
@@ -41,8 +44,8 @@ namespace genesia::editor {
             }
         }
         images.update(wanted);
-        ready = composition.has_value() && location.has_value();
-        if (ready) error.clear();
+        error = composition.error;
+        ready = error.empty() && location.has_value();
         for (const auto& path : targets) {
             const auto& texture = images.textures.at(path);
             if (texture.loading) ready = false;
@@ -78,7 +81,7 @@ namespace genesia::editor {
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {0, 2 * scale});
         ImGui::PushStyleColor(ImGuiCol_ChildBg, {0.075F, 0.080F, 0.098F, 1});
         ImGui::PushStyleColor(ImGuiCol_Border, {0.42F, 0.46F, 0.55F, 0.16F});
-        const auto choose = [&](const char* id, const auto& content) {
+        const auto choose = [&](const char* id, const auto& content, const bool searchable = false) {
             if (ImGui::GetCurrentWindow()->SkipItems) return false;
             const auto origin     = ImGui::GetCursorScreenPos();
             const float available = std::max(1.0F, ImGui::GetContentRegionAvail().x);
@@ -120,15 +123,19 @@ namespace genesia::editor {
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {6 * scale, 6 * scale});
             ImGui::PushStyleColor(ImGuiCol_PopupBg, {0.114F, 0.129F, 0.161F, 1});
             ImGui::PushStyleColor(ImGuiCol_Border, {0.227F, 0.259F, 0.310F, 1});
-            const bool visible = ImGui::BeginComboPopup(key, {bounds.Min, {bounds.Max.x, bounds.Max.y + 6 * scale}}, ImGuiComboFlags_None);
+            if (searchable) {
+                const float width = std::min(std::max(bounds.GetWidth(), 360 * scale), ImGui::GetWindowViewport()->WorkSize.x - 40 * scale);
+                ImGui::SetNextWindowSizeConstraints({width, 0}, {width, std::numeric_limits<float>::max()});
+            }
+            const bool visible = ImGui::BeginComboPopup(key, {bounds.Min, {bounds.Max.x, bounds.Max.y + 6 * scale}}, searchable ? ImGuiComboFlags_HeightLargest : ImGuiComboFlags_None);
             ImGui::PopStyleColor(2);
             ImGui::PopStyleVar(3);
             return visible;
         };
-        const auto option = [&](const std::string& name, const bool selected) {
+        const auto option = [&](const std::string& name, const bool selected, const bool compact = false) {
             ImGui::PushID(name.c_str());
-            const float width = std::min(std::max(ImGui::GetContentRegionAvail().x, ImGui::CalcTextSize(name.c_str()).x + 38 * scale), ImGui::GetWindowViewport()->WorkSize.x - 40 * scale);
-            const auto text   = ImGui::CalcTextSize(name.c_str(), nullptr, false, std::max(1.0F, width - 38 * scale));
+            const float width = compact ? ImGui::GetContentRegionAvail().x : std::min(std::max(ImGui::GetContentRegionAvail().x, ImGui::CalcTextSize(name.c_str()).x + 38 * scale), ImGui::GetWindowViewport()->WorkSize.x - 40 * scale);
+            const auto text   = ImGui::CalcTextSize(name.c_str(), nullptr, false, compact ? -1.0F : std::max(1.0F, width - 38 * scale));
             const auto origin = ImGui::GetCursorScreenPos();
             const ImVec2 end{origin.x + width, origin.y + text.y + 12 * scale};
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0, 3 * scale});
@@ -138,7 +145,8 @@ namespace genesia::editor {
             auto* draw = ImGui::GetWindowDrawList();
             if (selected || ImGui::IsItemHovered()) draw->AddRectFilled(origin, end, ImGui::GetColorU32(selected ? ImVec4{0.161F, 0.192F, 0.243F, 1} : ImVec4{0.145F, 0.169F, 0.208F, 1}), 6 * scale);
             const auto ink = ImGui::GetColorU32(selected ? ImVec4{0.753F, 0.820F, 0.898F, 1} : ImGui::GetStyleColorVec4(ImGuiCol_Text));
-            draw->AddText(ImGui::GetFont(), ImGui::GetFontSize(), {origin.x + 9 * scale, origin.y + 6 * scale}, ink, name.c_str(), nullptr, std::max(1.0F, width - 38 * scale));
+            const ImVec4 clip{origin.x + 9 * scale, origin.y, end.x - 28 * scale, end.y};
+            draw->AddText(ImGui::GetFont(), ImGui::GetFontSize(), {clip.x, origin.y + 6 * scale}, ink, name.c_str(), nullptr, compact ? 0.0F : std::max(1.0F, width - 38 * scale), &clip);
             if (selected) ImGui::RenderCheckMark(draw, {end.x - 18 * scale, origin.y + 6 * scale + (text.y - 10 * scale) / 2}, ink, 10 * scale);
             ImGui::RenderNavCursor({origin, end}, ImGui::GetItemID());
             if (pressed) ImGui::CloseCurrentPopup();
@@ -147,115 +155,179 @@ namespace genesia::editor {
         };
         constexpr auto card_flags   = ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_Borders;
         constexpr auto window_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
-        if (!error.empty()) ImGui::TextWrapped("%s", error.c_str());
-        const auto& style          = ImGui::GetStyle();
-        const float padding_height = 2 * (style.WindowPadding.y + style.CellPadding.y);
-        const float profile_height = 480 * scale;
-        ImGui::SetNextWindowSizeConstraints({0, profile_height}, {std::numeric_limits<float>::max(), std::numeric_limits<float>::max()});
-        if (ImGui::BeginChild("##CharacterCard", {0, 0}, card_flags, window_flags)) {
-            const float portrait_height = profile_height - padding_height;
-            const float portrait        = std::min(portrait_height / 1.5F, ImGui::GetContentRegionAvail().x * 0.44F);
-            if (ImGui::BeginTable("##CharacterProfile", 3, ImGuiTableFlags_SizingStretchProp)) {
-                ImGui::TableSetupColumn("Portrait", ImGuiTableColumnFlags_WidthFixed, portrait);
-                ImGui::TableSetupColumn("Gap", ImGuiTableColumnFlags_WidthFixed, 16 * scale);
-                ImGui::TableSetupColumn("Character");
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                if (location) picture(location->directory / "profile.png", recipe.character, portrait, portrait_height, scale);
-                ImGui::TableSetColumnIndex(2);
-                ImGui::PushFont(nullptr, 20);
-                if (library.character_order.size() == 1) ImGui::TextWrapped("%s", recipe.character.c_str());
-                else if (choose("##Character", [&](const float width) {
-                             ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width);
-                             ImGui::TextUnformatted(recipe.character.c_str());
-                             ImGui::PopTextWrapPos();
-                         })) {
-                    for (const auto& name : library.character_order)
-                        if (option(name, recipe.character == name)) next.character = name;
-                    ImGui::EndCombo();
-                }
-                ImGui::PopFont();
-                if (!character.description.empty()) {
-                    ImGui::Dummy({0, 4 * scale});
-                    const auto origin = ImGui::GetCursorScreenPos();
-                    ImGui::BeginGroup();
-                    ImGui::Indent(12 * scale);
-                    ImGui::PushFont(nullptr, 11);
-                    ImGui::TextDisabled("ABOUT");
-                    ImGui::PopFont();
-                    ImGui::PushStyleColor(ImGuiCol_Text, {0.69F, 0.73F, 0.79F, 1});
-                    ImGui::TextWrapped("%s", character.description.c_str());
-                    ImGui::PopStyleColor();
-                    ImGui::Unindent(12 * scale);
-                    ImGui::EndGroup();
-                    ImGui::GetWindowDrawList()->AddLine({origin.x, origin.y + 2 * scale}, {origin.x, ImGui::GetItemRectMax().y - 2 * scale}, ImGui::GetColorU32(ImVec4{0.40F, 0.51F, 0.63F, 0.6F}), 2 * scale);
-                }
-                ImGui::Dummy({0, 10 * scale});
-                if (ImGui::BeginTable("##Parts", 2, ImGuiTableFlags_SizingStretchProp)) {
-                    ImGui::TableSetupColumn("Part", ImGuiTableColumnFlags_WidthFixed, std::min(108 * scale, ImGui::GetContentRegionAvail().x * 0.36F));
-                    ImGui::TableSetupColumn("Option");
-                    for (const auto& part : character.parts) {
-                        ImGui::PushID(part.name.c_str());
-                        const auto& selected = recipe.parts.at(part.name);
-                        const auto& text     = part.options.at(selected);
-                        ImGui::TableNextRow();
-                        ImGui::TableSetColumnIndex(0);
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::PushTextWrapPos(0);
-                        ImGui::TextDisabled("%s", part.name.c_str());
-                        ImGui::PopTextWrapPos();
-                        ImGui::TableSetColumnIndex(1);
-                        ImGui::AlignTextToFramePadding();
-                        const auto content = [&](const float width) { option_text(text, "part." + part.name, selected, scale, width, true); };
-                        if (part.options.size() == 1) {
-                            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 6 * scale);
-                            content(ImGui::GetContentRegionAvail().x);
-                        } else if (choose("##Part", content)) {
-                            for (const auto& name : part.order)
-                                if (option(name, selected == name)) next.parts.at(part.name) = name;
-                            ImGui::EndCombo();
-                        }
-                        ImGui::PopID();
+        if (!error.empty() && error != composition.error) ImGui::TextWrapped("%s", error.c_str());
+        const auto& style           = ImGui::GetStyle();
+        const float padding_height  = 2 * (style.WindowPadding.y + style.CellPadding.y);
+        const float profile_height  = 360 * scale;
+        const prompts::Scene* scene = recipe.scene ? &library.scenes.at(*recipe.scene) : nullptr;
+        for (const bool scene_card : {false, true}) {
+            const bool populated = !scene_card || scene;
+            ImGui::PushID(scene_card ? "Scene" : "Character");
+            if (populated) ImGui::SetNextWindowSizeConstraints({0, profile_height}, {std::numeric_limits<float>::max(), std::numeric_limits<float>::max()});
+            if (ImGui::BeginChild("##Card", {0, 0}, card_flags, window_flags)) {
+                const float portrait_height = profile_height - padding_height;
+                const float portrait        = std::min(portrait_height / 1.5F, ImGui::GetContentRegionAvail().x * 0.44F);
+                // Keep each table ID tied to a fixed column layout across scene changes.
+                if (ImGui::BeginTable(populated ? "##Profile" : "##EmptyScene", populated ? 3 : 1, ImGuiTableFlags_SizingStretchProp)) {
+                    if (populated) {
+                        ImGui::TableSetupColumn("Preview", ImGuiTableColumnFlags_WidthFixed, portrait);
+                        ImGui::TableSetupColumn("Gap", ImGuiTableColumnFlags_WidthFixed, 16 * scale);
                     }
-                    ImGui::EndTable();
-                }
-                ImGui::EndTable();
-            }
-        }
-        ImGui::EndChild();
-        for (const auto& name : library.category_order) {
-            const auto& category = library.categories.at(name);
-            const auto& selected = recipe.categories.at(name);
-            ImGui::PushID(name.c_str());
-            if (ImGui::BeginChild("##CategoryCard", {0, 0}, card_flags, window_flags)) {
-                if (ImGui::BeginTable("##Category", selected ? 3 : 1, ImGuiTableFlags_SizingStretchProp)) {
-                    if (selected) {
-                        ImGui::TableSetupColumn("Preview", ImGuiTableColumnFlags_WidthFixed, 64 * scale);
-                        ImGui::TableSetupColumn("Gap", ImGuiTableColumnFlags_WidthFixed, 14 * scale);
-                    }
-                    ImGui::TableSetupColumn("Prompt");
+                    ImGui::TableSetupColumn("Details");
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(0);
-                    if (selected) {
-                        if (location) picture(location->directory / files::path(name) / files::path(*selected + ".png"), recipe.character + " · " + name + " / " + *selected, 64 * scale, 64 * scale, scale);
+                    if (populated) {
+                        if (scene_card && !scene_preview.empty()) picture(scene_preview, recipe.character + " / " + *recipe.scene, portrait, portrait_height, scale, true);
+                        else if (!scene_card && location) picture(location->directory / "profile.png", recipe.character, portrait, portrait_height, scale, false);
                         ImGui::TableSetColumnIndex(2);
                     }
-                    ImGui::AlignTextToFramePadding();
-                    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x * 0.4F);
-                    ImGui::TextDisabled("%s", name.c_str());
-                    ImGui::PopTextWrapPos();
-                    ImGui::SameLine(0, 12 * scale);
-                    if (choose("##Option", [&](const float width) {
-                            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width);
-                            ImGui::TextUnformatted(selected ? selected->c_str() : "None");
-                            ImGui::PopTextWrapPos();
-                        })) {
-                        if (option("None", !selected)) next.categories.at(name).reset();
-                        for (const auto& choice : category.order)
-                            if (option(choice, selected == choice)) next.categories.at(name) = choice;
+                    ImGui::PushFont(nullptr, 20);
+                    const auto title = [&](const float width) {
+                        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width);
+                        ImGui::TextUnformatted(scene_card ? (recipe.scene ? recipe.scene->c_str() : "Scene: None") : recipe.character.c_str());
+                        ImGui::PopTextWrapPos();
+                    };
+                    if (choose("##Selection", title, true)) {
+                        ImGui::PushFont(nullptr, 13);
+                        if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+                        ImGui::SetNextItemWidth(-1);
+                        auto& search        = selection_search[scene_card];
+                        const bool searched = ImGui::InputTextWithHint("##Search", scene_card ? "Search scenes or categories..." : "Search characters...", search.data(), search.size());
+                        struct SelectionRow {
+                            std::string_view label;
+                            const std::string* name;
+                        };
+                        std::vector<SelectionRow> rows;
+                        if (scene_card) {
+                            if (option("None", !recipe.scene, true)) next.scene.reset();
+                            std::map<std::string_view, std::vector<const std::string*>> matches;
+                            for (const auto& [name, definition] : library.scenes)
+                                if (!search[0] || ImStristr(name.c_str(), nullptr, search.data(), nullptr) || ImStristr(definition.category.c_str(), nullptr, search.data(), nullptr) || ImStristr(definition.description.c_str(), nullptr, search.data(), nullptr)) matches[definition.category].push_back(&name);
+                            for (const auto& [category, names] : matches) {
+                                rows.push_back({category, nullptr});
+                                for (const auto* name : names) rows.push_back({*name, name});
+                            }
+                        } else {
+                            for (const auto& [name, definition] : library.characters)
+                                if (!search[0] || ImStristr(name.c_str(), nullptr, search.data(), nullptr) || ImStristr(definition.description.c_str(), nullptr, search.data(), nullptr)) rows.push_back({name, &name});
+                        }
+                        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0, 3 * scale});
+                        if (ImGui::BeginChild("##Selections", {0, 260 * scale})) {
+                            if (searched) ImGui::SetScrollY(0);
+                            ImGuiListClipper clipper;
+                            clipper.Begin(static_cast<int>(rows.size()), ImGui::GetTextLineHeight() + 15 * scale);
+                            if (ImGui::IsWindowAppearing())
+                                for (std::size_t i = 0; i < rows.size(); ++i)
+                                    if (rows[i].name && (scene_card ? recipe.scene == *rows[i].name : recipe.character == *rows[i].name)) clipper.IncludeItemByIndex(static_cast<int>(i));
+                            while (clipper.Step())
+                                for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
+                                    const auto& row = rows[i];
+                                    if (!row.name) {
+                                        const auto origin = ImGui::GetCursorScreenPos();
+                                        const float width = ImGui::GetContentRegionAvail().x;
+                                        ImGui::Dummy({width, ImGui::GetTextLineHeight() + 12 * scale});
+                                        auto* draw = ImGui::GetWindowDrawList();
+                                        const ImVec4 clip{origin.x + 9 * scale, origin.y, origin.x + width - 9 * scale, ImGui::GetItemRectMax().y};
+                                        draw->AddText(ImGui::GetFont(), ImGui::GetFontSize(), {clip.x, origin.y + 6 * scale}, ImGui::GetColorU32(ImGuiCol_TextDisabled), row.label.data(), row.label.data() + row.label.size(), 0, &clip);
+                                        const float line = clip.x + ImGui::CalcTextSize(row.label.data(), row.label.data() + row.label.size()).x + 10 * scale;
+                                        const float y    = origin.y + 6 * scale + ImGui::GetTextLineHeight() / 2;
+                                        if (line < clip.z) draw->AddLine({line, y}, {clip.z, y}, ImGui::GetColorU32(ImGuiCol_Border), scale);
+                                        continue;
+                                    }
+                                    const auto& name = *row.name;
+                                    if (option(name, scene_card ? recipe.scene == name : recipe.character == name, true)) {
+                                        if (scene_card) next.scene = name;
+                                        else next.character = name;
+                                    }
+                                    if (ImGui::IsItemHovered()) selection_preview(name, scene_card, recipe, scale);
+                                }
+                            if (rows.empty()) ImGui::TextDisabled(scene_card ? "No matching scenes" : "No matching characters");
+                        }
+                        ImGui::EndChild();
+                        ImGui::PopStyleVar();
+                        ImGui::PopFont();
                         ImGui::EndCombo();
                     }
-                    if (selected) option_text(category.options.at(*selected), "category." + name, *selected, scale, ImGui::GetContentRegionAvail().x, false);
+                    ImGui::PopFont();
+                    if (populated) {
+                        const auto& description = scene_card ? scene->description : character.description;
+                        if (!description.empty()) {
+                            const auto heading = ImGui::GetItemRectSize();
+                            ImGui::PushFont(nullptr, 13);
+                            const float remaining = ImGui::GetContentRegionAvail().x - heading.x - 8 * scale;
+                            if (remaining >= std::min(ImGui::CalcTextSize(description.c_str()).x, 96 * scale)) {
+                                ImGui::SameLine(0, 8 * scale);
+                                ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (heading.y - ImGui::GetTextLineHeight()) / 2);
+                            }
+                            ImGui::PushTextWrapPos(0);
+                            ImGui::TextDisabled("%s", description.c_str());
+                            ImGui::PopTextWrapPos();
+                            ImGui::PopFont();
+                        }
+                    }
+                    if (scene_card && scene) {
+                        ImGui::TextDisabled("Base prompt");
+                        ImGui::TextWrapped("%s", scene->text[0].empty() ? "None" : scene->text[0].c_str());
+                        if (!scene->text[1].empty()) {
+                            ImGui::TextDisabled("Negative prompt");
+                            ImGui::TextWrapped("%s", scene->text[1].c_str());
+                        }
+                    }
+                    if (populated) {
+                        ImGui::Dummy({0, 10 * scale});
+                        if (ImGui::BeginTable("##Choices", 2, ImGuiTableFlags_SizingStretchProp)) {
+                            ImGui::TableSetupColumn("Group", ImGuiTableColumnFlags_WidthFixed, std::min(108 * scale, ImGui::GetContentRegionAvail().x * 0.36F));
+                            ImGui::TableSetupColumn("Option");
+                            for (const auto& group : scene_card ? scene->variations : character.parts) {
+                                ImGui::PushID(group.name.c_str());
+                                const auto& selected = scene_card ? recipe.variations.at(group.name) : recipe.parts.at(group.name);
+                                const auto effect    = composition.parts.find(group.name);
+                                ImGui::TableNextRow();
+                                ImGui::TableSetColumnIndex(0);
+                                ImGui::AlignTextToFramePadding();
+                                ImGui::PushTextWrapPos(0);
+                                ImGui::TextDisabled("%s", group.name.c_str());
+                                ImGui::PopTextWrapPos();
+                                ImGui::TableSetColumnIndex(1);
+                                ImGui::AlignTextToFramePadding();
+                                const auto content = [&](const float width) { option_text(group.options.at(selected), selected, scale, width, !scene_card && effect != composition.parts.end() ? &effect->second : nullptr); };
+                                if (group.options.size() == 1) {
+                                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 6 * scale);
+                                    content(ImGui::GetContentRegionAvail().x);
+                                } else if (choose("##Option", content)) {
+                                    for (const auto& name : group.order) {
+                                        if (option(name, selected == name)) (scene_card ? next.variations : next.parts).at(group.name) = name;
+                                        if (ImGui::IsItemHovered()) selection_preview(name, scene_card, recipe, scale, &group.name);
+                                    }
+                                    ImGui::EndCombo();
+                                }
+                                ImGui::PopID();
+                            }
+                            ImGui::EndTable();
+                        }
+                    } else ImGui::TextDisabled("Choose a scene to configure its variations.");
+                    if (scene_card) {
+                        bool heading{};
+                        for (const auto& part : character.parts) {
+                            const auto found = composition.parts.find(part.name);
+                            if (found == composition.parts.end() || found->second.require.empty()) continue;
+                            if (!heading) {
+                                ImGui::Dummy({0, 10 * scale});
+                                ImGui::TextDisabled("CHARACTER PARTS");
+                                heading = true;
+                            }
+                            const auto& effect = found->second;
+                            ImGui::TextDisabled(effect.disable.empty() ? "Required" : "Conflict");
+                            ImGui::SameLine(0, 8 * scale);
+                            option_text(part.options.at(recipe.parts.at(part.name)), part.name, scale, ImGui::GetContentRegionAvail().x, &effect);
+                        }
+                        if (!composition.error.empty()) {
+                            ImGui::Spacing();
+                            ImGui::PushStyleColor(ImGuiCol_Text, {0.91F, 0.55F, 0.51F, 1});
+                            ImGui::TextWrapped("%s", composition.error.c_str());
+                            ImGui::PopStyleColor();
+                        }
+                    }
                     ImGui::EndTable();
                 }
             }
@@ -263,6 +335,7 @@ namespace genesia::editor {
             ImGui::PopID();
         }
         if (next.character != recipe.character) prompts::select_character(library, next, next.character);
+        if (next.scene != recipe.scene) prompts::select_scene(library, next, next.scene);
         if (next != recipe) {
             recipe = std::move(next);
             update(recipe, catalog);
@@ -271,7 +344,54 @@ namespace genesia::editor {
         ImGui::PopStyleVar(6);
     }
 
-    void PromptPanel::picture(const std::filesystem::path& path, const std::string& name, const float width, const float height, const float scale) {
+    void PromptPanel::selection_preview(const std::string& name, const bool scene, const prompts::Recipe& recipe, const float scale, const std::string* group) {
+        auto candidate = recipe;
+        if (group) (scene ? candidate.variations : candidate.parts).at(*group) = name;
+        else if (scene) {
+            if (candidate.scene != name) prompts::select_scene(library, candidate, name);
+        } else if (candidate.character != name) prompts::select_character(library, candidate, name);
+        const previews::Location target{library.directory / "characters" / files::path(candidate.character) / "images", candidate.parts};
+        hovered_preview     = scene ? target.scene(*candidate.scene, candidate.variations) : target.directory / "profile.png";
+        hover_frame         = ImGui::GetFrameCount();
+        const auto& texture = images.request(hovered_preview);
+        ImGui::BeginTooltip();
+        ImGui::PushFont(nullptr, 13);
+        const auto origin = ImGui::GetCursorScreenPos();
+        const ImVec2 size{112 * scale, 168 * scale};
+        ImGui::Dummy(size);
+        auto* draw = ImGui::GetWindowDrawList();
+        draw->AddRectFilled(origin, {origin.x + size.x, origin.y + size.y}, ImGui::GetColorU32(ImVec4{0.055F, 0.061F, 0.076F, 1}), 7 * scale);
+        if (texture.id) {
+            const float factor = std::min(size.x / texture.width, size.y / texture.height);
+            const ImVec2 minimum{origin.x + (size.x - texture.width * factor) / 2, origin.y + (size.y - texture.height * factor) / 2};
+            draw->AddImageRounded(texture.id, minimum, {minimum.x + texture.width * factor, minimum.y + texture.height * factor}, {0, 0}, {1, 1}, ImGui::GetColorU32(ImVec4{1, 1, 1, 1}), 7 * scale);
+        } else {
+            const char* label = texture.loading ? "Loading..." : texture.error.empty() ? "No preview" : "Preview error";
+            const auto text   = ImGui::CalcTextSize(label);
+            draw->AddText({origin.x + (size.x - text.x) / 2, origin.y + (size.y - text.y) / 2}, ImGui::GetColorU32(ImGuiCol_TextDisabled), label);
+        }
+        ImGui::SameLine(0, 12 * scale);
+        ImGui::BeginGroup();
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 240 * scale);
+        ImGui::TextWrapped("%s", name.c_str());
+        const auto& description = group ? *group : scene ? library.scenes.at(name).description : library.characters.at(name).description;
+        if (!description.empty()) {
+            ImGui::Spacing();
+            ImGui::TextWrapped("%s", description.c_str());
+        }
+        if (!texture.error.empty()) {
+            ImGui::Spacing();
+            ImGui::PushStyleColor(ImGuiCol_Text, {0.91F, 0.55F, 0.51F, 1});
+            ImGui::TextWrapped("%s", texture.error.c_str());
+            ImGui::PopStyleColor();
+        }
+        ImGui::PopTextWrapPos();
+        ImGui::EndGroup();
+        ImGui::PopFont();
+        ImGui::EndTooltip();
+    }
+
+    void PromptPanel::picture(const std::filesystem::path& path, const std::string& name, const float width, const float height, const float scale, const bool scene) {
         const auto origin = ImGui::GetCursorScreenPos();
         const ImVec2 end{origin.x + width, origin.y + height};
         ImGui::PushID(files::utf8(path).c_str());
@@ -327,8 +447,17 @@ namespace genesia::editor {
         } else if (hovered) {
             ImGui::BeginTooltip();
             ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28);
-            ImGui::TextUnformatted("Drop a PNG from File Explorer\nRight-click for preview actions");
-            ImGui::TextWrapped("%s", texture.error.empty() ? files::utf8(path).c_str() : texture.error.c_str());
+            ImGui::TextUnformatted(name.c_str());
+            if (!composition.error.empty()) ImGui::TextWrapped("%s", composition.error.c_str());
+            else {
+                const auto text = prompts::card_prompt(library, *evaluated, composition, scene);
+                for (std::size_t side = 0; side < 2; ++side) {
+                    ImGui::Spacing();
+                    ImGui::TextDisabled(side ? "Negative" : "Positive");
+                    if (text[side].empty()) ImGui::TextDisabled("None");
+                    else ImGui::TextWrapped("%s", text[side].c_str());
+                }
+            }
             ImGui::PopTextWrapPos();
             ImGui::EndTooltip();
         }
@@ -349,65 +478,58 @@ namespace genesia::editor {
         ImGui::PopID();
     }
 
-    void PromptPanel::option_text(const std::array<std::string, 2>& value, const std::string& key, const std::string& name, const float scale, const float width, const bool name_only) const {
-        const std::vector<std::size_t>* reasons{};
-        if (composition) {
-            const auto found = composition->disabled.find(key);
-            if (found != composition->disabled.end()) reasons = &found->second;
-        }
+    void PromptPanel::option_text(const std::array<std::string, 2>& value, const std::string& name, const float scale, const float width, const prompts::Composition::Part* effect) const {
+        const bool required = effect && !effect->require.empty();
+        const bool disabled = effect && (!effect->disable.empty() || (effect->hidden && !required));
+        const bool conflict = required && disabled;
         ImGui::BeginGroup();
-        if (reasons) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        if (disabled) ImGui::PushStyleColor(ImGuiCol_Text, conflict ? ImVec4{0.91F, 0.55F, 0.51F, 1} : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0, 0});
-        if (!name_only && value[0].empty() && value[1].empty()) {
-            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width);
-            ImGui::TextDisabled("%s", name.c_str());
-            ImGui::PopTextWrapPos();
-        }
-        for (std::size_t side = 0; side < (name_only ? 1U : value.size()); ++side) {
-            const auto& text = name_only ? name : value[side];
-            if (text.empty()) continue;
-            if (side) {
-                ImGui::TextDisabled("Negative:");
-                ImGui::SameLine(0, 4 * scale);
+        const auto origin = ImGui::GetCursorScreenPos();
+        const float inset = required ? 10 * scale : 0;
+        if (required) ImGui::GetWindowDrawList()->AddCircleFilled({origin.x + 3 * scale, origin.y + ImGui::GetTextLineHeight() / 2}, 2 * scale, ImGui::GetColorU32(conflict ? ImVec4{0.91F, 0.55F, 0.51F, 1} : ImVec4{0.48F, 0.73F, 0.65F, 1}));
+        const char* cursor = name.data();
+        const char* end    = cursor + name.size();
+        while (cursor < end) {
+            ImGui::SetCursorScreenPos({origin.x + inset, ImGui::GetCursorScreenPos().y});
+            const char* line = ImGui::GetFont()->CalcWordWrapPosition(ImGui::GetFontSize(), cursor, end, std::max(1.0F, width - inset));
+            if (line == cursor) {
+                ++line;
+                while (line < end && (static_cast<unsigned char>(*line) & 0xc0) == 0x80) ++line;
             }
-            const char* cursor    = text.data();
-            const char* end       = cursor + text.size();
-            const float available = std::max(1.0F, width - (side ? ImGui::CalcTextSize("Negative:").x + 4 * scale : 0));
-            while (cursor < end) {
-                const char* line = ImGui::GetFont()->CalcWordWrapPosition(ImGui::GetFontSize(), cursor, end, available);
-                if (line == cursor) {
-                    ++line;
-                    while (line < end && (static_cast<unsigned char>(*line) & 0xc0) == 0x80) ++line;
-                }
-                ImGui::TextUnformatted(cursor, line);
-                if (reasons) {
-                    const auto minimum = ImGui::GetItemRectMin();
-                    const auto maximum = ImGui::GetItemRectMax();
-                    const float y      = (minimum.y + maximum.y) / 2;
-                    ImGui::GetWindowDrawList()->AddLine({minimum.x, y}, {maximum.x, y}, ImGui::GetColorU32(ImGuiCol_Text), scale);
-                }
-                cursor = line;
-                while (cursor < end && (*cursor == ' ' || *cursor == '\t')) ++cursor;
-                if (cursor < end && *cursor == '\n') ++cursor;
+            ImGui::TextUnformatted(cursor, line);
+            if (disabled) {
+                const auto minimum = ImGui::GetItemRectMin();
+                const auto maximum = ImGui::GetItemRectMax();
+                const float y      = (minimum.y + maximum.y) / 2;
+                ImGui::GetWindowDrawList()->AddLine({minimum.x, y}, {maximum.x, y}, ImGui::GetColorU32(ImGuiCol_Text), scale);
             }
+            cursor = line;
+            while (cursor < end && (*cursor == ' ' || *cursor == '\t')) ++cursor;
+            if (cursor < end && *cursor == '\n') ++cursor;
         }
         ImGui::PopStyleVar();
-        if (reasons) ImGui::PopStyleColor();
+        if (disabled) ImGui::PopStyleColor();
         ImGui::EndGroup();
         if (ImGui::IsItemHovered()) {
             ImGui::BeginTooltip();
             ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28);
-            if (name_only) {
-                if (value[0].empty() && value[1].empty()) ImGui::TextDisabled("No prompt");
-                for (std::size_t side = 0; side < 2; ++side) {
-                    if (value[side].empty()) continue;
-                    ImGui::TextDisabled(side ? "Negative" : "Positive");
-                    ImGui::TextWrapped("%s", value[side].c_str());
-                }
-            } else ImGui::TextUnformatted(name.c_str());
-            if (reasons) {
+            if (value[0].empty() && value[1].empty()) ImGui::TextDisabled("No prompt");
+            for (std::size_t side = 0; side < 2; ++side) {
+                if (value[side].empty()) continue;
+                ImGui::TextDisabled(side ? "Negative" : "Positive");
+                ImGui::TextWrapped("%s", value[side].c_str());
+            }
+            if (effect && (effect->hidden || !effect->require.empty() || !effect->disable.empty())) {
                 ImGui::Separator();
-                for (const auto index : *reasons) ImGui::TextWrapped("%s", library.rules[index].reason.c_str());
+                if (effect->hidden) ImGui::TextDisabled("Hidden by the character definition by default.");
+                if (evaluated->scene) {
+                    const auto& rules = library.scenes.at(*evaluated->scene).rules;
+                    for (std::size_t i = 0; i < rules.size(); ++i) {
+                        if (std::ranges::contains(effect->require, i)) ImGui::TextWrapped("Require: %s", rules[i].reason.c_str());
+                        if (std::ranges::contains(effect->disable, i)) ImGui::TextWrapped("Disable: %s", rules[i].reason.c_str());
+                    }
+                }
             }
             ImGui::PopTextWrapPos();
             ImGui::EndTooltip();

@@ -9,6 +9,7 @@ export namespace genesia::editor::previews {
     struct Location final {
         std::filesystem::path root, directory;
         Location(std::filesystem::path root, const std::map<std::string, std::string>& parts);
+        std::filesystem::path scene(std::string_view name, const std::map<std::string, std::string>& variations) const;
     };
 
     struct Images final {
@@ -31,6 +32,7 @@ export namespace genesia::editor::previews {
         explicit Images(Renderer& renderer);
         ~Images();
         void update(const std::set<std::filesystem::path>& wanted);
+        const Texture& request(const std::filesystem::path& path);
         void edit(std::filesystem::path path, std::filesystem::path root, std::optional<std::filesystem::path> source);
         void restore();
 

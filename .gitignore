@@ -4,8 +4,7 @@ cmake-build-*
 build*
 /install/
 /data/
-/assets/classifier/
-/assets/birefnet/
+/assets/weights/
 /assets/prompts/
 AGENTS.md
 TODO.md

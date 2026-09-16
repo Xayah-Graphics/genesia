@@ -26,6 +26,12 @@ namespace genesia::editor::previews {
         for (const auto& [part, option] : parts) directory /= files::path(part + "=" + option);
     }
 
+    std::filesystem::path Location::scene(const std::string_view name, const std::map<std::string, std::string>& variations) const {
+        auto path = directory / "scenes" / files::path(name);
+        for (const auto& [group, option] : variations) path /= files::path(group + "=" + option);
+        return path / "preview.png";
+    }
+
     Images::Images(Renderer& display) : renderer{display}, worker{[this] { read(); }} {}
 
     Images::~Images() {
@@ -71,12 +77,19 @@ namespace genesia::editor::previews {
                 texture.id     = renderer.upload(result.image);
             }
         }
-        {
-            const std::lock_guard lock{mutex};
-            for (const auto& path : wanted)
-                if (textures.try_emplace(path).second) requested.push_back({.path = path});
+        for (const auto& path : wanted) request(path);
+    }
+
+    const Images::Texture& Images::request(const std::filesystem::path& path) {
+        const auto [entry, inserted] = textures.try_emplace(path);
+        if (inserted) {
+            {
+                const std::lock_guard lock{mutex};
+                requested.push_back({.path = path});
+            }
+            condition.notify_one();
         }
-        condition.notify_one();
+        return entry->second;
     }
 
     void Images::edit(std::filesystem::path path, std::filesystem::path root, std::optional<std::filesystem::path> source) {

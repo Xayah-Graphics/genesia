@@ -486,7 +486,7 @@ namespace genesia::editor {
         }
         prompt_panel.update(prompt, *catalog);
         if (!prompt_panel.ready) {
-            preset_error = prompt_panel.error.empty() ? "Wait for the character previews to finish loading." : prompt_panel.error;
+            preset_error = prompt_panel.error.empty() ? "Wait for the prompt previews to finish loading." : prompt_panel.error;
             return false;
         }
         return true;
@@ -543,8 +543,8 @@ namespace genesia::editor {
         } else {
             if (page != Page::generation) return;
             if (!prepare_prompt()) return;
-            parameters.positive = prompt_panel.composition->text[0];
-            parameters.negative = prompt_panel.composition->text[1];
+            parameters.positive = prompt_panel.composition.text[0];
+            parameters.negative = prompt_panel.composition.text[1];
             parameters.denoise  = 1;
         }
         parameters.loras.clear();

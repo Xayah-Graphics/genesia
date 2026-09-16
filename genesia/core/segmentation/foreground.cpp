@@ -6,7 +6,7 @@ import std;
 
 namespace genesia::foreground {
     namespace {
-        const std::filesystem::path model = std::filesystem::path{project::assets} / "birefnet" / "BiRefNet-general.safetensors";
+        const std::filesystem::path model = std::filesystem::path{project::assets} / "weights" / "BiRefNet-general.safetensors";
         std::mutex cache_files;
 
         const std::string& identity() {

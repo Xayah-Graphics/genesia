@@ -76,12 +76,12 @@ namespace genesia::editor {
         }
         if (std::exchange(workspace.final_prompt_requested, false) && workspace.prompt_editor.commit(workspace.prompt.free, *workspace.catalog)) {
             workspace.prompt_panel.update(workspace.prompt, *workspace.catalog);
-            if (workspace.prompt_panel.composition) ImGui::OpenPopup("Final prompt");
+            if (workspace.prompt_panel.composition.error.empty()) ImGui::OpenPopup("Final prompt");
             else workspace.preset_error = workspace.prompt_panel.error;
         }
         ImGui::SetNextWindowSize({720 * scale, 520 * scale}, ImGuiCond_Appearing);
         if (ImGui::BeginPopupModal("Final prompt", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
-            const auto& text = workspace.prompt_panel.composition->text;
+            const auto& text = workspace.prompt_panel.composition.text;
             if (ImGui::BeginChild("##FinalText", {0, -40 * scale})) {
                 for (std::size_t side = 0; side < 2; ++side) {
                     ImGui::PushID(static_cast<int>(side));
@@ -201,17 +201,13 @@ namespace genesia::editor {
                 if (left) selected = dataset_contents(workspace);
                 else if (workspace.page == Workspace::Page::generation || temporary) {
                     workspace.prompt_panel.draw(workspace.prompt, *workspace.catalog, scale);
-                    if (!temporary) {
-                        ImGui::Dummy({0, 6 * scale});
-                        ImGui::SeparatorText("Free prompt");
-                        workspace.prompt_editor.draw(workspace.prompt.free, workspace.tag_search, *workspace.catalog, scale);
-                    }
+                    if (!temporary) workspace.prompt_editor.draw(workspace.prompt.free, workspace.tag_search, *workspace.catalog, scale);
                 } else if (workspace.repaint) {
                     auto& edits = *workspace.repaints.at(workspace.repaint->source.sha);
                     ImGui::PushID(workspace.repaint->source.sha.c_str());
-                    if (ImGui::Button("Apply current character recipe") && workspace.prepare_prompt()) {
+                    if (ImGui::Button("Apply current prompt recipe") && workspace.prepare_prompt()) {
                         ImGui::ClearActiveID();
-                        edits.text = workspace.prompt_panel.composition->text;
+                        edits.text = workspace.prompt_panel.composition.text;
                     }
                     ImGui::SameLine();
                     if (ImGui::Button("Reset")) {

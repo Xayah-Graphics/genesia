@@ -156,7 +156,7 @@ namespace genesia::training {
             files::write_json(root / "snapshot.json", dataset.snapshot);
             auto state = saved_state.value_or(Resume{source.fingerprint, options.steps, settings, dataset.snapshot});
             if (resume && state.split != dataset.snapshot) throw std::runtime_error{"Training split changed; Restart training is required"};
-            convnext::Network model(resume ? latest : std::filesystem::path{u8"" CLASSIFIER_INITIAL_MODEL}, resume ? convnext::NetworkLoad::resume : convnext::NetworkLoad::pretrained);
+            convnext::Network model(resume ? latest : std::filesystem::path{project::assets} / "weights" / "convnextv2-tiny.safetensors", resume ? convnext::NetworkLoad::resume : convnext::NetworkLoad::pretrained);
             if (!resume) model.initialize_head(dataset.snapshot.classes, settings.seed);
             convnext::UpdateState update;
             update.step            = completed;
