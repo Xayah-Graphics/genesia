@@ -271,6 +271,7 @@ if (GENESIA_BUILD_UI)
             genesia::httplib
             CUDA::cudart
             dwmapi
+            imm32
             shell32
             ole32
             iphlpapi

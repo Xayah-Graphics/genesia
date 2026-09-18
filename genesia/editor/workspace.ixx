@@ -149,6 +149,7 @@ export namespace genesia::editor {
         std::optional<dataset::File> pending_delete;
         std::uint64_t seed{defaults::seed};
         bool random_seed{defaults::random_seed};
+        bool continuous_generation{};
         Sidebar dataset_sidebar, prompt_sidebar;
         bool expand_dataset_roots{true};
         ImVec2 canvas_origin{}, canvas_size{};
@@ -166,6 +167,7 @@ export namespace genesia::editor {
         Workspace(prompts::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, std::shared_ptr<const prompts::Library> prompt_library, WindowPlatform& platform, Renderer& renderer, std::string dataset);
         ~Workspace();
         void receive();
+        void update_generation();
         void update_web();
         bool save_model_settings(std::string_view key = {});
         void synchronize_collection();

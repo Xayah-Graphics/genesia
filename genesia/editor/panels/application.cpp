@@ -97,7 +97,6 @@ namespace genesia::editor {
 
     void top_strip(Workspace& workspace, const float scale, const ImVec2 size) {
         bool active{}, loaded{true}, failed{}, unavailable{};
-        std::optional<std::uint64_t> stopping_image;
         int steps{};
         runtime::Kind active_kind{runtime::Kind::generate};
         double elapsed{};
@@ -110,11 +109,11 @@ namespace genesia::editor {
                 active_kind = workspace.session_state.active->kind;
                 steps       = workspace.session_state.generation.steps;
                 elapsed     = std::chrono::duration<double>(std::chrono::steady_clock::now() - workspace.session_state.active->started).count();
-                if (active_kind == runtime::Kind::generate && workspace.session_state.active->state == runtime::State::running) stopping_image = workspace.session_state.active->id;
             }
         }
         const auto stage         = workspace.session_state.generation.stage;
         const auto completed     = workspace.session_state.generation.completed;
+        const bool generating    = active && active_kind == runtime::Kind::generate;
         const bool stopping      = active && workspace.session_state.active->stopping;
         const bool working       = active && !failed;
         const bool indeterminate = working && (active_kind != runtime::Kind::generate || stage != runtime::GenerationStage::sampling || stopping);
@@ -216,11 +215,11 @@ namespace genesia::editor {
             ImGui::EndPopup();
         }
         const bool submission     = workspace.page == Workspace::Page::generation || workspace.repaint.has_value();
-        const float primary_width = submission ? 150 * scale : 0;
-        const float stop_width    = stopping_image ? ImGui::CalcTextSize("Stop image").x + 28 * scale : 0;
+        const bool stop_action    = generating || workspace.continuous_generation;
+        const float primary_width = submission || stop_action ? 150 * scale : 0;
         const char* label         = workspace.progress_alpha > 0 ? workspace.progress_label.c_str() : "";
         const float alpha         = workspace.progress_alpha;
-        const float right_start   = maximum.x - primary_width - stop_width;
+        const float right_start   = maximum.x - primary_width;
         const float label_width   = *label ? std::max(ImGui::CalcTextSize("Finishing image").x, ImGui::CalcTextSize(label).x) : 0;
         const auto time_text      = ImGui::CalcTextSize(workspace.progress_time.c_str());
         const float time_width    = std::max(ImGui::CalcTextSize("0000.0s").x, time_text.x);
@@ -240,39 +239,43 @@ namespace genesia::editor {
                 draw->AddText({origin.x + status_width - time_text.x, y}, ImGui::GetColorU32(ImVec4{0.67F, 0.68F, 0.74F, alpha}), workspace.progress_time.c_str());
             }
             if (ImGui::IsItemHovered()) {
-                if (submission && active_kind == runtime::Kind::generate) {
-                    ImGui::SetTooltip("Click: image generation progress and cancellation");
+                if ((submission || generating) && active_kind == runtime::Kind::generate) {
+                    ImGui::SetTooltip("Click: image generation progress");
                     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) ImGui::OpenPopup("Generation settings");
                 } else if (!workspace.progress_time.empty()) ImGui::SetTooltip("Elapsed: %s", workspace.progress_time.c_str());
             }
         }
-        if (stopping_image) {
-            ImGui::SetCursorScreenPos({right_start, minimum.y + 4 * scale});
-            ImGui::BeginDisabled(stopping);
-            if (text_button("##StopImage", "Stop image", scale)) workspace.runtime.session.cancel(*stopping_image);
-            ImGui::EndDisabled();
-        }
-        if (submission) {
+        if (submission || stop_action) {
             const bool valid   = workspace.repaint ? workspace.root && workspace.root->ready : workspace.prompt_editor.valid && workspace.prompt_panel.ready;
-            const bool enabled = workspace.library.ready && !active && !unavailable && !ImGui::GetTopMostPopupModal() && valid;
-            if (ImGui::IsPopupOpen("Generation settings") && ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::IsMouseHoveringRect({maximum.x - primary_width, minimum.y}, maximum) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            const bool enabled = !ImGui::GetTopMostPopupModal() && (stop_action || (workspace.library.ready && !active && !unavailable && valid));
+            if (ImGui::IsPopupOpen("Generation settings") && ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::IsMouseHoveringRect({right_start, minimum.y}, maximum) && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsMouseClicked(ImGuiMouseButton_Middle))) {
                 workspace.commit_parameters();
                 ImGui::ClosePopupsOverWindow(ImGui::GetCurrentWindow(), false);
             }
-            ImGui::SetCursorScreenPos({maximum.x - primary_width, minimum.y});
+            ImGui::SetCursorScreenPos({right_start, minimum.y});
             ImGui::PushFont(nullptr, 18);
             ImGui::BeginDisabled(!enabled);
-            const bool clicked = text_button("##Submit", workspace.repaint ? "Repaint" : "Generate", scale, primary_width, false, workspace.repaint ? ImVec4{0.53F, 0.80F, 0.72F, 1} : ImVec4{0.70F, 0.65F, 0.97F, 1});
+            const bool clicked = text_button("##Submit", stop_action ? "Stop" : workspace.repaint ? "Repaint" : "Generate", scale, primary_width, stop_action, stop_action ? ImVec4{0.96F, 0.36F, 0.39F, 1} : workspace.repaint ? ImVec4{0.53F, 0.80F, 0.72F, 1} : ImVec4{0.70F, 0.65F, 0.97F, 1});
             ImGui::EndDisabled();
-            const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+            const bool hovered            = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+            const bool continuous_clicked = hovered && !workspace.repaint && ImGui::IsMouseClicked(ImGuiMouseButton_Middle);
             if (hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
                 workspace.commit_parameters();
                 ImGui::OpenPopup("Generation settings");
             }
             ImGui::PopFont();
-            if (hovered && !ImGui::IsPopupOpen("Generation settings")) ImGui::SetTooltip("%s\nCtrl+Shift+`\nRight-click: settings, image progress and cancellation", workspace.repaint ? "Repaint the green source into Raw" : "Generate a new image into Raw");
+            if (hovered && !ImGui::IsPopupOpen("Generation settings")) {
+                if (stop_action) ImGui::SetTooltip("%s\nRight-click: settings and image progress", stopping ? "Stopping the current image" : workspace.continuous_generation ? "Stop continuous generation and cancel the current image" : "Cancel the current image");
+                else ImGui::SetTooltip("%s\nCtrl+Shift+`\nRight-click: settings and image progress", workspace.repaint ? "Repaint the green source into Raw" : "Left-click: generate one image into Raw\nMiddle-click: continuous generation with the latest settings");
+            }
             generation_settings(workspace, scale, size);
-            if (enabled && (clicked || ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_GraveAccent, ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverActive))) workspace.submit();
+            if (enabled && stop_action && clicked) {
+                workspace.continuous_generation = false;
+                if (generating && !stopping) workspace.runtime.session.cancel(workspace.session_state.active->id);
+            } else if (enabled && !stop_action && (clicked || continuous_clicked || ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_GraveAccent, ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverActive))) {
+                const bool submitted            = workspace.submit();
+                workspace.continuous_generation = submitted && continuous_clicked;
+            }
         }
         workspace.window.drag_region = {};
         if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) workspace.window.drag_region = {left_end, 0, group_left - 4 * scale, maximum.y};

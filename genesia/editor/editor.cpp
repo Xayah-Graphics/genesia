@@ -33,7 +33,8 @@ namespace genesia::editor {
         for (;;) {
             if (window.take_close_request()) {
                 if (ui.save_model_settings()) {
-                    closing = true;
+                    closing                  = true;
+                    ui.continuous_generation = false;
                     ui.runtime.web.stop();
                     ui.runtime.session.shutdown();
                 } else window.redraw = true;
@@ -65,6 +66,7 @@ namespace genesia::editor {
             }
             ui.receive();
             ui.draw();
+            ui.update_generation();
             ui.update_web();
             renderer.present();
             const double wait = std::min(ui.refresh_at - glfwGetTime(), glfwGetTime() < ui.animate_until || animating ? 1.0 / 120 : busy ? 0.1 : 1.0);

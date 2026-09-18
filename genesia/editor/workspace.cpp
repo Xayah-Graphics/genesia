@@ -227,6 +227,23 @@ namespace genesia::editor {
         textures.receive();
     }
 
+    void Workspace::update_generation() {
+        if (!continuous_generation) return;
+        const auto& task = activity.at({"", runtime::Kind::generate});
+        if (page != Page::generation || repaint || session_state.finished || !session_state.error.empty() || task.stopping || task.state == runtime::State::stopped || task.state == runtime::State::failed) {
+            continuous_generation = false;
+            return;
+        }
+        if (session_state.active || task.state != runtime::State::complete || ImGui::GetTopMostPopupModal()) return;
+        try {
+            continuous_generation = submit();
+        } catch (const std::exception& failure) {
+            continuous_generation = false;
+            action_error          = failure.what();
+            shown_error.clear();
+        }
+    }
+
     void Workspace::update_web() {
         auto& web = runtime.web;
         if (!web.enabled) return;

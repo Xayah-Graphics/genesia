@@ -1,5 +1,6 @@
 module;
 #include <Windows.h>
+#include <imm.h>
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -44,6 +45,13 @@ namespace genesia::editor {
         chinese.MergeMode = true;
         io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/msyh.ttc", 0, &chinese);
         if (!ImGui_ImplGlfw_InitForVulkan(window.window, true)) throw std::runtime_error{"Cannot initialize ImGui input"};
+        // Keep the IME from consuming shortcuts outside text editing.
+        ImmAssociateContextEx(window.native_window, nullptr, 0);
+        static const auto position_ime = ImGui::GetPlatformIO().Platform_SetImeDataFn;
+        ImGui::GetPlatformIO().Platform_SetImeDataFn = [](ImGuiContext* context, ImGuiViewport* viewport, ImGuiPlatformImeData* data) {
+            ImmAssociateContextEx(static_cast<HWND>(viewport->PlatformHandleRaw), nullptr, data->WantTextInput ? IACE_DEFAULT : 0);
+            position_ime(context, viewport, data);
+        };
         recreate();
     }
 

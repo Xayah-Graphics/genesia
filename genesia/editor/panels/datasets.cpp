@@ -294,7 +294,7 @@ namespace genesia::editor {
                 ImGui::Text("%zu / %zu", batch->completed, batch->total);
             }
             const bool committing = task->kind == runtime::Kind::fix || task->kind == runtime::Kind::assign || task->kind == runtime::Kind::lora || (batch && batch->stage == runtime::Stage::moving);
-            if (!committing && ImGui::Button("Stop", {-FLT_MIN, 0})) workspace.runtime.session.cancel(task->id);
+            if (task->kind != runtime::Kind::generate && !committing && ImGui::Button("Stop", {-FLT_MIN, 0})) workspace.runtime.session.cancel(task->id);
         }
         if (!task->error.empty()) ImGui::TextWrapped("%s", task->error.c_str());
         if (const auto* normalized = std::get_if<dataset::NormalizeResult>(&task->result.value)) {
