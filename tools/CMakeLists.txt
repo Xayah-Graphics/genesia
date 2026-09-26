@@ -1,7 +1,8 @@
 option(CLASSIFIER_BUILD_EDITOR "Build the Classifier Editor" ${GENESIA_BUILD_UI})
 option(EDIT_BUILD_EDITOR "Build the Edit Editor" ${GENESIA_BUILD_UI})
 option(FOREGROUND_BUILD_EDITOR "Build the Foreground Editor" ${GENESIA_BUILD_UI})
-if ((CLASSIFIER_BUILD_EDITOR OR EDIT_BUILD_EDITOR OR FOREGROUND_BUILD_EDITOR) AND NOT WIN32)
+option(QWEN_BUILD_EDITOR "Build the Qwen Editor" ${GENESIA_BUILD_UI})
+if ((CLASSIFIER_BUILD_EDITOR OR EDIT_BUILD_EDITOR OR FOREGROUND_BUILD_EDITOR OR QWEN_BUILD_EDITOR) AND NOT WIN32)
     message(FATAL_ERROR "Tool Editors support Windows only")
 endif ()
 
@@ -160,7 +161,19 @@ target_compile_definitions(foreground PRIVATE
 target_compile_options(foreground PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:-lineinfo;--extended-lambda>")
 target_link_libraries(foreground PRIVATE tools_compute Threads::Threads genesia::stb)
 
-foreach (tool IN ITEMS classifier edit foreground)
+add_executable(qwen qwen/main.cpp)
+target_sources(qwen PRIVATE
+        qwen/core/qwen.cpp
+        qwen/core/session.cpp
+        qwen/core/headless.cpp
+        PRIVATE FILE_SET cxx_modules TYPE CXX_MODULES FILES
+        qwen/core/qwen.ixx
+        qwen/core/session.ixx
+        qwen/core/headless.ixx)
+target_compile_definitions(qwen PRIVATE QWEN_VERSION="${PROJECT_VERSION}")
+target_link_libraries(qwen PRIVATE Threads::Threads genesia::httplib)
+
+foreach (tool IN ITEMS classifier edit foreground qwen)
     string(TOUPPER "${tool}" prefix)
     target_link_libraries(${tool} PRIVATE tools_common)
     if (${prefix}_BUILD_EDITOR)
