@@ -180,14 +180,19 @@ namespace genesia::prompts {
         const auto& definition = choices.options.at(option);
         selection.option       = std::move(option);
         selection.suboptions.clear();
+        selection.disabled_suboptions.clear();
         for (const auto& group : definition.suboptions) selection.suboptions.emplace(group.name, group.initial);
     }
 
-    void select_character(const Library& library, Recipe& recipe, std::string character) {
-        const auto& definition = library.characters.at(character);
-        recipe.character       = std::move(character);
+    void select_character(const Library& library, Recipe& recipe, std::optional<std::string> character) {
+        recipe.character = std::move(character);
         recipe.parts.clear();
-        for (const auto& part : definition.parts) select_option(part, recipe.parts[part.name], part.initial);
+        if (!recipe.character) {
+            recipe.scene.reset();
+            recipe.variations.clear();
+            return;
+        }
+        for (const auto& part : library.characters.at(*recipe.character).parts) select_option(part, recipe.parts[part.name], part.initial);
     }
 
     void select_scene(const Library& library, Recipe& recipe, std::optional<std::string> scene) {
@@ -199,20 +204,28 @@ namespace genesia::prompts {
 
     Composition compose(const Library& library, const Recipe& recipe, const prompt::Catalog& catalog) {
         Composition result;
-        const auto& character = library.characters.at(recipe.character);
+        const Character* character = recipe.character ? &library.characters.at(*recipe.character) : nullptr;
         std::map<std::string, std::string> selections;
-        for (const auto& part : character.parts) {
-            const auto& selected = recipe.parts.at(part.name);
-            selections.emplace("part." + part.name, selected.option);
-            for (const auto& group : part.options.at(selected.option).suboptions) selections.emplace("part." + part.name + "." + group.name, selected.suboptions.at(group.name));
-            result.parts[part.name].hidden = std::ranges::contains(character.hidden, part.name);
+        if (character) {
+            for (const auto& part : character->parts) {
+                const auto& selected = recipe.parts.at(part.name);
+                auto& effect         = result.parts[part.name];
+                effect.hidden        = std::ranges::contains(character->hidden, part.name);
+                effect.user_disabled = !selected.enabled;
+                if (!selected.enabled) continue;
+                selections.emplace("part." + part.name, selected.option);
+                for (const auto& group : part.options.at(selected.option).suboptions)
+                    if (!selected.disabled_suboptions.contains(group.name)) selections.emplace("part." + part.name + "." + group.name, selected.suboptions.at(group.name));
+            }
         }
         const Scene* scene = recipe.scene ? &library.scenes.at(*recipe.scene) : nullptr;
         if (scene) {
             for (const auto& variation : scene->variations) {
                 const auto& selected = recipe.variations.at(variation.name);
+                if (!selected.enabled) continue;
                 selections.emplace("variation." + variation.name, selected.option);
-                for (const auto& group : variation.options.at(selected.option).suboptions) selections.emplace("variation." + variation.name + "." + group.name, selected.suboptions.at(group.name));
+                for (const auto& group : variation.options.at(selected.option).suboptions)
+                    if (!selected.disabled_suboptions.contains(group.name)) selections.emplace("variation." + variation.name + "." + group.name, selected.suboptions.at(group.name));
             }
             for (std::size_t i = 0; i < scene->rules.size(); ++i) {
                 const auto& rule = scene->rules[i];
@@ -229,13 +242,16 @@ namespace genesia::prompts {
                     else result.error += std::format("{} requires missing part '{}'.\n  Require: {}\n", *recipe.scene, target, rule.reason);
                 }
             }
-            for (const auto& part : character.parts) {
-                const auto& effect = result.parts.at(part.name);
-                if (effect.require.empty() || effect.disable.empty()) continue;
-                result.error += std::format("{}: part '{}' is both required and disabled.\n", *recipe.scene, part.name);
-                for (std::size_t i = 0; i < scene->rules.size(); ++i) {
-                    if (std::ranges::contains(effect.require, i)) result.error += "  Require: " + scene->rules[i].reason + '\n';
-                    if (std::ranges::contains(effect.disable, i)) result.error += "  Disable: " + scene->rules[i].reason + '\n';
+            if (character) {
+                for (const auto& part : character->parts) {
+                    const auto& effect = result.parts.at(part.name);
+                    if (effect.require.empty() || (effect.disable.empty() && !effect.user_disabled)) continue;
+                    result.error += std::format("{}: part '{}' is both required and disabled.\n", *recipe.scene, part.name);
+                    if (effect.user_disabled) result.error += "  Disable: disabled in the editor\n";
+                    for (std::size_t i = 0; i < scene->rules.size(); ++i) {
+                        if (std::ranges::contains(effect.require, i)) result.error += "  Require: " + scene->rules[i].reason + '\n';
+                        if (std::ranges::contains(effect.disable, i)) result.error += "  Disable: " + scene->rules[i].reason + '\n';
+                    }
                 }
             }
         }
@@ -257,9 +273,11 @@ namespace genesia::prompts {
     }
 
     std::array<std::string, 2> option_prompt(const Choices& choices, const Selection& selection) {
+        if (!selection.enabled) return {};
         const auto& option = choices.options.at(selection.option);
         auto result        = option.text;
         for (const auto& group : option.suboptions) {
+            if (selection.disabled_suboptions.contains(group.name)) continue;
             const auto& text = group.options.at(selection.suboptions.at(group.name));
             for (std::size_t side = 0; side < 2; ++side) {
                 if (text[side].empty()) continue;
@@ -285,10 +303,12 @@ namespace genesia::prompts {
             append(definition.text);
             for (const auto& variation : definition.variations) append(option_prompt(variation, recipe.variations.at(variation.name)));
         } else {
-            for (const auto& part : library.characters.at(recipe.character).parts) {
-                const auto& effect = composition.parts.at(part.name);
-                if (!effect.disable.empty() || (effect.hidden && effect.require.empty())) continue;
-                append(option_prompt(part, recipe.parts.at(part.name)));
+            if (recipe.character) {
+                for (const auto& part : library.characters.at(*recipe.character).parts) {
+                    const auto& effect = composition.parts.at(part.name);
+                    if (!effect.disable.empty() || (effect.hidden && effect.require.empty())) continue;
+                    append(option_prompt(part, recipe.parts.at(part.name)));
+                }
             }
         }
         return result;
@@ -302,9 +322,11 @@ namespace genesia::prompts {
         try {
             Preset result{std::move(name)};
             auto& recipe          = result.recipe;
-            recipe.character      = json.at("character");
-            const auto& character = read_reference(library.characters, recipe.character, context).second;
-            read_selections(json, character.parts, recipe.parts, source, files::utf8(library.directory / "characters" / files::path(recipe.character) / "character.json"), "parts");
+            if (!json.at("character").is_null()) {
+                recipe.character      = json.at("character").get<std::string>();
+                const auto& character = read_reference(library.characters, *recipe.character, context).second;
+                read_selections(json, character.parts, recipe.parts, source, files::utf8(library.directory / "characters" / files::path(*recipe.character) / "character.json"), "parts");
+            }
             context = source + " / scene";
             if (!json.at("scene").is_null()) recipe.scene = json.at("scene").get<std::string>();
             if (recipe.scene) {
@@ -341,9 +363,9 @@ namespace genesia::prompts {
 
     void write_preset(const Library& library, const Preset& preset, const prompt::Catalog& catalog, const bool replace) {
         const auto& recipe = preset.recipe;
-        nlohmann::json json{{"character", recipe.character}, {"parts", nlohmann::json::object()}, {"scene", recipe.scene ? nlohmann::json(*recipe.scene) : nlohmann::json{}}, {"variations", nlohmann::json::object()}};
+        nlohmann::json json{{"character", recipe.character ? nlohmann::json(*recipe.character) : nlohmann::json{}}, {"parts", nlohmann::json::object()}, {"scene", recipe.scene ? nlohmann::json(*recipe.scene) : nlohmann::json{}}, {"variations", nlohmann::json::object()}};
         nlohmann::json part_suboptions = nlohmann::json::object(), variation_suboptions = nlohmann::json::object();
-        write_selections(json["parts"], part_suboptions, library.characters.at(recipe.character).parts, recipe.parts);
+        if (recipe.character) write_selections(json["parts"], part_suboptions, library.characters.at(*recipe.character).parts, recipe.parts);
         if (recipe.scene) write_selections(json["variations"], variation_suboptions, library.scenes.at(*recipe.scene).variations, recipe.variations);
         if (!part_suboptions.empty()) json["suboptions"]["parts"] = std::move(part_suboptions);
         if (!variation_suboptions.empty()) json["suboptions"]["variations"] = std::move(variation_suboptions);

@@ -55,7 +55,7 @@ export namespace genesia::editor {
         bool adding{};
         std::uint32_t next_id{};
         bool valid{true};
-        bool escape_owned{}, focus_input{};
+        bool focus_input{};
 
         void reset(const prompt::Pair& prompt);
         void suspend();

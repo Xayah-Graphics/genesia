@@ -22,7 +22,7 @@ namespace genesia::headless {
             std::visit(
                 [&]<typename T>(const T& value) {
                     if constexpr (std::same_as<T, runtime::Train>) json["target"] = value.options.steps;
-                    else if constexpr (std::same_as<T, runtime::Classify>) json["input"] = files::utf8(value.input);
+                    else if constexpr (std::same_as<T, runtime::Classify> || std::same_as<T, runtime::FixImages>) json["input"] = files::utf8(value.input);
                     else if constexpr (std::same_as<T, runtime::Fix>) json["category"] = value.category;
                     else if constexpr (std::same_as<T, runtime::Caption>) json["folder"] = value.folder;
                     else if constexpr (std::same_as<T, runtime::Export>) json["output"] = files::utf8(value.output);
@@ -34,7 +34,11 @@ namespace genesia::headless {
                 task.request->operation);
             std::visit(
                 [&]<typename T>(const T& value) {
-                    if constexpr (std::same_as<T, runtime::BatchProgress>) json["progress"] = {{"stage", runtime::stages[std::size_t(value.stage)]}, {"completed", value.completed}, {"total", value.total}};
+                    if constexpr (std::same_as<T, runtime::BatchProgress>) {
+                        json["progress"] = {{"stage", runtime::stages[std::size_t(value.stage)]}, {"completed", value.completed}, {"total", value.total}};
+                        if (!value.file.empty()) json["progress"]["file"] = value.file;
+                        if (!value.label.empty()) json["progress"]["label"] = value.label;
+                    }
                     else if constexpr (std::same_as<T, training::Step>) {
                         json["progress"]          = value;
                         json["progress"]["stage"] = "training";
@@ -53,6 +57,7 @@ namespace genesia::headless {
                         }
                     } else if constexpr (std::same_as<T, dataset::MoveResult>) json["result"] = {{"moved", value.paths.size()}};
                     else if constexpr (std::same_as<T, classification::Classification>) json["result"] = {{"input", files::utf8(value.input)}, {"moved", value.movement.paths.size()}, {"classes", value.classes}};
+                    else if constexpr (std::same_as<T, qwen::Result>) json["result"] = {{"output", files::utf8(value.output)}, {"completed", value.completed}, {"total", value.total}};
                     else if constexpr (std::same_as<T, dataset::DeleteResult>) {
                         std::vector<std::string> paths;
                         for (const auto& path : value.paths) paths.push_back(files::utf8(path));
@@ -241,6 +246,7 @@ Results and progress are JSON Lines. Ctrl+C stops at a safe task boundary.)",
                 operation.source             = runtime::RepaintSource{index.identify(source, std::array{record.parameters.width, record.parameters.height}).sha, source};
                 operation.parameters.denoise = *denoise;
             }
+            if (!prompt_file.empty() || preset_name) operation.parameters.auto_lora_prefix.clear();
             if (!prompt_file.empty()) {
                 std::ifstream file{prompt_file};
                 file.exceptions(std::ios::badbit | std::ios::failbit);

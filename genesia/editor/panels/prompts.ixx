@@ -29,6 +29,6 @@ export namespace genesia::editor {
 
         void selection_preview(const std::string& name, bool scene, const prompts::Recipe& recipe, float scale, const prompts::Choices* group = nullptr, const std::string* suboption = nullptr);
         void picture(const std::filesystem::path& path, const std::string& name, float width, float height, float scale, bool scene);
-        void option_text(const std::array<std::string, 2>& text, const std::string& name, float scale, float width, const prompts::Composition::Part* effect = nullptr) const;
+        bool option_text(const std::array<std::string, 2>& text, const std::string& name, float scale, float width, const prompts::Composition::Part* effect = nullptr, bool enabled = true, bool toggleable = false) const;
     };
 } // namespace genesia::editor

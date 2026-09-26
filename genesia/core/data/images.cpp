@@ -62,6 +62,7 @@ namespace genesia {
         if (metadata.contains("loras")) metadata.at("loras").get_to(result.parameters.loras);
         result.parameters.positive = metadata.at("prompt").at("positive").get<std::string>();
         result.parameters.negative = metadata.at("prompt").at("negative").get<std::string>();
+        if (metadata.at("prompt").contains("auto_lora_prefix")) result.parameters.auto_lora_prefix = metadata.at("prompt").at("auto_lora_prefix").get<std::string>();
         if (metadata.contains("repaint")) {
             result.source             = files::path(metadata.at("repaint").at("source").get<std::string>());
             result.parameters.denoise = metadata.at("repaint").at("denoise");

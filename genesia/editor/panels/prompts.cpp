@@ -17,11 +17,13 @@ namespace genesia::editor {
             location.reset();
             scene_preview.clear();
             try {
-                location.emplace(library.directory / "characters" / files::path(recipe.character) / "images", recipe.parts);
-                if (recipe.scene) scene_preview = location->scene(*recipe.scene, recipe.variations);
+                if (recipe.character) {
+                    location.emplace(library.directory / "characters" / files::path(*recipe.character) / "images", recipe.parts);
+                    if (recipe.scene) scene_preview = location->scene(*recipe.scene, recipe.variations);
+                }
                 composition = prompts::compose(library, recipe, catalog);
             } catch (const std::exception& failure) {
-                composition.error = std::format("Prompt configuration for {}: {}", recipe.character, failure.what());
+                composition.error = std::format("Prompt configuration for {}: {}", recipe.character.value_or("None"), failure.what());
             }
         }
         std::set<std::filesystem::path> wanted;
@@ -45,7 +47,7 @@ namespace genesia::editor {
         }
         images.update(wanted);
         error = composition.error;
-        ready = error.empty() && location.has_value();
+        ready = error.empty() && (!recipe.character || location.has_value());
         for (const auto& path : targets) {
             const auto& texture = images.textures.at(path);
             if (texture.loading) ready = false;
@@ -65,7 +67,7 @@ namespace genesia::editor {
 
     void PromptPanel::draw(prompts::Recipe& recipe, const prompt::Catalog& catalog, const float scale) {
         auto next             = recipe;
-        const auto& character = library.characters.at(recipe.character);
+        const prompts::Character* character = recipe.character ? &library.characters.at(*recipe.character) : nullptr;
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {14 * scale, 14 * scale});
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10 * scale);
         ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, scale);
@@ -74,7 +76,7 @@ namespace genesia::editor {
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {0, 2 * scale});
         ImGui::PushStyleColor(ImGuiCol_ChildBg, {0.075F, 0.080F, 0.098F, 1});
         ImGui::PushStyleColor(ImGuiCol_Border, {0.42F, 0.46F, 0.55F, 0.16F});
-        const auto choose = [&](const char* id, const auto& content, const bool searchable = false) {
+        const auto choose = [&](const char* id, const auto& content, const bool searchable = false, bool* middle_clicked = nullptr) {
             if (ImGui::GetCurrentWindow()->SkipItems) return false;
             const auto origin     = ImGui::GetCursorScreenPos();
             const float available = std::max(1.0F, ImGui::GetContentRegionAvail().x);
@@ -92,6 +94,7 @@ namespace genesia::editor {
             const ImRect bounds{origin, {origin.x + size.x, origin.y + size.y}};
             ImGui::SetCursorScreenPos(origin);
             const bool pressed = ImGui::InvisibleButton(id, size, ImGuiButtonFlags_EnableNav);
+            if (middle_clicked) *middle_clicked = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::IsMouseClicked(ImGuiMouseButton_Middle);
             const auto key     = ImGui::GetItemID();
             bool open          = ImGui::IsPopupOpen(key, ImGuiPopupFlags_None);
             if (pressed && !open) {
@@ -154,14 +157,15 @@ namespace genesia::editor {
         const float profile_height  = 360 * scale;
         const prompts::Scene* scene = recipe.scene ? &library.scenes.at(*recipe.scene) : nullptr;
         for (const bool scene_card : {false, true}) {
-            const bool populated = !scene_card || scene;
+            if (scene_card && !recipe.character) continue;
+            const bool populated = scene_card ? scene != nullptr : character != nullptr;
             ImGui::PushID(scene_card ? "Scene" : "Character");
             if (populated) ImGui::SetNextWindowSizeConstraints({0, profile_height}, {std::numeric_limits<float>::max(), std::numeric_limits<float>::max()});
             if (ImGui::BeginChild("##Card", {0, 0}, card_flags, window_flags)) {
                 const float portrait_height = profile_height - padding_height;
                 const float portrait        = std::min(portrait_height / 1.5F, ImGui::GetContentRegionAvail().x * 0.44F);
-                // Keep each table ID tied to a fixed column layout across scene changes.
-                if (ImGui::BeginTable(populated ? "##Profile" : "##EmptyScene", populated ? 3 : 1, ImGuiTableFlags_SizingStretchProp)) {
+                // Keep each table ID tied to a fixed column layout across selection changes.
+                if (ImGui::BeginTable(populated ? "##Profile" : "##EmptyProfile", populated ? 3 : 1, ImGuiTableFlags_SizingStretchProp)) {
                     if (populated) {
                         ImGui::TableSetupColumn("Preview", ImGuiTableColumnFlags_WidthFixed, portrait);
                         ImGui::TableSetupColumn("Gap", ImGuiTableColumnFlags_WidthFixed, 16 * scale);
@@ -170,14 +174,14 @@ namespace genesia::editor {
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(0);
                     if (populated) {
-                        if (scene_card && !scene_preview.empty()) picture(scene_preview, recipe.character + " / " + *recipe.scene, portrait, portrait_height, scale, true);
-                        else if (!scene_card && location) picture(location->directory / "profile.png", recipe.character, portrait, portrait_height, scale, false);
+                        if (scene_card && !scene_preview.empty()) picture(scene_preview, *recipe.character + " / " + *recipe.scene, portrait, portrait_height, scale, true);
+                        else if (!scene_card && location) picture(location->directory / "profile.png", *recipe.character, portrait, portrait_height, scale, false);
                         ImGui::TableSetColumnIndex(2);
                     }
                     ImGui::PushFont(nullptr, 20);
                     const auto title = [&](const float width) {
                         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width);
-                        ImGui::TextUnformatted(scene_card ? (recipe.scene ? recipe.scene->c_str() : "Scene: None") : recipe.character.c_str());
+                        ImGui::TextUnformatted(scene_card ? (recipe.scene ? recipe.scene->c_str() : "Scene: None") : (recipe.character ? recipe.character->c_str() : "Character: None"));
                         ImGui::PopTextWrapPos();
                     };
                     if (choose("##Selection", title, true)) {
@@ -201,6 +205,7 @@ namespace genesia::editor {
                                 for (const auto* name : names) rows.push_back({*name, name});
                             }
                         } else {
+                            if (option("None", !recipe.character, true)) next.character.reset();
                             for (const auto& [name, definition] : library.characters)
                                 if (!search[0] || ImStristr(name.c_str(), nullptr, search.data(), nullptr) || ImStristr(definition.description.c_str(), nullptr, search.data(), nullptr)) rows.push_back({name, &name});
                         }
@@ -243,7 +248,7 @@ namespace genesia::editor {
                     }
                     ImGui::PopFont();
                     if (populated) {
-                        const auto& description = scene_card ? scene->description : character.description;
+                        const auto& description = scene_card ? scene->description : character->description;
                         if (!description.empty()) {
                             const auto heading = ImGui::GetItemRectSize();
                             ImGui::PushFont(nullptr, 13);
@@ -271,7 +276,7 @@ namespace genesia::editor {
                         if (ImGui::BeginTable("##Choices", 2, ImGuiTableFlags_SizingStretchProp)) {
                             ImGui::TableSetupColumn("Group", ImGuiTableColumnFlags_WidthFixed, std::min(108 * scale, ImGui::GetContentRegionAvail().x * 0.36F));
                             ImGui::TableSetupColumn("Option");
-                            for (const auto& group : scene_card ? scene->variations : character.parts) {
+                            for (const auto& group : scene_card ? scene->variations : character->parts) {
                                 ImGui::PushID(group.name.c_str());
                                 const auto& selected = scene_card ? recipe.variations.at(group.name) : recipe.parts.at(group.name);
                                 const auto effect    = composition.parts.find(group.name);
@@ -289,13 +294,17 @@ namespace genesia::editor {
                                     ImGui::PushTextWrapPos(0);
                                     ImGui::TextDisabled("%s", label.c_str());
                                     ImGui::PopTextWrapPos();
+                                    const bool label_middle = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::IsMouseClicked(ImGuiMouseButton_Middle);
+                                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Middle-click: enable / disable this entry");
                                     ImGui::TableSetColumnIndex(1);
                                     ImGui::AlignTextToFramePadding();
-                                    const auto content = [&](const float width) { option_text(text, value, scale, width, !scene_card && effect != composition.parts.end() ? &effect->second : nullptr); };
+                                    const bool enabled = selected.enabled && (!child || !selected.disabled_suboptions.contains(child->name));
+                                    const auto content = [&](const float width) { return option_text(text, value, scale, width, !scene_card && effect != composition.parts.end() ? &effect->second : nullptr, enabled, true); };
+                                    bool option_middle{};
                                     if (order.size() == 1) {
                                         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 6 * scale);
-                                        content(ImGui::GetContentRegionAvail().x);
-                                    } else if (choose("##Option", content)) {
+                                        option_middle = content(ImGui::GetContentRegionAvail().x);
+                                    } else if (choose("##Option", content, false, &option_middle)) {
                                         for (const auto& name : order) {
                                             if (option(name, value == name) && value != name) {
                                                 auto& target = (scene_card ? next.variations : next.parts).at(group.name);
@@ -306,6 +315,12 @@ namespace genesia::editor {
                                         }
                                         ImGui::EndCombo();
                                     }
+                                    if (!ImGui::GetDragDropPayload() && (label_middle || option_middle)) {
+                                        auto& target = (scene_card ? next.variations : next.parts).at(group.name);
+                                        if (child) {
+                                            if (!target.disabled_suboptions.erase(child->name)) target.disabled_suboptions.insert(child->name);
+                                        } else target.enabled = !target.enabled;
+                                    }
                                     ImGui::PopID();
                                     ImGui::PopID();
                                 };
@@ -315,10 +330,10 @@ namespace genesia::editor {
                             }
                             ImGui::EndTable();
                         }
-                    } else ImGui::TextDisabled("Choose a scene to configure its variations.");
+                    } else ImGui::TextDisabled(scene_card ? "Choose a scene to configure its variations." : "Choose a character to configure its parts.");
                     if (scene_card) {
                         bool heading{};
-                        for (const auto& part : character.parts) {
+                        for (const auto& part : character->parts) {
                             const auto found = composition.parts.find(part.name);
                             if (found == composition.parts.end() || found->second.require.empty()) continue;
                             if (!heading) {
@@ -327,9 +342,9 @@ namespace genesia::editor {
                                 heading = true;
                             }
                             const auto& effect = found->second;
-                            ImGui::TextDisabled(effect.disable.empty() ? "Required" : "Conflict");
+                            ImGui::TextDisabled(effect.disable.empty() && !effect.user_disabled ? "Required" : "Conflict");
                             ImGui::SameLine(0, 8 * scale);
-                            option_text(prompts::option_prompt(part, recipe.parts.at(part.name)), part.name, scale, ImGui::GetContentRegionAvail().x, &effect);
+                            option_text(prompts::option_prompt(part, recipe.parts.at(part.name)), part.name, scale, ImGui::GetContentRegionAvail().x, &effect, !effect.user_disabled);
                         }
                         if (!composition.error.empty()) {
                             ImGui::Spacing();
@@ -355,7 +370,7 @@ namespace genesia::editor {
     }
 
     void PromptPanel::selection_preview(const std::string& name, const bool scene, const prompts::Recipe& recipe, const float scale, const prompts::Choices* group, const std::string* suboption) {
-        const auto& character = !scene && !group ? name : recipe.character;
+        const auto& character = !scene && !group ? name : *recipe.character;
         auto parts            = recipe.parts;
         if (character != recipe.character) {
             parts.clear();
@@ -520,10 +535,10 @@ namespace genesia::editor {
         ImGui::PopID();
     }
 
-    void PromptPanel::option_text(const std::array<std::string, 2>& value, const std::string& name, const float scale, const float width, const prompts::Composition::Part* effect) const {
+    bool PromptPanel::option_text(const std::array<std::string, 2>& value, const std::string& name, const float scale, const float width, const prompts::Composition::Part* effect, const bool enabled, const bool toggleable) const {
         const bool required = effect && !effect->require.empty();
-        const bool disabled = effect && (!effect->disable.empty() || (effect->hidden && !required));
-        const bool conflict = required && disabled;
+        const bool disabled = !enabled || (effect && (effect->user_disabled || !effect->disable.empty() || (effect->hidden && !required)));
+        const bool conflict = required && (!effect->disable.empty() || effect->user_disabled);
         ImGui::BeginGroup();
         if (disabled) ImGui::PushStyleColor(ImGuiCol_Text, conflict ? ImVec4{0.91F, 0.55F, 0.51F, 1} : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0, 0});
@@ -553,7 +568,9 @@ namespace genesia::editor {
         ImGui::PopStyleVar();
         if (disabled) ImGui::PopStyleColor();
         ImGui::EndGroup();
-        if (ImGui::IsItemHovered()) {
+        const bool hovered = ImGui::IsItemHovered();
+        const bool middle_clicked = toggleable && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::IsMouseClicked(ImGuiMouseButton_Middle);
+        if (hovered) {
             ImGui::BeginTooltip();
             ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28);
             if (value[0].empty() && value[1].empty()) ImGui::TextDisabled("No prompt");
@@ -562,10 +579,12 @@ namespace genesia::editor {
                 ImGui::TextDisabled(side ? "Negative" : "Positive");
                 ImGui::TextWrapped("%s", value[side].c_str());
             }
-            if (effect && (effect->hidden || !effect->require.empty() || !effect->disable.empty())) {
+            if (!enabled || toggleable || (effect && (effect->hidden || !effect->require.empty() || !effect->disable.empty()))) {
                 ImGui::Separator();
-                if (effect->hidden) ImGui::TextDisabled("Hidden by the character definition by default.");
-                if (evaluated->scene) {
+                if (!enabled) ImGui::TextDisabled("Disabled in the editor.");
+                if (toggleable) ImGui::TextDisabled("Middle-click: enable / disable this entry.");
+                if (effect && effect->hidden) ImGui::TextDisabled("Hidden by the character definition by default.");
+                if (effect && evaluated->scene) {
                     const auto& rules = library.scenes.at(*evaluated->scene).rules;
                     for (std::size_t i = 0; i < rules.size(); ++i) {
                         if (std::ranges::contains(effect->require, i)) ImGui::TextWrapped("Require: %s", rules[i].reason.c_str());
@@ -576,6 +595,7 @@ namespace genesia::editor {
             ImGui::PopTextWrapPos();
             ImGui::EndTooltip();
         }
+        return middle_clicked;
     }
 
 } // namespace genesia::editor

@@ -20,6 +20,8 @@ export namespace genesia::prompts {
     struct Selection final {
         std::string option;
         std::map<std::string, std::string> suboptions;
+        bool enabled{true};
+        std::set<std::string> disabled_suboptions;
         bool operator==(const Selection&) const = default;
     };
     struct Character final {
@@ -46,7 +48,7 @@ export namespace genesia::prompts {
         Library(std::filesystem::path directory, const prompt::Catalog& catalog);
     };
     struct Recipe final {
-        std::string character;
+        std::optional<std::string> character;
         std::map<std::string, Selection> parts;
         std::optional<std::string> scene;
         std::map<std::string, Selection> variations;
@@ -59,7 +61,7 @@ export namespace genesia::prompts {
     };
     struct Composition final {
         struct Part final {
-            bool hidden{};
+            bool hidden{}, user_disabled{};
             std::vector<std::size_t> disable, require;
         };
         std::array<std::string, 2> text;
@@ -68,7 +70,7 @@ export namespace genesia::prompts {
     };
 
     void select_option(const Choices& choices, Selection& selection, std::string option);
-    void select_character(const Library& library, Recipe& recipe, std::string character);
+    void select_character(const Library& library, Recipe& recipe, std::optional<std::string> character);
     void select_scene(const Library& library, Recipe& recipe, std::optional<std::string> scene);
     Composition compose(const Library& library, const Recipe& recipe, const prompt::Catalog& catalog);
     std::array<std::string, 2> option_prompt(const Choices& choices, const Selection& selection);

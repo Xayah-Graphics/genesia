@@ -4,6 +4,7 @@ export import genesia.segmentation.foreground;
 export import genesia.training;
 export import genesia.classification.audit;
 export import genesia.classification.classify;
+export import genesia.generation.qwen_edit;
 export import genesia.runtime.progress;
 export import genesia.runtime.catalog;
 import std;
@@ -71,13 +72,18 @@ export namespace genesia::runtime {
         std::filesystem::path input, output;
         std::optional<dataset::File> file;
     };
-    enum class Kind { generate, train, infer, audit, fix, classify, assign, erase, normalize, caption, export_dataset, lora, mask };
-    inline constexpr std::array<std::string_view, 13> kinds{"generate", "train", "infer", "audit", "fix", "classify", "assign", "delete", "normalize", "caption", "export", "lora", "mask"};
+    struct FixImages final {
+        std::string concept_key;
+        std::filesystem::path input;
+        std::map<std::string, std::string> prompts;
+    };
+    enum class Kind { generate, train, infer, audit, fix, classify, assign, erase, normalize, caption, export_dataset, lora, mask, fix_images };
+    inline constexpr std::array<std::string_view, 14> kinds{"generate", "train", "infer", "audit", "fix", "classify", "assign", "delete", "normalize", "caption", "export", "lora", "mask", "fix_images"};
     struct Request final {
-        std::variant<Generate, Train, Infer, Audit, Fix, Classify, Assign, Delete, Normalize, Caption, Export, LoraModel, Mask> operation;
+        std::variant<Generate, Train, Infer, Audit, Fix, Classify, Assign, Delete, Normalize, Caption, Export, LoraModel, Mask, FixImages> operation;
     };
     struct Result final {
-        std::variant<std::monostate, training::State, classification::Result, classification::Audit, dataset::MoveResult, classification::Classification, dataset::Concept, dataset::DeleteResult, dataset::NormalizeResult, caption::Result, caption::Exported, LoraModelResult, foreground::Result> value;
+        std::variant<std::monostate, training::State, classification::Result, classification::Audit, dataset::MoveResult, classification::Classification, dataset::Concept, dataset::DeleteResult, dataset::NormalizeResult, caption::Result, caption::Exported, LoraModelResult, foreground::Result, qwen::Result> value;
     };
     struct TaskStatus final {
         std::uint64_t id{};

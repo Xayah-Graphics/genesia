@@ -373,6 +373,23 @@ namespace genesia::runtime {
                         observed.clear();
                     }
                     emit(!result.error.empty() ? State::failed : result.stopped ? State::stopped : State::complete, {}, {result}, result.error);
+                } else if constexpr (std::same_as<T, FixImages>) {
+                    release_generation();
+                    predictions.reset();
+                    foreground.network.reset();
+                    const auto result   = qwen::fix_images(catalog.index, operation.concept_key, operation.input, operation.prompts, interrupted, progress);
+                    const auto relative = result.output.lexically_relative(project::directory);
+                    if (result.completed && !relative.empty() && *relative.begin() != "..") {
+                        const auto root = files::utf8(*relative.begin());
+                        catalog.index.scan(root);
+                        update_catalog(catalog.root(root));
+                        for (const auto& collection : std::ranges::find(catalog.index.roots, root, [](const dataset::Root& value) { return value.all.key; })->concepts) update_catalog(catalog.describe(collection.key, true));
+                        const std::lock_guard lock{mutex};
+                        wanted.clear();
+                        wanted_masks.clear();
+                        observed.clear();
+                    }
+                    emit(!result.error.empty() ? State::failed : result.stopped ? State::stopped : State::complete, {}, {result}, result.error);
                 } else if constexpr (std::same_as<T, Classify>) {
                     const auto input    = std::filesystem::absolute(operation.input).lexically_normal();
                     const auto relative = input.lexically_relative(project::directory);

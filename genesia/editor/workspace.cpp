@@ -444,7 +444,12 @@ namespace genesia::editor {
             if (page != Page::dataset) return;
         }
         const auto& parameters = cached->second.record->parameters;
-        repaint.emplace(source, return_page, return_view, return_camera, std::array{parameters.positive, parameters.negative});
+        auto positive = parameters.positive;
+        if (!parameters.auto_lora_prefix.empty()) {
+            const auto separator = positive.size() == parameters.auto_lora_prefix.size() ? 0 : 2;
+            positive = positive.substr(parameters.auto_lora_prefix.size() + separator);
+        }
+        repaint.emplace(source, return_page, return_view, return_camera, std::array{std::move(positive), parameters.negative});
         viewing             = View::repaint;
         view                = {};
         prompt_sidebar.open = true;
@@ -574,6 +579,19 @@ namespace genesia::editor {
         }
     }
 
+    Workspace::LoraPrompt Workspace::with_lora_triggers(std::string positive) const {
+        LoraPrompt result{std::move(positive), {}};
+        for (const auto& [key, controls] : model_settings) {
+            if (!controls.active || !controls.lora) continue;
+            if (!result.prefix.empty()) result.prefix += ", ";
+            result.prefix += files::utf8(files::path(key).filename());
+        }
+        if (result.prefix.empty()) return result;
+        if (!result.positive.empty()) result.positive.insert(0, ", ");
+        result.positive.insert(0, result.prefix);
+        return result;
+    }
+
     bool Workspace::submit() {
         commit_parameters();
         auto parameters = draft;
@@ -592,6 +610,9 @@ namespace genesia::editor {
             parameters.negative = prompt_panel.composition.text[1];
             parameters.denoise  = 1;
         }
+        auto triggered               = with_lora_triggers(std::move(parameters.positive));
+        parameters.positive         = std::move(triggered.positive);
+        parameters.auto_lora_prefix = std::move(triggered.prefix);
         parameters.loras.clear();
         for (const auto& [key, controls] : model_settings)
             if (controls.active && controls.lora) parameters.loras.push_back({key, {}, controls.lora->weight, controls.lora->start / 100});
@@ -644,8 +665,8 @@ namespace genesia::editor {
     }
     std::uint64_t Workspace::submit_task(runtime::Request request) {
         if ((std::holds_alternative<runtime::Assign>(request.operation) || std::holds_alternative<runtime::LoraModel>(request.operation)) && !save_model_settings()) throw std::runtime_error{action_error};
-        const bool relocating = std::holds_alternative<runtime::Normalize>(request.operation) || std::holds_alternative<runtime::Fix>(request.operation);
-        if (relocating) {
+        const bool changing_files = std::holds_alternative<runtime::Normalize>(request.operation) || std::holds_alternative<runtime::Fix>(request.operation) || std::holds_alternative<runtime::FixImages>(request.operation);
+        if (changing_files) {
             textures.paused = true;
             textures.request({});
             runtime.session.observe({}, {}, false);
@@ -654,7 +675,7 @@ namespace genesia::editor {
         try {
             submitted = runtime.session.submit(std::move(request));
         } catch (...) {
-            if (relocating) textures.paused = false;
+            if (changing_files) textures.paused = false;
             throw;
         }
         const auto id = submitted.id;
@@ -698,6 +719,18 @@ namespace genesia::editor {
                 caption_continuation = {};
                 concept_tool         = ConceptTool::tags;
                 dataset_sidebar.open = true;
+            }
+        }
+        if (kind == runtime::Kind::fix_images && state >= runtime::State::complete) {
+            textures.paused = false;
+            if (const auto* result = std::get_if<qwen::Result>(&event.result.value); result && result->completed) {
+                std::vector<std::filesystem::path> replaced;
+                for (const auto& [sha, texture] : textures.entries)
+                    if (texture.file.path.parent_path() == result->output) replaced.push_back(texture.file.path);
+                textures.discard(replaced);
+                view = {};
+                visible_images.clear();
+                synchronize_collection();
             }
         }
         if ((kind == runtime::Kind::normalize || kind == runtime::Kind::fix) && state >= runtime::State::complete) {
@@ -869,11 +902,6 @@ namespace genesia::editor {
             const bool stopped = current != activity.end() && (current->second.state == runtime::State::stopped || current->second.state == runtime::State::failed);
             if (!stopped) open_audit(audit_key);
         }
-        const auto editor_state = [&] {
-            const PromptEditor* editor = page == Page::generation ? &prompt_editor : nullptr;
-            return std::pair{editor && editor->escape_owned, editor && editor->focus_input};
-        };
-        bool dismissing = escape_owned || parameter_edit.id || ImGui::IsAnyItemActive() || ImGui::GetDragDropPayload() || ImGui::GetIO().WantTextInput || (prompt_sidebar.open && editor_state().first) || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
         if (!renderer.visible) {
             if (!previous_model_edit.empty()) save_model_settings(previous_model_edit);
             return;
@@ -900,8 +928,13 @@ namespace genesia::editor {
                 if (session_state.active) action_error = "Finish the current operation first.";
                 else if (window.dropped.size() != 1) action_error = "Drop one item at a time.";
                 else if (dataset_sidebar.open && concept_tool == ConceptTool::model && library.loras.contains(collection_key)) submit_task({runtime::LoraModel{collection_key, window.dropped.front()}});
-                else if (dataset_sidebar.open && concept_tool == ConceptTool::classify && info != library.classifiers.end() && info->second.model) submit_task({runtime::Classify{collection_key, window.dropped.front()}});
-                else action_error = "Open Model to import a LoRA file, or Classify to classify a folder.";
+                else if (dataset_sidebar.open && concept_tool == ConceptTool::classify && info != library.classifiers.end() && info->second.model) {
+                    if (classify_mode == ClassifyMode::fix_image) {
+                        if (!fix_image_editor.error.empty()) throw std::runtime_error{fix_image_editor.error};
+                        if (!fix_image_editor.loaded) throw std::runtime_error{"Load this classifier's Edit prompts first"};
+                        submit_task({runtime::FixImages{collection_key, window.dropped.front(), fix_image_editor.profile.prompts}});
+                    } else submit_task({runtime::Classify{collection_key, window.dropped.front()}});
+                } else action_error = "Open Model to import a LoRA file, or Classify to classify or fix a folder.";
             } catch (const std::exception& failure) {
                 action_error = failure.what();
                 shown_error.clear();
@@ -914,14 +947,13 @@ namespace genesia::editor {
         top_strip(*this, scale, size);
         preset_dialogs(*this, scale);
         const bool inspecting = page != Page::generation && viewing != View::browse && viewing != View::comparison;
-        if (inspecting && image.texture && image.file && !image.preview && !pending_delete && !session_state.active && !dismissing && !ImGui::IsAnyItemActive() && !ImGui::GetIO().WantTextInput && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && (ImGui::Shortcut(ImGuiKey_Delete, ImGuiInputFlags_RouteGlobal) || ImGui::Shortcut(ImGuiKey_KeypadDecimal, ImGuiInputFlags_RouteGlobal))) {
+        if (inspecting && image.texture && image.file && !image.preview && !pending_delete && !session_state.active && !parameter_edit.id && !ImGui::IsAnyItemActive() && !ImGui::GetDragDropPayload() && !ImGui::GetIO().WantTextInput && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && (ImGui::Shortcut(ImGuiKey_Delete, ImGuiInputFlags_RouteGlobal) || ImGui::Shortcut(ImGuiKey_KeypadDecimal, ImGuiInputFlags_RouteGlobal))) {
             pending_delete = *image.file;
             ImGui::OpenPopup("Delete image?");
         }
         ImGui::SetNextWindowPos({size.x / 2, size.y / 2}, ImGuiCond_Appearing, {0.5F, 0.5F});
         ImGui::SetNextWindowSize({480 * scale, 0});
         if (ImGui::BeginPopupModal("Delete image?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-            dismissing          = true;
             const auto relative = pending_delete->path.lexically_relative(project::directory);
             const auto name     = files::utf8(*relative.begin());
             const auto target   = std::ranges::find(library.roots, name, [](const dataset::Root& item) { return item.all.key; });
@@ -962,10 +994,9 @@ namespace genesia::editor {
             ImGui::EndPopup();
         }
         if (page == Page::generation && !ImGui::GetTopMostPopupModal() && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S, ImGuiInputFlags_RouteGlobal)) save_prompt();
-        if (ImGui::Shortcut(ImGuiKey_F11, ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverActive) || (!ImGui::GetIO().WantTextInput && !(prompt_sidebar.open && editor_state().second) && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && ImGui::Shortcut(ImGuiKey_F, ImGuiInputFlags_RouteGlobal))) window.toggle_fullscreen();
-        if (!dismissing && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && ImGui::Shortcut(ImGuiKey_Escape, ImGuiInputFlags_RouteGlobal)) window.request_close();
-        escape_owned = parameter_edit.id || ImGui::IsAnyItemActive() || ImGui::GetDragDropPayload() || (prompt_sidebar.open && editor_state().first) || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
-        if (!ImGui::GetIO().WantTextInput && !(prompt_sidebar.open && editor_state().second) && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
+        if (ImGui::Shortcut(ImGuiKey_F11, ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverActive) || (!ImGui::GetIO().WantTextInput && !(page == Page::generation && prompt_sidebar.open && prompt_editor.focus_input) && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && ImGui::Shortcut(ImGuiKey_F, ImGuiInputFlags_RouteGlobal))) window.toggle_fullscreen();
+        if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_W, ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverActive)) window.request_close();
+        if (!ImGui::GetIO().WantTextInput && !(page == Page::generation && prompt_sidebar.open && prompt_editor.focus_input) && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
             if (ImGui::Shortcut(ImGuiKey_Tab, ImGuiInputFlags_RouteGlobal)) prompt_sidebar.open = !prompt_sidebar.open;
             if (ImGui::Shortcut(ImGuiKey_GraveAccent, ImGuiInputFlags_RouteGlobal)) {
                 dataset_sidebar.open = !dataset_sidebar.open;

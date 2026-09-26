@@ -22,6 +22,7 @@ export namespace genesia::generation {
     struct Settings final {
         std::string positive;
         std::string negative;
+        std::string auto_lora_prefix;
         int width{defaults::width};
         int height{defaults::height};
         int steps{defaults::steps};

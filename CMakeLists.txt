@@ -62,12 +62,12 @@ genesia_require_dependency(nlohmann_json)
 genesia_require_dependency(cudnn)
 genesia_require_dependency(cudnn_frontend)
 genesia_require_dependency(stb)
+genesia_require_dependency(httplib)
 include(cmake/ClionCudaFacade.cmake)
 if (GENESIA_BUILD_UI)
     genesia_require_dependency(vulkan)
     genesia_require_dependency(slang)
     genesia_require_dependency(imgui)
-    genesia_require_dependency(httplib)
     include(cmake/Shaders.cmake)
 endif ()
 
@@ -90,6 +90,7 @@ target_sources(genesia_core
         genesia/core/data/operations.cpp
         genesia/core/generation/engine.cpp
         genesia/core/generation/output.cpp
+        genesia/core/generation/qwen-edit.cpp
         genesia/core/headless.cpp
         genesia/core/io/files.cpp
         genesia/core/io/hash.cpp
@@ -138,6 +139,7 @@ target_sources(genesia_core
         genesia/core/generation/defaults.ixx
         genesia/core/generation/engine.ixx
         genesia/core/generation/output.ixx
+        genesia/core/generation/qwen-edit.ixx
         genesia/core/generation/settings.ixx
         genesia/core/headless.ixx
         genesia/core/io/files.ixx
@@ -196,6 +198,7 @@ target_link_libraries(
         CUDA::cuda_driver
         CUDA::nvrtc
         genesia::stb
+        genesia::httplib
 )
 
 # ============================================================================

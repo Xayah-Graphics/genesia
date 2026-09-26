@@ -288,6 +288,8 @@ namespace genesia::editor {
         if (!task) return;
         const auto* batch = std::get_if<runtime::BatchProgress>(&task->progress.value);
         ImGui::TextDisabled("%s", task->state < runtime::State::complete && task->stopping ? "Stopping..." : task->state < runtime::State::complete && batch ? runtime::stages[std::size_t(batch->stage)].data() : runtime::states[std::size_t(task->state)].data());
+        if (batch && !batch->file.empty()) ImGui::TextWrapped("%s", batch->file.c_str());
+        if (batch && !batch->label.empty()) ImGui::TextWrapped("Label: %s", batch->label.c_str());
         if (task->state < runtime::State::complete) {
             if (batch && batch->total) {
                 ImGui::ProgressBar(float(batch->completed) / batch->total, {-1, 3 * workspace.renderer.dpi}, "");
@@ -304,6 +306,10 @@ namespace genesia::editor {
         }
         if (const auto* classified = std::get_if<classification::Classification>(&task->result.value))
             for (const auto& [label, count] : classified->classes) ImGui::TextWrapped("%s / %zu images", label.c_str(), count);
+        if (const auto* fixed = std::get_if<qwen::Result>(&task->result.value)) {
+            ImGui::TextWrapped("%zu / %zu images saved", fixed->completed, fixed->total);
+            ImGui::TextWrapped("%s", files::utf8(fixed->output).c_str());
+        }
     }
 
     void training_controls(Workspace& workspace, const training::TrainingData& source, const float scale) {
@@ -458,20 +464,65 @@ namespace genesia::editor {
     void classify_controls(Workspace& workspace, const training::TrainingData& source) {
         const bool trained = source.model.has_value();
         auto& path         = workspace.classify_paths[source.key];
+        for (const auto [mode, label] : {std::pair{Workspace::ClassifyMode::folder, "Classify Folder"}, std::pair{Workspace::ClassifyMode::fix_image, "Fix Image"}}) {
+            if (mode != Workspace::ClassifyMode::folder) ImGui::SameLine();
+            if (ImGui::RadioButton(std::format("{}##Mode", label).c_str(), workspace.classify_mode == mode)) workspace.classify_mode = mode;
+        }
+        const bool fixing = workspace.classify_mode == Workspace::ClassifyMode::fix_image;
+        auto& editor      = workspace.fix_image_editor;
+        if (fixing && trained && (editor.key != source.key || editor.model_sha != source.model->sha)) {
+            editor = {.key = source.key, .model_sha = source.model->sha};
+            try {
+                editor.profile = qwen::load_profile(*source.model);
+                editor.loaded  = true;
+            } catch (const std::exception& error) {
+                editor.error = error.what();
+            }
+        }
         if (!trained) ImGui::TextWrapped("A published classifier is required to submit another folder.");
         ImGui::BeginDisabled(!trained || workspace.session_state.active.has_value());
+        if (fixing && trained) {
+            bool save{};
+            ImGui::TextWrapped("One random-seed Qwen edit per direct PNG. Saves into fixed/ with the original names, replacing previous results. Originals are retained.");
+            ImGui::TextWrapped("Input: 1024 x 1024, 1024 x 1536, or 1536 x 1024. Prompts are saved automatically for this classifier.");
+            if (ImGui::BeginChild("##FixPrompts", {0, 220 * workspace.renderer.dpi}, ImGuiChildFlags_None)) {
+                for (const auto& label : editor.profile.classes) {
+                    ImGui::PushID(label.c_str());
+                    ImGui::TextUnformatted(label.c_str());
+                    save |= ImGui::InputTextMultiline("##Prompt", &editor.profile.prompts.at(label), {-FLT_MIN, 85 * workspace.renderer.dpi});
+                    ImGui::PopID();
+                }
+            }
+            ImGui::EndChild();
+            if (!editor.error.empty()) {
+                ImGui::TextWrapped("%s", editor.error.c_str());
+                if (ImGui::Button(editor.loaded ? "Retry saving prompts" : "Reload prompts")) {
+                    if (!editor.loaded) editor.key.clear();
+                    else save = true;
+                }
+            }
+            if (save) {
+                try {
+                    qwen::save_profile(source.key, editor.profile);
+                    editor.error.clear();
+                } catch (const std::exception& error) {
+                    editor.error = error.what();
+                }
+            }
+        }
         ImGui::TextWrapped("Drop one folder into the window, or paste its path below.");
-        ImGui::TextWrapped("Direct PNG images move into predicted category folders. Original names are retained.");
+        if (!fixing) ImGui::TextWrapped("Direct PNG images move into predicted category folders. Original names are retained.");
         ImGui::TextUnformatted("Directory");
         ImGui::SetNextItemWidth(-FLT_MIN);
         ImGui::InputText("##ClassifyDirectory", path.data(), path.size());
-        ImGui::BeginDisabled(!path.front());
-        if (ImGui::Button("Classify folder", {-FLT_MIN, 0})) {
-            workspace.submit_task({runtime::Classify{source.key, files::path(path.data())}});
+        ImGui::BeginDisabled(!path.front() || (fixing && (!editor.loaded || !editor.error.empty())));
+        if (ImGui::Button(fixing ? "Fix Image" : "Classify folder", {-FLT_MIN, 0})) {
+            if (fixing) workspace.submit_task({runtime::FixImages{source.key, files::path(path.data()), editor.profile.prompts}});
+            else workspace.submit_task({runtime::Classify{source.key, files::path(path.data())}});
         }
         ImGui::EndDisabled();
         ImGui::EndDisabled();
-        operation_activity(workspace, {runtime::Kind::classify}, source.key);
+        operation_activity(workspace, {fixing ? runtime::Kind::fix_images : runtime::Kind::classify}, source.key);
     }
 
     void caption_controls(Workspace& workspace, const caption::Dataset& source, const float scale) {

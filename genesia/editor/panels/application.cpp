@@ -122,7 +122,7 @@ namespace genesia::editor {
             workspace.progress_alpha = 1;
             if (stopping) workspace.progress_label = "Stopping";
             else if (active_kind != runtime::Kind::generate) {
-                static constexpr std::array labels{"Generate", "Training", "Inference", "Audit", "Moving image", "Classifying folder", "Assigning type", "Deleting image", "Normalizing dataset", "Saving caption", "Exporting dataset", "Updating LoRA", "Recognizing foreground"};
+                static constexpr std::array labels{"Generate", "Training", "Inference", "Audit", "Moving image", "Classifying folder", "Assigning type", "Deleting image", "Normalizing dataset", "Saving caption", "Exporting dataset", "Updating LoRA", "Recognizing foreground", "Fixing images"};
                 static_assert(labels.size() == runtime::kinds.size());
                 workspace.progress_label = labels[std::size_t(active_kind)];
             } else if (!loaded) workspace.progress_label = "Loading model";
@@ -169,7 +169,7 @@ namespace genesia::editor {
         ImGui::SetCursorPos({12 * scale, 4 * scale});
         if (workspace.page == Workspace::Page::generation) {
             if (text_button("##Application", "GENESIA", scale)) ImGui::OpenPopup("Application");
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Right-click canvas: open Raw\n`: datasets\nTab: Prompt\nF / F11: fullscreen\nEsc: exit");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Right-click canvas: open Raw\n`: datasets\nTab: Prompt\nF / F11: fullscreen\nCtrl+W: exit");
         } else {
             if (text_button("##Back", "\xE2\x80\xB9", scale)) workspace.back();
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Back one level\nRight-click the canvas to return");
@@ -181,7 +181,7 @@ namespace genesia::editor {
                 workspace.dataset_sidebar.open = !workspace.dataset_sidebar.open;
                 if (workspace.dataset_sidebar.open) workspace.expand_dataset_roots = true;
             }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\n`: datasets\nTab: Prompt\nLeft-click image: center / inspect\nRight-click canvas: back\nEsc: exit", workspace.collection_key.c_str());
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\n`: datasets\nTab: Prompt\nLeft-click image: center / inspect\nRight-click canvas: back\nCtrl+W: exit", workspace.collection_key.c_str());
         }
         const float left_end = ImGui::GetItemRectMax().x + 4 * scale;
         if (ImGui::BeginPopup("Application")) {
@@ -206,7 +206,9 @@ namespace genesia::editor {
             if (ImGui::MenuItem("View final prompt", nullptr, false, workspace.page == Workspace::Page::generation)) workspace.final_prompt_requested = true;
             if (ImGui::MenuItem("Export final prompt", nullptr, false, workspace.page == Workspace::Page::generation) && workspace.prepare_prompt()) {
                 try {
-                    prompts::export_prompt(workspace.prompt_library->directory, workspace.preset_name, workspace.prompt_panel.composition);
+                    auto composition    = workspace.prompt_panel.composition;
+                    composition.text[0] = workspace.with_lora_triggers(std::move(composition.text[0])).positive;
+                    prompts::export_prompt(workspace.prompt_library->directory, workspace.preset_name, composition);
                 } catch (const std::exception& failure) {
                     workspace.preset_error = failure.what();
                 }

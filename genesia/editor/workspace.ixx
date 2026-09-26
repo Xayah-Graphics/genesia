@@ -29,6 +29,12 @@ export namespace genesia::editor {
         };
         enum class Page { generation, dataset, audit };
         enum class ConceptTool { none, train, audit, classify, tags, export_dataset, model };
+        enum class ClassifyMode { folder, fix_image };
+        struct FixImageEditor final {
+            std::string key, model_sha, error;
+            qwen::Profile profile;
+            bool loaded{};
+        };
         enum class View { browse, inspect, repaint, comparison, source, result };
         enum class Role { image, source, result };
         enum class ImageAction { none, click, repaint };
@@ -48,6 +54,9 @@ export namespace genesia::editor {
             ImageView return_camera;
             std::array<std::string, 2> text;
             Output result;
+        };
+        struct LoraPrompt final {
+            std::string positive, prefix;
         };
         struct Position final {
             std::string selected;
@@ -122,6 +131,8 @@ export namespace genesia::editor {
         std::string type_error;
         std::optional<TrainingDraft> training_draft;
         std::map<std::string, std::array<char, 2048>> classify_paths;
+        ClassifyMode classify_mode{ClassifyMode::folder};
+        FixImageEditor fix_image_editor;
         std::map<std::string, std::string> export_paths;
         CaptionEditor caption_editor;
         std::function<void()> caption_continuation;
@@ -162,7 +173,6 @@ export namespace genesia::editor {
         double frame_time{}, animate_until{};
         double refresh_at{std::numeric_limits<double>::infinity()};
         std::string shown_error, action_error;
-        bool escape_owned{};
 
         Workspace(prompts::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, std::shared_ptr<const prompts::Library> prompt_library, WindowPlatform& platform, Renderer& renderer, std::string dataset);
         ~Workspace();
@@ -186,6 +196,7 @@ export namespace genesia::editor {
         bool save_prompt();
         void switch_preset(std::string name);
         void begin_output(Output& output, std::uint64_t task, int width, int height);
+        LoraPrompt with_lora_triggers(std::string positive) const;
         bool submit();
 
         void open_audit(std::string key, bool refresh = false);

@@ -54,7 +54,8 @@ namespace genesia::editor {
         }
         ImGui::SetNextWindowSize({720 * scale, 520 * scale}, ImGuiCond_Appearing);
         if (ImGui::BeginPopupModal("Final prompt", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
-            const auto& text = workspace.prompt_panel.composition.text;
+            auto text = workspace.prompt_panel.composition.text;
+            text[0]   = workspace.with_lora_triggers(std::move(text[0])).positive;
             if (ImGui::BeginChild("##FinalText", {0, -40 * scale})) {
                 for (std::size_t side = 0; side < 2; ++side) {
                     ImGui::PushID(static_cast<int>(side));

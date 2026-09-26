@@ -9,11 +9,12 @@ export namespace genesia::runtime {
     };
     enum class State { running, saving, complete, stopped, failed };
     inline constexpr std::array<std::string_view, 5> states{"running", "saving", "complete", "stopped", "failed"};
-    enum class Stage { preparing, audit, classifying, moving, generating, scanning, normalizing, exporting, segmenting };
-    inline constexpr std::array<std::string_view, 9> stages{"preparing", "audit", "classifying", "moving", "generating", "scanning", "normalizing", "exporting", "segmenting"};
+    enum class Stage { preparing, audit, classifying, moving, generating, scanning, normalizing, exporting, segmenting, editing };
+    inline constexpr std::array<std::string_view, 10> stages{"preparing", "audit", "classifying", "moving", "generating", "scanning", "normalizing", "exporting", "segmenting", "editing"};
     struct BatchProgress final {
         Stage stage;
         std::size_t completed{}, total{};
+        std::string file, label;
     };
     struct Progress final {
         std::variant<std::monostate, BatchProgress, training::Step, training::Metrics> value;

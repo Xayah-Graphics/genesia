@@ -390,7 +390,7 @@ namespace genesia::editor {
         addition     = TagEditor{.id = ++next_id};
         adding       = false;
         valid        = true;
-        escape_owned = focus_input = false;
+        focus_input = false;
     }
 
     void PromptEditor::suspend() {
@@ -399,7 +399,7 @@ namespace genesia::editor {
             editor.selection.reset();
         }
         addition.menu_open = addition.input_active = addition.focus_input = false;
-        escape_owned = focus_input = false;
+        focus_input = false;
     }
 
     bool PromptEditor::commit(prompt::Pair& prompt, const prompt::Catalog& catalog) {
@@ -462,17 +462,15 @@ namespace genesia::editor {
                 bool held{}, hit{};
                 ImGui::ButtonBehavior(bounds, key, &hit, &held, ImGuiButtonFlags_FlattenChildren | ImGuiButtonFlags_NoNavFocus);
                 if (background) {
-                    ImGui::SetTooltip("%s group\nDrag: reorder groups of the same type\nMiddle-click: switch to %s\nRight-click: enable / disable", side_index ? "Negative" : "Positive", side_index ? "positive" : "negative");
-                    if (!ImGui::GetDragDropPayload() && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
-                        ImGui::FocusWindow(ImGui::GetCurrentWindow());
-                        switch_group = i;
+                    ImGui::SetTooltip("%s group\nDrag: reorder groups of the same type\nMiddle-click: enable / disable\nRight-click: switch to %s", side_index ? "Negative" : "Positive", side_index ? "positive" : "negative");
+                    if (!ImGui::GetDragDropPayload()) {
+                        const bool middle = ImGui::IsMouseClicked(ImGuiMouseButton_Middle);
+                        const bool right  = ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+                        if (middle || right) ImGui::FocusWindow(ImGui::GetCurrentWindow());
+                        if (middle) group.enabled = !group.enabled;
+                        if (right) switch_group = i;
                     }
                 }
-            }
-            if (background && !ImGui::GetDragDropPayload() && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) ImGui::OpenPopup("Group actions");
-            if (ImGui::BeginPopup("Group actions")) {
-                if (ImGui::MenuItem(group.enabled ? "Disable group" : "Enable group")) group.enabled = !group.enabled;
-                ImGui::EndPopup();
             }
             if (ImGui::BeginDragDropSource()) {
                 ImGui::SetDragDropPayload(group_payloads[side_index], &i, sizeof(i));
@@ -617,13 +615,9 @@ namespace genesia::editor {
         draw_groups(prompt, search, catalog, scale);
         ImGui::PopStyleColor();
         ImGui::PopStyleVar(2);
-        valid        = std::ranges::all_of(groups | std::views::join, &TagEditor::valid) && addition.valid;
-        escape_owned = adding;
-        focus_input  = addition.focus_input;
-        for (const auto& editor : groups | std::views::join) {
-            escape_owned |= editor.menu_open || editor.editing.has_value();
-            focus_input |= editor.focus_input;
-        }
+        valid       = std::ranges::all_of(groups | std::views::join, &TagEditor::valid) && addition.valid;
+        focus_input = addition.focus_input;
+        for (const auto& editor : groups | std::views::join) focus_input |= editor.focus_input;
     }
 
 } // namespace genesia::editor
