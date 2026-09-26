@@ -22,8 +22,10 @@ RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
         ninja
 
 WORKDIR /workspace
-COPY --link . .
-COPY --link assets/ /opt/genesia/assets/
+COPY --link VERSION CMakeLists.txt main.cpp ./
+COPY --link cmake/ cmake/
+COPY --link genesia/ genesia/
+COPY --link tools/ tools/
 
 RUN cmake -S . -B cmake-build-release -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
@@ -45,13 +47,13 @@ RUN groupadd --gid 10001 genesia \
         /workspace \
         /workspace/data \
         /workspace/data/raw \
-        /workspace/.genesia \
+        /workspace/data/.genesia \
         /workspace/models \
         /workspace/cmake-build-release/genesia-cache
 
 COPY --from=build --link /workspace/cmake-build-release/genesia /opt/genesia/bin/genesia
-COPY --from=build --link --chown=10001:10001 /opt/genesia/assets /opt/genesia/assets
-COPY --from=build --link /workspace/LICENSE /opt/genesia/LICENSE
+COPY --link --chown=10001:10001 assets/ /opt/genesia/assets/
+COPY --link LICENSE /opt/genesia/LICENSE
 
 USER 10001:10001
 ENV HOME=/workspace \
