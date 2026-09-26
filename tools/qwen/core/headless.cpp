@@ -21,7 +21,8 @@ qwen --headless INPUT --prompt TEXT [--choice RESULT ...]
 
 INPUT is a PNG image or a directory containing PNG images (not recursive).
 The default candidates are YES and NO. Originals are never changed.
-Results are printed as JSON Lines. LM Studio: {}, model: {}.)", QWEN_VERSION, server_url, model);
+Results are printed as JSON Lines. LM Studio: {}, model: {}.)",
+                QWEN_VERSION, server_url, model);
             return 0;
         }
         Request request{.input = tools::files::path(arguments.front()), .choices = {"YES", "NO"}};

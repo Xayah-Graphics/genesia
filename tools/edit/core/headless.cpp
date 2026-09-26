@@ -27,6 +27,7 @@ Each input image is <image1>. Up to nine --reference PNG files are fixed
 as <image2> through <image10>, in argument order, for the entire batch.
 Outputs go into INPUT/fix, or into the image's parent/fix, with original names.
 Existing results are replaced only after a complete output is ready. Originals remain.
+ComfyUI outputs are also retained in its output directory.
 One Qwen Image 2.1 edit per image, with a random seed and the same positive prompt.
 Local ComfyUI: {}, with --input-directory and --output-directory.
 Progress and results are JSON Lines. Ctrl+C stops this batch.)",

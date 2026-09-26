@@ -20,15 +20,20 @@ export namespace genesia::sdxl {
         Snapshots(::cuda::stream_ref stream, int width, int height);
     };
 
-    struct Preview final {
+    struct Decoder final {
         const int width;
         const int height;
+        std::size_t cache_hits{};
+        std::size_t cache_misses{};
+        ::cuda::stream_ref stream;
         ::cuda::device_buffer<std::uint8_t> pixels;
+        std::unique_ptr<std::remove_pointer_t<cudaEvent_t>, decltype(&cudaEventDestroy)> started{nullptr, cudaEventDestroy};
+        std::unique_ptr<std::remove_pointer_t<cudaEvent_t>, decltype(&cudaEventDestroy)> finished{nullptr, cudaEventDestroy};
 
-        Preview(::cuda::stream_ref stream, const VAE& vae, const std::filesystem::path& cache, int width, int height);
-        ~Preview();
-        Preview(const Preview&)            = delete;
-        Preview& operator=(const Preview&) = delete;
+        Decoder(::cuda::stream_ref stream, const VAE& vae, const std::filesystem::path& cache, int width, int height);
+        ~Decoder();
+        Decoder(const Decoder&)            = delete;
+        Decoder& operator=(const Decoder&) = delete;
         void decode(const float* latent);
 
     private:

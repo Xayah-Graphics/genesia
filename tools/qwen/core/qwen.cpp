@@ -28,21 +28,13 @@ namespace qwen {
             const auto bytes = tools::files::read_bytes(file);
             const auto image = "data:image/png;base64," + encode_base64(bytes);
             const nlohmann::json schema{{"type", "object"}, {"properties", {{"result", {{"type", "string"}, {"enum", request.choices}}}}}, {"required", {"result"}}, {"additionalProperties", false}};
-            const nlohmann::json payload{
-                {"model", model},
-                {"messages", {{{"role", "user"}, {"content", {{{"type", "image_url"}, {"image_url", {{"url", image}}}}, {{"type", "text"}, {"text", request.prompt}}}}}}},
-                {"temperature", 0},
-                {"max_tokens", 1024},
-                {"reasoning_effort", "none"},
-                {"stream", false},
-                {"response_format", {{"type", "json_schema"}, {"json_schema", {{"name", "image_result"}, {"strict", true}, {"schema", schema}}}}}
-            };
+            const nlohmann::json payload{{"model", model}, {"messages", {{{"role", "user"}, {"content", {{{"type", "image_url"}, {"image_url", {{"url", image}}}}, {{"type", "text"}, {"text", request.prompt}}}}}}}, {"temperature", 0}, {"max_tokens", 1024}, {"reasoning_effort", "none"}, {"stream", false}, {"response_format", {{"type", "json_schema"}, {"json_schema", {{"name", "image_result"}, {"strict", true}, {"schema", schema}}}}}};
             const auto response = client.Post("/v1/chat/completions", payload.dump(), "application/json");
             if (!response) throw std::runtime_error{std::format("Qwen request failed: {}", httplib::to_string(response.error()))};
             if (response->status != 200) throw std::runtime_error{std::format("Qwen request returned HTTP {}: {}", response->status, response->body)};
             const auto reply   = nlohmann::json::parse(response->body);
             const auto content = reply.at("choices").at(0).at("message").at("content").get<std::string>();
-            const auto result   = nlohmann::json::parse(content).at("result").get<std::string>();
+            const auto result  = nlohmann::json::parse(content).at("result").get<std::string>();
             if (std::ranges::find(request.choices, result) == request.choices.end()) throw std::runtime_error{"Qwen returned a result outside the candidate list"};
             return result;
         }

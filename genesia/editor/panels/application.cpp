@@ -94,7 +94,7 @@ namespace genesia::editor {
         const bool active        = workspace.session_state.active.has_value();
         const bool loaded        = workspace.session_state.generation.model_ready;
         const bool failed        = !workspace.session_state.error.empty();
-        const bool unavailable   = workspace.session_state.finished;
+        const bool unavailable   = workspace.session_state.finished || failed;
         const int steps          = workspace.session_state.generation.steps;
         const double elapsed     = active ? std::chrono::duration<double>(std::chrono::steady_clock::now() - workspace.session_state.active->started).count() : 0;
         const auto stage         = workspace.session_state.generation.stage;

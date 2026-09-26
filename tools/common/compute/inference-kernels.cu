@@ -76,7 +76,7 @@ namespace tools::compute::kernels {
             const int c = j * 256 + threadIdx.x;
             if (c >= width) continue;
             const int i = blockIdx.x * width + c;
-            output[i] = __half(fmaf((values[j] - mean) * inverse, float(weight[c]), float(bias[c])));
+            output[i]   = __half(fmaf((values[j] - mean) * inverse, float(weight[c]), float(bias[c])));
         }
     }
 

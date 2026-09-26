@@ -18,6 +18,7 @@ export namespace genesia::generation {
         Engine(Visuals visuals, std::function<void(runtime::Event)> report, std::function<void(runtime::PreviewFrame)> preview);
         ~Engine();
         bool generate(std::uint64_t id, const runtime::Generate& request, const std::atomic_bool& interrupted);
+        void flush();
         void cancel();
         void configure(bool enabled, bool visible);
         runtime::GenerationProgress observe();
@@ -37,16 +38,24 @@ export namespace genesia::generation {
         std::condition_variable condition;
         std::optional<Active> active;
         bool model_ready{}, preview_enabled{defaults::preview_enabled}, preview_visible{true};
-        bool finished{}, preview_closing{}, preview_prepare{}, preview_ready{}, preview_working{}, preview_sampling{}, preview_release{}, preview_done{};
+        bool finished{}, preview_closing{}, preview_working{}, preview_sampling{};
         std::string error;
         std::shared_ptr<sdxl::Snapshots> snapshots;
         ::cuda::stream preview_stream{::cuda::no_init};
         std::unique_ptr<std::remove_pointer_t<cudaEvent_t>, decltype(&cudaEventDestroy)> preview_finished{nullptr, cudaEventDestroy};
         std::unique_ptr<sdxl::Model> model;
         std::unique_ptr<sdxl::Inference> inference;
+        std::unique_ptr<sdxl::Decoder> decoder;
         std::size_t iteration{};
         std::jthread preview_worker;
+        std::unique_ptr<sdxl::Output> saving_output;
+        Record saving_record;
+        std::uint64_t saving_id{};
+        bool save_pending{}, save_closing{};
+        std::exception_ptr save_error;
+        std::jthread save_worker;
         void release();
         void preview_images();
+        void save_images();
     };
 } // namespace genesia::generation

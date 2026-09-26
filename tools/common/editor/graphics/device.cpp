@@ -28,7 +28,7 @@ namespace tools::editor::graphics {
         features.get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters = true;
         auto& v12                                                               = features.get<vk::PhysicalDeviceVulkan12Features>();
         v12.bufferDeviceAddress = v12.scalarBlockLayout = true;
-        auto& v13                                                               = features.get<vk::PhysicalDeviceVulkan13Features>();
+        auto& v13                                       = features.get<vk::PhysicalDeviceVulkan13Features>();
         v13.synchronization2 = v13.dynamicRendering                                              = true;
         features.get<vk::PhysicalDeviceDescriptorHeapFeaturesEXT>().descriptorHeap               = true;
         features.get<vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR>().shaderUntypedPointers = true;

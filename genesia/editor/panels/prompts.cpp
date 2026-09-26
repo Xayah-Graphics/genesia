@@ -66,7 +66,7 @@ namespace genesia::editor {
     }
 
     void PromptPanel::draw(prompts::Recipe& recipe, const prompt::Catalog& catalog, const float scale) {
-        auto next             = recipe;
+        auto next                           = recipe;
         const prompts::Character* character = recipe.character ? &library.characters.at(*recipe.character) : nullptr;
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {14 * scale, 14 * scale});
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10 * scale);
@@ -95,8 +95,8 @@ namespace genesia::editor {
             ImGui::SetCursorScreenPos(origin);
             const bool pressed = ImGui::InvisibleButton(id, size, ImGuiButtonFlags_EnableNav);
             if (middle_clicked) *middle_clicked = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::IsMouseClicked(ImGuiMouseButton_Middle);
-            const auto key     = ImGui::GetItemID();
-            bool open          = ImGui::IsPopupOpen(key, ImGuiPopupFlags_None);
+            const auto key = ImGui::GetItemID();
+            bool open      = ImGui::IsPopupOpen(key, ImGuiPopupFlags_None);
             if (pressed && !open) {
                 ImGui::OpenPopupEx(key, ImGuiPopupFlags_None);
                 open = true;
@@ -568,7 +568,7 @@ namespace genesia::editor {
         ImGui::PopStyleVar();
         if (disabled) ImGui::PopStyleColor();
         ImGui::EndGroup();
-        const bool hovered = ImGui::IsItemHovered();
+        const bool hovered        = ImGui::IsItemHovered();
         const bool middle_clicked = toggleable && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::IsMouseClicked(ImGuiMouseButton_Middle);
         if (hovered) {
             ImGui::BeginTooltip();

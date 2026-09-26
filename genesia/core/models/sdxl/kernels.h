@@ -26,7 +26,7 @@ namespace genesia::sdxl::kernels {
     void snapshot_publish(::cuda::stream_ref stream, const int* selected, SnapshotSlot* slots, const int* step);
     void euler(const ::cuda::stream_ref stream, float* state, void* input, const void* epsilon, const SamplingStep* schedule, const int* step, const float cfg, const int count, float* snapshots = nullptr, const int* selected = nullptr);
     void enter_phase(::cuda::stream_ref stream, cudaGraphConditionalHandle loop, Control* control);
-    void advance(::cuda::stream_ref stream, int* step, int end, int count, cudaGraphConditionalHandle loop, cudaGraphConditionalHandle decode, Control* control);
+    void advance(::cuda::stream_ref stream, int* step, int end, int count, cudaGraphConditionalHandle loop, Control* control);
     void latent_decode(const ::cuda::stream_ref stream, void* output, const float* latent, const int count);
     void pixels(const ::cuda::stream_ref stream, std::uint8_t* output, const void* input, const int count);
 } // namespace genesia::sdxl::kernels

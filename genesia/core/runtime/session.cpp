@@ -114,6 +114,12 @@ namespace genesia::runtime {
                     id        = active->id;
                     submitted = false;
                 }
+                std::shared_ptr<generation::Engine> engine;
+                {
+                    const std::lock_guard lock{mutex};
+                    engine = generation;
+                }
+                std::string failure;
                 try {
                     auto image = *request;
                     for (auto& lora : image.parameters.loras) {
@@ -124,35 +130,37 @@ namespace genesia::runtime {
                         if (fingerprint.sha.empty() || fingerprint.modified != modified || fingerprint.bytes != bytes) fingerprint = {modified, bytes, files::digest(path)};
                         lora.sha = fingerprint.sha;
                     }
+                    if (!engine) {
+                        engine = std::make_shared<generation::Engine>(
+                            visuals, [this](Event event) { receive(std::move(event)); },
+                            [this](PreviewFrame frame) {
+                                {
+                                    const std::lock_guard lock{mutex};
+                                    delivery.previews.push_back(std::move(frame));
+                                }
+                                if (visuals.notify) visuals.notify();
+                            });
+                        const std::lock_guard lock{mutex};
+                        engine->configure(preview_enabled, preview_visible);
+                        generation = engine;
+                    }
                     std::random_device random;
                     for (int i = 0; i < image.count && !interrupted; ++i) {
-                        std::shared_ptr<generation::Engine> engine;
-                        {
-                            const std::lock_guard lock{mutex};
-                            engine = generation;
-                        }
-                        if (!engine) {
-                            engine = std::make_shared<generation::Engine>(
-                                visuals, [this](Event event) { receive(std::move(event)); },
-                                [this](PreviewFrame frame) {
-                                    {
-                                        const std::lock_guard lock{mutex};
-                                        delivery.previews.push_back(std::move(frame));
-                                    }
-                                    if (visuals.notify) visuals.notify();
-                                });
-                            const std::lock_guard lock{mutex};
-                            engine->configure(preview_enabled, preview_visible);
-                            generation = engine;
-                        }
                         image.seed = request->random_seed ? std::uniform_int_distribution<std::uint64_t>{}(random) : request->seed + i;
                         emit(State::running);
                         if (!engine->generate(id, image, interrupted)) break;
                     }
-                    emit(interrupted ? State::stopped : State::complete);
-                } catch (const std::exception& failure) {
-                    emit(State::failed, failure.what());
+                } catch (const std::exception& exception) {
+                    failure = exception.what();
                 }
+                try {
+                    if (engine) engine->flush();
+                } catch (const std::exception& exception) {
+                    if (failure.empty()) failure = exception.what();
+                    else if (failure != exception.what()) failure += std::format("\n{}", exception.what());
+                }
+                const auto state = failure.empty() ? (interrupted ? State::stopped : State::complete) : State::failed;
+                emit(state, std::move(failure));
             }
             std::shared_ptr<generation::Engine> previous;
             {

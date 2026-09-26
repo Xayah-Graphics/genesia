@@ -25,12 +25,7 @@ if (NOT WIN32 AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(FATAL_ERROR "Genesia supports only Windows and Linux")
 endif ()
 
-if (WIN32)
-    set(GENESIA_BUILD_UI_DEFAULT ON)
-else ()
-    set(GENESIA_BUILD_UI_DEFAULT OFF)
-endif ()
-option(GENESIA_BUILD_UI "Build the Windows Editor into the genesia executable" ${GENESIA_BUILD_UI_DEFAULT})
+option(GENESIA_BUILD_UI "Build the Windows Editors for Genesia and all tools" ${WIN32})
 if (GENESIA_BUILD_UI AND NOT WIN32)
     message(FATAL_ERROR "GENESIA_BUILD_UI is supported only on Windows")
 endif ()
@@ -64,9 +59,9 @@ genesia_require_dependency(nlohmann_json)
 genesia_require_dependency(cudnn)
 genesia_require_dependency(cudnn_frontend)
 genesia_require_dependency(stb)
+genesia_require_dependency(httplib)
 include(cmake/ClionCudaFacade.cmake)
 if (GENESIA_BUILD_UI)
-    genesia_require_dependency(httplib)
     genesia_require_dependency(vulkan)
     genesia_require_dependency(slang)
     genesia_require_dependency(imgui)
@@ -257,4 +252,195 @@ if (MSVC)
     set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/cxx-modules")
 endif ()
 
-add_subdirectory(tools)
+# ============================================================================
+# Tools
+# ============================================================================
+# Shared startup, file, image and model I/O for Headless and Editor builds.
+add_library(tools_common STATIC)
+target_sources(tools_common PRIVATE
+        tools/common/platform/application.cpp
+        tools/common/files.cpp
+        tools/common/hash.cpp
+        tools/common/images.cpp
+        tools/common/safetensors.cpp
+        PUBLIC FILE_SET cxx_modules TYPE CXX_MODULES FILES
+        tools/common/platform/application.ixx
+        tools/common/files.ixx
+        tools/common/hash.ixx
+        tools/common/images.ixx
+        tools/common/safetensors.ixx)
+target_link_libraries(tools_common PUBLIC nlohmann_json::nlohmann_json PRIVATE genesia::stb)
+if (WIN32)
+    target_link_libraries(tools_common PRIVATE user32)
+endif ()
+
+add_library(tools_compute STATIC)
+target_sources(tools_compute PRIVATE
+        tools/common/compute/device.cpp
+        tools/common/compute/plans.cpp
+        tools/common/compute/inference.cpp
+        tools/common/compute/inference-kernels.cu
+        PUBLIC FILE_SET cxx_modules TYPE CXX_MODULES FILES
+        tools/common/compute/device.ixx
+        tools/common/compute/plans.ixx
+        tools/common/compute/inference.ixx)
+target_include_directories(tools_compute PUBLIC "${PROJECT_SOURCE_DIR}/tools/common" "${GENESIA_CLION_CUDA_INCLUDE_DIRECTORY}")
+target_compile_definitions(tools_compute PRIVATE
+        TOOLS_CXX_COMPILER="${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}"
+        TOOLS_PLATFORM="${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
+target_compile_options(tools_compute PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:-lineinfo;--extended-lambda>")
+target_link_libraries(tools_compute PUBLIC tools_common CCCL::libcudacxx CUDA::toolkit cuDNN::cuDNN CUDA::cublasLt CUDA::cudart
+        PRIVATE genesia::cudnn-frontend CUDA::cuda_driver CUDA::nvrtc)
+
+if (GENESIA_BUILD_UI)
+    set(TOOLS_SHADER_DIRECTORY "${PROJECT_BINARY_DIR}/tools/generated/editor-shaders")
+    set(TOOLS_SHADERS)
+    foreach (stage IN ITEMS vertex fragment)
+        set(output "${TOOLS_SHADER_DIRECTORY}/imgui_${stage}.spv")
+        add_custom_command(OUTPUT "${output}"
+                COMMAND "${CMAKE_COMMAND}" -E make_directory "${TOOLS_SHADER_DIRECTORY}"
+                COMMAND "${GENESIA_SLANG_COMPILER}" "${PROJECT_SOURCE_DIR}/tools/common/editor/shaders/imgui.slang"
+                -target spirv -profile spirv_1_6 -entry imgui_${stage} -stage ${stage} -emit-spirv-directly
+                -capability SPIRV_1_6+spvDescriptorHeapEXT -spirv-unified-descriptor-heap-stride
+                -fvk-use-entrypoint-name -fvk-use-c-layout -matrix-layout-row-major -O2 -o "${output}"
+                DEPENDS "${PROJECT_SOURCE_DIR}/tools/common/editor/shaders/imgui.slang" VERBATIM)
+        list(APPEND TOOLS_SHADERS "${output}")
+    endforeach ()
+    add_custom_target(tools_shaders DEPENDS ${TOOLS_SHADERS})
+
+    add_library(tools_editor STATIC)
+    target_sources(tools_editor PRIVATE
+            tools/common/editor/platform/window.cpp
+            tools/common/editor/platform/files.cpp
+            tools/common/editor/graphics/device.cpp
+            tools/common/editor/graphics/resources.cpp
+            tools/common/editor/graphics/renderer.cpp
+            tools/common/editor/style.cpp
+            PUBLIC FILE_SET cxx_modules TYPE CXX_MODULES FILES
+            tools/common/editor/platform/window.ixx
+            tools/common/editor/platform/files.ixx
+            tools/common/editor/graphics/device.ixx
+            tools/common/editor/graphics/resources.ixx
+            tools/common/editor/graphics/renderer.ixx
+            tools/common/editor/style.ixx)
+    target_compile_definitions(tools_editor PUBLIC GLFW_INCLUDE_NONE GLFW_EXPOSE_NATIVE_WIN32
+            PRIVATE TOOLS_SHADER_DIRECTORY="${TOOLS_SHADER_DIRECTORY}")
+    target_link_libraries(tools_editor PUBLIC genesia::vulkan genesia::imgui
+            PRIVATE tools_common dwmapi imm32 shell32 ole32)
+    add_dependencies(tools_editor tools_shaders)
+endif ()
+
+add_executable(classifier tools/classifier/main.cpp)
+target_sources(classifier PRIVATE
+        tools/classifier/core/models/convnext/network.cpp
+        tools/classifier/core/models/convnext/elementwise.cu
+        tools/classifier/core/models/convnext/normalization.cu
+        tools/classifier/core/models/convnext/optimizer.cu
+        tools/classifier/core/models/convnext/preprocess.cu
+        tools/classifier/core/models/convnext/spatial.cu
+        tools/classifier/core/data/directory.cpp
+        tools/classifier/core/data/models.cpp
+        tools/classifier/core/training/state.cpp
+        tools/classifier/core/training/samples.cpp
+        tools/classifier/core/training/training.cpp
+        tools/classifier/core/inference.cpp
+        tools/classifier/core/audit.cpp
+        tools/classifier/core/classify.cpp
+        tools/classifier/core/session.cpp
+        tools/classifier/core/headless.cpp
+        PRIVATE FILE_SET cxx_modules TYPE CXX_MODULES FILES
+        tools/classifier/core/project.ixx
+        tools/classifier/core/models/convnext/network.ixx
+        tools/classifier/core/data/directory.ixx
+        tools/classifier/core/data/models.ixx
+        tools/classifier/core/training/state.ixx
+        tools/classifier/core/training/samples.ixx
+        tools/classifier/core/training/training.ixx
+        tools/classifier/core/progress.ixx
+        tools/classifier/core/inference.ixx
+        tools/classifier/core/audit.ixx
+        tools/classifier/core/classify.ixx
+        tools/classifier/core/session.ixx
+        tools/classifier/core/headless.ixx)
+set(CLASSIFIER_ASSET_DIRECTORY "${GENESIA_ASSET_DIRECTORY}" CACHE PATH "Classifier pretrained weights")
+target_compile_definitions(classifier PRIVATE
+        CLASSIFIER_VERSION="${PROJECT_VERSION}"
+        CLASSIFIER_ASSET_DIRECTORY="${CLASSIFIER_ASSET_DIRECTORY}"
+        CLASSIFIER_CACHE_DIRECTORY="${PROJECT_BINARY_DIR}/tools/classifier-cache")
+target_compile_options(classifier PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:-lineinfo;--extended-lambda>")
+target_link_libraries(classifier PRIVATE
+        tools_compute Threads::Threads
+        genesia::cudnn-frontend CUDA::cuda_driver CUDA::nvrtc)
+
+add_executable(edit tools/edit/main.cpp)
+target_sources(edit PRIVATE
+        tools/edit/core/edit.cpp
+        tools/edit/core/session.cpp
+        tools/edit/core/headless.cpp
+        PRIVATE FILE_SET cxx_modules TYPE CXX_MODULES FILES
+        tools/edit/core/edit.ixx
+        tools/edit/core/session.ixx
+        tools/edit/core/headless.ixx)
+target_compile_definitions(edit PRIVATE EDIT_VERSION="${PROJECT_VERSION}")
+target_link_libraries(edit PRIVATE Threads::Threads genesia::httplib)
+
+add_executable(foreground tools/foreground/main.cpp)
+target_sources(foreground PRIVATE
+        tools/foreground/core/foreground.cpp
+        tools/foreground/core/models/birefnet/network.cpp
+        tools/foreground/core/models/birefnet/kernels.cu
+        tools/foreground/core/session.cpp
+        tools/foreground/core/headless.cpp
+        PRIVATE FILE_SET cxx_modules TYPE CXX_MODULES FILES
+        tools/foreground/core/foreground.ixx
+        tools/foreground/core/models/birefnet/network.ixx
+        tools/foreground/core/session.ixx
+        tools/foreground/core/headless.ixx)
+set(FOREGROUND_ASSET_DIRECTORY "${GENESIA_ASSET_DIRECTORY}" CACHE PATH "Foreground pretrained weights")
+target_compile_definitions(foreground PRIVATE
+        FOREGROUND_VERSION="${PROJECT_VERSION}"
+        FOREGROUND_ASSET_DIRECTORY="${FOREGROUND_ASSET_DIRECTORY}"
+        FOREGROUND_CACHE_DIRECTORY="${PROJECT_BINARY_DIR}/tools/foreground-cache")
+target_compile_options(foreground PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:-lineinfo;--extended-lambda>")
+target_link_libraries(foreground PRIVATE tools_compute Threads::Threads genesia::stb)
+
+add_executable(qwen tools/qwen/main.cpp)
+target_sources(qwen PRIVATE
+        tools/qwen/core/qwen.cpp
+        tools/qwen/core/session.cpp
+        tools/qwen/core/headless.cpp
+        PRIVATE FILE_SET cxx_modules TYPE CXX_MODULES FILES
+        tools/qwen/core/qwen.ixx
+        tools/qwen/core/session.ixx
+        tools/qwen/core/headless.ixx)
+target_compile_definitions(qwen PRIVATE QWEN_VERSION="${PROJECT_VERSION}")
+target_link_libraries(qwen PRIVATE Threads::Threads genesia::httplib)
+
+foreach (tool IN ITEMS classifier edit foreground qwen)
+    set_target_properties(${tool} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/tools")
+    target_link_libraries(${tool} PRIVATE tools_common)
+    if (GENESIA_BUILD_UI)
+        target_sources(${tool} PRIVATE
+                tools/${tool}/editor/editor.cpp
+                tools/${tool}/editor/workspace.cpp
+                PRIVATE FILE_SET cxx_modules TYPE CXX_MODULES FILES
+                tools/${tool}/editor/editor.ixx
+                tools/${tool}/editor/workspace.ixx)
+        set_target_properties(${tool} PROPERTIES WIN32_EXECUTABLE TRUE)
+        string(TOUPPER "${tool}" prefix)
+        target_compile_definitions(${tool} PRIVATE ${prefix}_HAS_EDITOR)
+        target_link_libraries(${tool} PRIVATE tools_editor)
+    endif ()
+    if (WIN32)
+        target_sources(${tool} PRIVATE tools/common/Windows.manifest)
+    endif ()
+endforeach ()
+
+if (WIN32)
+    add_custom_target(tools_cudnn_runtime
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:classifier>"
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different ${GENESIA_CUDNN_DLLS} "$<TARGET_FILE_DIR:classifier>"
+            COMMAND_EXPAND_LISTS VERBATIM)
+    add_dependencies(classifier tools_cudnn_runtime)
+    add_dependencies(foreground tools_cudnn_runtime)
+endif ()

@@ -321,7 +321,7 @@ namespace genesia::prompts {
         auto context      = source + " / character";
         try {
             Preset result{std::move(name)};
-            auto& recipe          = result.recipe;
+            auto& recipe = result.recipe;
             if (!json.at("character").is_null()) {
                 recipe.character      = json.at("character").get<std::string>();
                 const auto& character = read_reference(library.characters, *recipe.character, context).second;

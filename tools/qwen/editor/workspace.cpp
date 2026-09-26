@@ -1,10 +1,10 @@
 module;
 #include <GLFW/glfw3.h>
+#include <ShlObj.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <misc/cpp/imgui_stdlib.h>
 #include <nlohmann/json.hpp>
-#include <ShlObj.h>
 module qwen.editor.workspace;
 import tools.files;
 import tools.editor.style;
@@ -18,8 +18,8 @@ namespace qwen::editor {
         CoTaskMemFree(directory);
         if (std::filesystem::exists(settings)) {
             const auto value = tools::files::read_json(settings);
-            prompt          = value.at("prompt").get<std::string>();
-            choices         = value.at("choices").get<std::vector<std::string>>();
+            prompt           = value.at("prompt").get<std::string>();
+            choices          = value.at("choices").get<std::vector<std::string>>();
             std::erase_if(choices, [](const std::string& value) { return value.find_first_not_of(" \t\r\n") == std::string::npos; });
         }
     }
@@ -82,10 +82,10 @@ namespace qwen::editor {
         ImGui::BeginDisabled(state.busy);
         if (ImGui::InputTextMultiline("##prompt", &prompt, {-1, 3 * ImGui::GetTextLineHeightWithSpacing()}, ImGuiInputTextFlags_WordWrap)) save_at = std::chrono::steady_clock::now() + std::chrono::milliseconds{300};
         ImGui::TextDisabled("Candidates");
-        const auto editing_index = editing_choice;
-        const float group_width = ImGui::GetContentRegionAvail().x;
-        constexpr float tag_height = 26;
-        constexpr float tag_gap    = 4;
+        const auto editing_index    = editing_choice;
+        const float group_width     = ImGui::GetContentRegionAvail().x;
+        constexpr float tag_height  = 26;
+        constexpr float tag_gap     = 4;
         constexpr float tag_padding = 8;
         const float chip_height     = tag_height * dpi;
         const float chip_gap        = tag_gap * dpi;
@@ -118,7 +118,7 @@ namespace qwen::editor {
         }
         const auto origin = ImGui::GetCursorScreenPos();
         const ImVec2 maximum{origin.x + group_width, origin.y + y + chip_height + 2 * group_padding};
-        auto* draw = ImGui::GetWindowDrawList();
+        auto* draw               = ImGui::GetWindowDrawList();
         const bool group_hovered = ImGui::IsMouseHoveringRect(origin, maximum);
         draw->AddRectFilled(origin, maximum, ImGui::GetColorU32(ImVec4{0.071F, 0.075F, 0.086F, 1}), 12 * dpi);
         draw->AddRect(origin, maximum, ImGui::GetColorU32(ImVec4{0.55F, 0.55F, 0.62F, group_hovered ? 0.45F : 0.22F}), 12 * dpi, 0, dpi);
@@ -140,9 +140,9 @@ namespace qwen::editor {
                     focus_choice = false;
                 }
                 const bool committed = ImGui::InputText("##candidate", &choices[i], ImGuiInputTextFlags_EnterReturnsTrue);
-                const bool canceled = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
-                editing_hovered = ImGui::IsItemHovered();
-                editing_id = ImGui::GetItemID();
+                const bool canceled  = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+                editing_hovered      = ImGui::IsItemHovered();
+                editing_id           = ImGui::GetItemID();
                 if (ImGui::IsItemEdited()) save_at = std::chrono::steady_clock::now() + std::chrono::milliseconds{300};
                 if (committed || canceled) {
                     const bool empty = choices[i].find_first_not_of(" \t\r\n") == std::string::npos;
@@ -153,7 +153,7 @@ namespace qwen::editor {
                     editing_choice.reset();
                     choice_original.clear();
                     choice_created = false;
-                    window.redraw = true;
+                    window.redraw  = true;
                 }
                 ImGui::PopStyleVar(2);
                 ImGui::PopStyleColor(3);
@@ -170,10 +170,10 @@ namespace qwen::editor {
                     ImGui::EndTooltip();
                     if (choices.size() > 2 && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) remove = i;
                     if (!editing_index && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-                        editing_choice = i;
+                        editing_choice  = i;
                         choice_original = choices[i];
-                        focus_choice = true;
-                        window.redraw = true;
+                        focus_choice    = true;
+                        window.redraw   = true;
                     }
                 }
             }
@@ -186,7 +186,7 @@ namespace qwen::editor {
             const auto minimum = ImGui::GetItemRectMin();
             const bool hovered = ImGui::IsItemHovered();
             draw->AddRectFilled(minimum, {minimum.x + item.width, minimum.y + chip_height}, ImGui::GetColorU32(hovered ? ImVec4{0.23F, 0.22F, 0.30F, 0.90F} : ImVec4{0.20F, 0.205F, 0.25F, 0.55F}), 5 * dpi);
-            const auto ink = ImGui::GetColorU32(hovered ? ImGuiCol_Text : ImGuiCol_TextDisabled);
+            const auto ink    = ImGui::GetColorU32(hovered ? ImGuiCol_Text : ImGuiCol_TextDisabled);
             const auto center = ImVec2{minimum.x + item.width / 2, minimum.y + chip_height / 2};
             draw->AddLine({center.x - 5 * dpi, center.y}, {center.x + 5 * dpi, center.y}, ink, dpi);
             draw->AddLine({center.x, center.y - 5 * dpi}, {center.x, center.y + 5 * dpi}, ink, dpi);
@@ -202,8 +202,8 @@ namespace qwen::editor {
                     choice_created = false;
                 }
                 choice_original = choices[*editing_choice];
-                focus_choice = true;
-                window.redraw = true;
+                focus_choice    = true;
+                window.redraw   = true;
             }
         }
         if (editing_index && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !editing_hovered) {
@@ -214,15 +214,15 @@ namespace qwen::editor {
             editing_choice.reset();
             choice_original.clear();
             choice_created = false;
-            save_at = std::chrono::steady_clock::now() + std::chrono::milliseconds{300};
-            window.redraw = true;
+            save_at        = std::chrono::steady_clock::now() + std::chrono::milliseconds{300};
+            window.redraw  = true;
         }
         ImGui::SetCursorScreenPos(origin);
         ImGui::Dummy({group_width, maximum.y - origin.y});
         if (remove) {
             choices.erase(choices.begin() + *remove);
             if (editing_choice && *editing_choice > *remove) --*editing_choice;
-            save_at      = std::chrono::steady_clock::now() + std::chrono::milliseconds{300};
+            save_at       = std::chrono::steady_clock::now() + std::chrono::milliseconds{300};
             window.redraw = true;
         }
         ImGui::EndDisabled();
@@ -263,7 +263,7 @@ namespace qwen::editor {
         const auto* layout           = ImGui::GetCurrentWindow();
         window.content_extent.width  = static_cast<std::uint32_t>(std::ceil(width));
         window.content_extent.height = static_cast<std::uint32_t>(std::ceil(std::min(layout->DC.CursorMaxPos.y - layout->DC.CursorStartPos.y + 2 * style.WindowPadding.y, float(window.extent_limit.height))));
-        window.drag_requested = !ImGui::IsAnyItemHovered() && !ImGui::IsAnyItemActive() && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+        window.drag_requested        = !ImGui::IsAnyItemHovered() && !ImGui::IsAnyItemActive() && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
         ImGui::End();
     }
     void Workspace::save_settings() {

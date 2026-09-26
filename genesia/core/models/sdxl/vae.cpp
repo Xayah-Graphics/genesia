@@ -50,7 +50,7 @@ namespace genesia::sdxl {
 
     void VAE::forward(const compute::TensorView result, const compute::TensorView latent, compute::TensorView current, compute::InferenceRuntime& runtime, const Workspace& scratch) const {
         const compute::TensorView scaled    = scratch.normalized.reshape(1, latent.h, latent.w, 4, compute::Scalar::bf16);
-        const compute::TensorView quantized = scratch.output.reshape(1, latent.h, latent.w, 4, compute::Scalar::bf16);
+        const compute::TensorView quantized = scratch.hidden.reshape(1, latent.h, latent.w, 4, compute::Scalar::bf16);
         kernels::latent_decode(runtime.stream, scaled.data, static_cast<const float*>(latent.data), static_cast<int>(latent.elements()));
         runtime.convolution(quantized, scaled, post_quant);
         current.n      = 1;
@@ -66,7 +66,16 @@ namespace genesia::sdxl {
             for (const auto& block : stage.blocks) {
                 compute::TensorView next = current;
                 next.c                   = block.conv1.weight.n;
-                block.forward(next, current, {}, nullptr, runtime, scratch);
+                if (block.shortcut.weight.data) {
+                    const compute::TensorView skip   = scratch.shortcut.reshape(1, current.h, current.w, next.c, compute::Scalar::bf16);
+                    const compute::TensorView hidden = scratch.hidden.reshape(1, current.h, current.w, next.c, compute::Scalar::bf16);
+                    // Preserve the residual before normalizing the larger input in place.
+                    runtime.convolution(skip, current, block.shortcut);
+                    runtime.group_norm(current, current, block.norm1, scratch.statistics, true);
+                    runtime.convolution(hidden, current, block.conv1);
+                    runtime.group_norm(hidden, hidden, block.norm2, scratch.statistics, true);
+                    runtime.convolution(next, hidden, block.conv2, skip);
+                } else block.forward(next, current, {}, nullptr, runtime, scratch);
                 current = next;
             }
             if (stage.resize.weight.data) {

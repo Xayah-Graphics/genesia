@@ -47,11 +47,11 @@ namespace tools::compute {
     InferenceRuntime::ConvPlan::ConvPlan(const std::array<int, 8>& shape) : key{shape} {
         const auto [n, h, w, input_width, output_width, kernel, stride, padding] = shape;
         graph.set_io_data_type(cudnn_frontend::DataType_t::HALF).set_intermediate_data_type(cudnn_frontend::DataType_t::FLOAT).set_compute_data_type(cudnn_frontend::DataType_t::FLOAT);
-        auto input  = graph.tensor(cudnn_frontend::graph::Tensor_attributes{}.set_name("input").set_uid(1).set_dim({n, input_width, h, w}).set_stride({static_cast<std::int64_t>(h) * w * input_width, 1, static_cast<std::int64_t>(w) * input_width, input_width}));
-        auto weight = graph.tensor(cudnn_frontend::graph::Tensor_attributes{}.set_name("weight").set_uid(2).set_dim({output_width, input_width, kernel, kernel}).set_stride({static_cast<std::int64_t>(kernel) * kernel * input_width, 1, static_cast<std::int64_t>(kernel) * input_width, input_width}));
-        auto result = graph.conv_fprop(input, weight, cudnn_frontend::graph::Conv_fprop_attributes{}.set_padding({padding, padding}).set_stride({stride, stride}).set_dilation({1, 1}));
-        auto bias   = graph.tensor(cudnn_frontend::graph::Tensor_attributes{}.set_name("bias").set_uid(3).set_dim({1, output_width, 1, 1}).set_stride({output_width, 1, output_width, output_width}));
-        result      = graph.pointwise(result, bias, cudnn_frontend::graph::Pointwise_attributes{}.set_mode(cudnn_frontend::PointwiseMode_t::ADD));
+        auto input               = graph.tensor(cudnn_frontend::graph::Tensor_attributes{}.set_name("input").set_uid(1).set_dim({n, input_width, h, w}).set_stride({static_cast<std::int64_t>(h) * w * input_width, 1, static_cast<std::int64_t>(w) * input_width, input_width}));
+        auto weight              = graph.tensor(cudnn_frontend::graph::Tensor_attributes{}.set_name("weight").set_uid(2).set_dim({output_width, input_width, kernel, kernel}).set_stride({static_cast<std::int64_t>(kernel) * kernel * input_width, 1, static_cast<std::int64_t>(kernel) * input_width, input_width}));
+        auto result              = graph.conv_fprop(input, weight, cudnn_frontend::graph::Conv_fprop_attributes{}.set_padding({padding, padding}).set_stride({stride, stride}).set_dilation({1, 1}));
+        auto bias                = graph.tensor(cudnn_frontend::graph::Tensor_attributes{}.set_name("bias").set_uid(3).set_dim({1, output_width, 1, 1}).set_stride({output_width, 1, output_width, output_width}));
+        result                   = graph.pointwise(result, bias, cudnn_frontend::graph::Pointwise_attributes{}.set_mode(cudnn_frontend::PointwiseMode_t::ADD));
         const int output_height  = (h + 2 * padding - kernel) / stride + 1;
         const int output_columns = (w + 2 * padding - kernel) / stride + 1;
         result->set_output(true).set_uid(4).set_dim({n, output_width, output_height, output_columns}).set_stride({static_cast<std::int64_t>(output_height) * output_columns * output_width, 1, static_cast<std::int64_t>(output_columns) * output_width, output_width});
@@ -140,7 +140,7 @@ namespace tools::compute {
         auto plan = std::ranges::find_if(attentions, [&](const AttentionPlan& item) { return item.key == shape; });
         std::unordered_map<std::int64_t, void*> tensors{{1, query.data}, {2, key.data}, {3, value.data}, {4, output.data}, {7, bias.data}};
         if (plan == attentions.end()) {
-            plan = attentions.emplace(attentions.end(), shape);
+            plan            = attentions.emplace(attentions.end(), shape);
             const auto file = cache_directory / ("attention-" + cudnn_json::json(shape).dump() + ".bin");
             if (std::filesystem::exists(file)) check(plan->graph.deserialize(handles.dnn.get(), files::read_bytes(file), false, false));
             else {

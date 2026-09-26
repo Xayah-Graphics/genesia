@@ -46,7 +46,7 @@ namespace edit {
             if (response->status != 200) throw std::runtime_error{std::format("ComfyUI {}: HTTP {}\n{}", route, response->status, response->body)};
             return response->body.empty() ? nlohmann::json{} : nlohmann::json::parse(response->body);
         };
-        std::filesystem::path temporary_input, temporary_output, pending_output, current_file;
+        std::filesystem::path temporary_input, pending_output, current_file;
         std::string prompt_id;
         std::vector<std::string> submitted;
         bool output_created{};
@@ -85,13 +85,10 @@ namespace edit {
             const auto output_directory = tools::files::path(*std::next(output_arg));
             if (interrupted) throw Stopped{};
             std::random_device random;
-            const auto batch        = std::format("edit-{:016x}-{:016x}", std::chrono::system_clock::now().time_since_epoch().count(), std::uniform_int_distribution<std::uint64_t>{}(random));
-            const auto batch_input  = input_directory / batch;
-            const auto batch_output = output_directory / batch;
+            const auto batch       = std::format("edit-{:016x}-{:016x}", std::chrono::system_clock::now().time_since_epoch().count(), std::uniform_int_distribution<std::uint64_t>{}(random));
+            const auto batch_input = input_directory / batch;
             if (!std::filesystem::create_directory(batch_input)) throw std::runtime_error{"Temporary directory already exists: " + tools::files::utf8(batch_input)};
             temporary_input = batch_input;
-            if (!std::filesystem::create_directory(batch_output)) throw std::runtime_error{"Temporary directory already exists: " + tools::files::utf8(batch_output)};
-            temporary_output = batch_output;
             std::vector<std::string> inputs(1);
             for (std::size_t i = 0; i < options.references.size(); ++i) {
                 if (interrupted) throw Stopped{};
@@ -139,7 +136,6 @@ namespace edit {
                 pending_output.clear();
                 ++result.completed;
                 std::filesystem::remove(source);
-                std::filesystem::remove(generated);
                 progress({Stage::editing, result.completed, result.total, current_file});
             }
         } catch (const Stopped&) {
@@ -164,11 +160,11 @@ namespace edit {
                 prompt_id.clear();
             } catch (const std::exception& failure) {
                 if (!result.error.empty()) result.error += '\n';
-                result.error += std::format("{}\nTemporary input retained: {}\nTemporary output retained: {}", failure.what(), tools::files::utf8(temporary_input), tools::files::utf8(temporary_output));
+                result.error += std::format("{}\nTemporary input retained: {}", failure.what(), tools::files::utf8(temporary_input));
             }
         }
         // Never remove files that a server job may still be reading or writing.
-        for (const auto& path : {pending_output, prompt_id.empty() ? temporary_input : std::filesystem::path{}, prompt_id.empty() ? temporary_output : std::filesystem::path{}}) {
+        for (const auto& path : {pending_output, prompt_id.empty() ? temporary_input : std::filesystem::path{}}) {
             if (path.empty()) continue;
             try {
                 std::filesystem::remove_all(path);

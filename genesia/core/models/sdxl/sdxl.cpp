@@ -1,7 +1,6 @@
 module;
 #include "../../compute/tensor.h"
 #include "kernels.h"
-#include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <genesia/cuda.h>
 
@@ -25,11 +24,10 @@ namespace genesia::sdxl {
     Output::Output(const ::cuda::stream_ref stream, const int w, const int h) : pixels{stream, ::cuda::pinned_default_memory_pool(), std::size_t(w) * h * 3, ::cuda::no_init}, width{w}, height{h}, stream{stream} {}
 
     Inference::Inference(Model& network, generation::Settings options, Control& control, Snapshots* snapshots)
-        : parameters{std::move(options)}, model{network}, control{control}, snapshots{snapshots}, unet_layout{parameters.height / 8, parameters.width / 8, parameters.steps}, vae_layout{parameters.height, parameters.width}, workspace{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device())}, unet{model.runtime.stream, parameters.height / 8, parameters.width / 8}, schedule{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), parameters.steps + 1uz, ::cuda::no_init}, seed{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), 1, ::cuda::no_init}, operator_workspace{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device())}, latent{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), std::size_t(parameters.width / 8) * (parameters.height / 8) * 4, ::cuda::no_init},
-          step{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), 1, ::cuda::no_init}, input{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), latent.size() * 2, ::cuda::no_init}, epsilon{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), latent.size() * 2, ::cuda::no_init}, decoder{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), std::size_t(parameters.width) * parameters.height * 256, ::cuda::no_init}, decoded{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), std::size_t(parameters.width) * parameters.height * 3, ::cuda::no_init}, image{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), decoded.size(), ::cuda::no_init}, output{model.runtime.stream, parameters.width, parameters.height} {
-        const auto started = std::chrono::steady_clock::now();
-        const auto stream  = model.runtime.stream;
-        const auto pool    = ::cuda::device_default_memory_pool(stream.device());
+        : parameters{std::move(options)}, latent{network.runtime.stream, ::cuda::device_default_memory_pool(network.runtime.stream.device()), std::size_t(parameters.width / 8) * (parameters.height / 8) * 4, ::cuda::no_init}, model{network}, control{control}, snapshots{snapshots}, unet_layout{parameters.height / 8, parameters.width / 8, parameters.steps}, workspace{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device())}, unet{model.runtime.stream, parameters.height / 8, parameters.width / 8}, schedule{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), parameters.steps + 1uz, ::cuda::no_init}, seed{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), 1, ::cuda::no_init}, operator_workspace{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device())}, step{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), 1, ::cuda::no_init},
+          input{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), latent.size() * 2, ::cuda::no_init}, epsilon{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), latent.size() * 2, ::cuda::no_init}, activations{model.runtime.stream, ::cuda::device_default_memory_pool(model.runtime.stream.device()), 3uz * (parameters.height / 8) * (parameters.width / 8) * 640, ::cuda::no_init}, output{model.runtime.stream, parameters.width, parameters.height} {
+        const auto stream = model.runtime.stream;
+        const auto pool   = ::cuda::device_default_memory_pool(stream.device());
         std::map<int, std::vector<generation::Lora>> starts{{0, {}}};
         for (auto selection : parameters.loras) {
             if (selection.weight == 0) continue;
@@ -52,8 +50,7 @@ namespace genesia::sdxl {
             auto& phase = phases.emplace_back(end, std::move(weights), model.network.unet);
             phase.network.bind(phase.weights.bindings);
         }
-        // The sampling and decoder phases reuse the same activation storage.
-        auto* activation                   = reinterpret_cast<__half*>(decoder.data());
+        auto* activation                   = activations.data();
         const std::size_t current_elements = 2uz * (parameters.height / 8) * (parameters.width / 8) * 640;
         unet.current                       = {activation, current_elements};
         unet.sequence                      = {activation + current_elements, current_elements / 2};
@@ -61,7 +58,7 @@ namespace genesia::sdxl {
         const Tokens positive = model.tokenizer.encode(parameters.positive);
         const Tokens negative = model.tokenizer.encode(parameters.negative);
         const ClipWorkspaceLayout clip_layout{positive.ids.size() + negative.ids.size()};
-        workspace                      = ::cuda::device_buffer<std::byte>{stream, pool, std::max({clip_layout.bytes, unet_layout.bytes, vae_layout.bytes}), ::cuda::no_init};
+        workspace                      = ::cuda::device_buffer<std::byte>{stream, pool, std::max(clip_layout.bytes, unet_layout.bytes), ::cuda::no_init};
         const Workspace text_workspace = clip_layout.view(workspace.data());
         const auto l                   = model.network.clip_l.encode(positive, negative, model.runtime, text_workspace);
         const auto g                   = model.network.clip_g.encode(positive, negative, model.runtime, text_workspace);
@@ -84,14 +81,11 @@ namespace genesia::sdxl {
         kernels::initialize(stream, latent.data(), input.data(), step.data(), seed.data(), schedule.data(), static_cast<int>(latent.size()));
         // All phases have identical operator shapes and share the prepared plans.
         denoise(phases.front());
-        decode();
         operator_workspace = model.runtime.finish_preparation();
         compute::check(cudaEventCreate(std::out_ptr(initialized)));
         compute::check(cudaEventCreate(std::out_ptr(sampled)));
-        compute::check(cudaEventCreate(std::out_ptr(decoded_event)));
         compute::check(cudaGraphCreate(std::out_ptr(graph), 0));
         for (auto& phase : phases) compute::check(cudaGraphConditionalHandleCreate(&phase.loop, graph.get(), 1, cudaGraphCondAssignDefault));
-        compute::check(cudaGraphConditionalHandleCreate(&decode_condition, graph.get(), 0, cudaGraphCondAssignDefault));
         try {
             compute::check(cudaStreamBeginCaptureToGraph(stream.get(), graph.get(), nullptr, nullptr, 0, cudaStreamCaptureModeThreadLocal));
             compute::check(cudaEventRecordWithFlags(initialized.get(), stream.get(), cudaEventRecordExternal));
@@ -114,23 +108,11 @@ namespace genesia::sdxl {
                 const cudaGraph_t body = node.conditional.phGraph_out[0];
                 compute::check(cudaStreamBeginCaptureToGraph(stream.get(), body, nullptr, nullptr, 0, cudaStreamCaptureModeThreadLocal));
                 denoise(phase);
-                kernels::advance(stream, step.data(), phase.end, parameters.steps, phase.loop, decode_condition, &control);
+                kernels::advance(stream, step.data(), phase.end, parameters.steps, phase.loop, &control);
                 compute::check(cudaStreamEndCapture(stream.get(), &captured));
                 compute::check(cudaStreamBeginCaptureToGraph(stream.get(), graph.get(), &while_node, nullptr, 1, cudaStreamCaptureModeThreadLocal));
             }
             compute::check(cudaEventRecordWithFlags(sampled.get(), stream.get(), cudaEventRecordExternal));
-            compute::check(cudaStreamGetCaptureInfo(stream.get(), &status, nullptr, nullptr, &dependencies, nullptr, &dependency_count));
-            const std::vector<cudaGraphNode_t> decode_prefix{dependencies, dependencies + dependency_count};
-            compute::check(cudaStreamEndCapture(stream.get(), &captured));
-            node.conditional.handle = decode_condition;
-            node.conditional.type   = cudaGraphCondTypeIf;
-            cudaGraphNode_t decode_node{};
-            compute::check(cudaGraphAddNode(&decode_node, graph.get(), decode_prefix.data(), nullptr, decode_prefix.size(), &node));
-            compute::check(cudaStreamBeginCaptureToGraph(stream.get(), node.conditional.phGraph_out[0], nullptr, nullptr, 0, cudaStreamCaptureModeThreadLocal));
-            decode();
-            compute::check(cudaStreamEndCapture(stream.get(), &captured));
-            compute::check(cudaStreamBeginCaptureToGraph(stream.get(), graph.get(), &decode_node, nullptr, 1, cudaStreamCaptureModeThreadLocal));
-            compute::check(cudaEventRecordWithFlags(decoded_event.get(), stream.get(), cudaEventRecordExternal));
             compute::check(cudaStreamEndCapture(stream.get(), &captured));
         } catch (...) {
             cudaStreamCaptureStatus status{cudaStreamCaptureStatusNone};
@@ -144,43 +126,29 @@ namespace genesia::sdxl {
         compute::check(cudaGraphInstantiate(std::out_ptr(executable), graph.get(), 0));
         cache_hits   = model.runtime.cache_hits;
         cache_misses = model.runtime.cache_misses;
-        std::size_t free_bytes;
-        std::size_t total_bytes;
-        compute::check(cudaMemGetInfo(&free_bytes, &total_bytes));
-        resident_bytes  = total_bytes - free_bytes;
-        prepare_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
     }
 
     Inference::~Inference() {
         model.runtime.stream.sync();
     }
 
-    const Output& Inference::generate(const std::uint64_t seed) {
-        Output& result       = output;
-        result.device_pixels = image.data();
-        result.cancelled     = false;
+    Output& Inference::sample(const std::uint64_t seed) {
+        Output& result   = output;
+        result.cancelled = false;
         ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.completed}.store(0);
         ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.stage}.store(static_cast<std::uint32_t>(Stage::sampling));
         const auto stream = model.runtime.stream;
         ::cuda::copy_bytes(stream, ::cuda::std::span<const std::uint64_t>{&seed, 1}, this->seed);
         kernels::initialize(stream, latent.data(), input.data(), step.data(), this->seed.data(), schedule.data(), static_cast<int>(latent.size()));
         compute::check(cudaGraphLaunch(executable.get(), stream.get()));
-        compute::check(cudaEventSynchronize(decoded_event.get()));
+        compute::check(cudaEventSynchronize(sampled.get()));
         float sampling_ms;
         compute::check(cudaEventElapsedTime(&sampling_ms, initialized.get(), sampled.get()));
         result.sample_seconds = sampling_ms * 0.001;
         if (::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.cancel}.load()) {
             result.cancelled = true;
             ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.stage}.store(static_cast<std::uint32_t>(Stage::cancelled));
-            return result;
         }
-        ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.stage}.store(static_cast<std::uint32_t>(Stage::transferring));
-        ::cuda::copy_bytes(stream, image, result.pixels);
-        stream.sync();
-        float milliseconds;
-        compute::check(cudaEventElapsedTime(&milliseconds, sampled.get(), decoded_event.get()));
-        result.decode_seconds = milliseconds * 0.001;
-        ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.stage}.store(static_cast<std::uint32_t>(Stage::complete));
         return result;
     }
 
@@ -193,8 +161,4 @@ namespace genesia::sdxl {
         if (snapshots) kernels::snapshot_publish(model.runtime.stream, snapshots->selected.data(), snapshots->slots.data(), step.data());
     }
 
-    void Inference::decode() {
-        model.vae.forward({decoded.data(), 1, parameters.height, parameters.width, 3, compute::Scalar::bf16}, {latent.data(), 1, parameters.height / 8, parameters.width / 8, 4, compute::Scalar::f32}, {decoder.data(), 1, 1, 1, 1, compute::Scalar::bf16}, model.runtime, vae_layout.view(workspace.data()));
-        kernels::pixels(model.runtime.stream, image.data(), decoded.data(), parameters.height * parameters.width * 3);
-    }
 } // namespace genesia::sdxl

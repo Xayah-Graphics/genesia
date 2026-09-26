@@ -112,6 +112,8 @@ namespace genesia::sdxl {
         Encoding result{::cuda::device_buffer<__half>{stream, pool, count * width, ::cuda::no_init}, ::cuda::device_buffer<__half>{stream, pool, large ? 2560uz : 0uz, ::cuda::no_init}};
         ::cuda::host_buffer<std::int32_t> host_ids{stream, ::cuda::pinned_default_memory_pool(), count + 2, ::cuda::no_init};
         ::cuda::host_buffer<float> host_weights{stream, ::cuda::pinned_default_memory_pool(), count, ::cuda::no_init};
+        // CPU writes must wait for earlier transfers using recycled pinned storage.
+        stream.sync();
         std::ranges::copy(positive.ids, host_ids.data());
         std::ranges::copy(negative.ids, host_ids.data() + positive.ids.size());
         for (std::size_t i = 0; i < count; ++i)

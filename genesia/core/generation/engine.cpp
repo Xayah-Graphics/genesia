@@ -15,6 +15,7 @@ namespace genesia::generation {
             compute::check(cudaEventCreateWithFlags(std::out_ptr(preview_finished), cudaEventDisableTiming));
         }
         if (visuals.publish) preview_worker = std::jthread{[this] { preview_images(); }};
+        save_worker = std::jthread{[this] { save_images(); }};
     }
     Engine::~Engine() {
         finish();
@@ -22,6 +23,7 @@ namespace genesia::generation {
     bool Engine::generate(const std::uint64_t id, const runtime::Generate& request, const std::atomic_bool& interrupted) {
         {
             const std::lock_guard lock{mutex};
+            if (save_error) std::rethrow_exception(save_error);
             active = Active{id, request.parameters.steps};
             ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].cancel}.store(interrupted.load() ? 1u : 0u);
         }
@@ -33,24 +35,43 @@ namespace genesia::generation {
             model_ready = true;
         }
         if (!inference || inference->parameters != request.parameters) {
+            const auto started = std::chrono::steady_clock::now();
+            flush();
             inference.reset();
             ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].stage}.store(static_cast<std::uint32_t>(sdxl::Stage::preparing));
             if (visuals.publish && (!snapshots || snapshots->width != request.parameters.width || snapshots->height != request.parameters.height)) {
                 auto next = std::make_shared<sdxl::Snapshots>(stream, request.parameters.width, request.parameters.height);
                 stream.sync();
                 const std::lock_guard lock{mutex};
-                snapshots     = std::move(next);
-                preview_ready = false;
+                snapshots = std::move(next);
             }
             try {
-                inference = std::make_unique<sdxl::Inference>(*model, request.parameters, control.data()[0], snapshots.get());
+                if (!decoder || decoder->width != request.parameters.width || decoder->height != request.parameters.height) {
+                    decoder.reset();
+                    decoder = std::make_unique<sdxl::Decoder>(visuals.publish ? preview_stream : stream, model->vae, project::cache, request.parameters.width, request.parameters.height);
+                }
+                inference     = std::make_unique<sdxl::Inference>(*model, request.parameters, control.data()[0], snapshots.get());
+                saving_output = std::make_unique<sdxl::Output>(stream, request.parameters.width, request.parameters.height);
             } catch (...) {
                 release();
                 throw;
             }
-            std::println(std::cerr, "READY prepare={:.3f}s cache={}/{} memory={:.2f}GiB", inference->prepare_seconds, inference->cache_hits, inference->cache_misses, inference->resident_bytes / double(1ull << 30));
+            if (visuals.prepare) {
+                visuals.prepare(false);
+                visuals.prepare(true);
+            }
+            stream.sync();
+            decoder->stream.sync();
+            cudaMemPool_t pool;
+            compute::check(cudaDeviceGetDefaultMemPool(&pool, 0));
+            compute::check(cudaMemPoolTrimTo(pool, 0));
+            std::size_t used, reserved, free, total;
+            compute::check(cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemCurrent, &used));
+            compute::check(cudaMemPoolGetAttribute(pool, cudaMemPoolAttrReservedMemCurrent, &reserved));
+            compute::check(cudaMemGetInfo(&free, &total));
+            const auto prepared = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+            std::println(std::cerr, "READY prepare={:.3f}s cache={}/{} pool_used={:.2f}GiB pool_reserved={:.2f}GiB device_used={:.2f}GiB", prepared, inference->cache_hits + decoder->cache_hits, inference->cache_misses + decoder->cache_misses, used / double(1ull << 30), reserved / double(1ull << 30), (total - free) / double(1ull << 30));
             std::cerr.flush();
-            if (visuals.prepare) visuals.prepare(false);
             iteration = 0;
         }
         if (interrupted.load()) cancel();
@@ -58,18 +79,12 @@ namespace genesia::generation {
             const auto slot = iteration++ % 2;
             {
                 std::unique_lock lock{mutex};
-                if (visuals.publish && !preview_ready) {
-                    preview_prepare = true;
-                    condition.notify_all();
-                    condition.wait(lock, [this] { return preview_ready || !error.empty(); });
-                    if (!error.empty()) throw std::runtime_error{error};
-                }
                 preview_sampling = static_cast<bool>(visuals.publish);
             }
             condition.notify_all();
-            const auto& output = [&]() -> const sdxl::Output& {
+            auto& output = [&]() -> sdxl::Output& {
                 try {
-                    return inference->generate(request.seed);
+                    return inference->sample(request.seed);
                 } catch (...) {
                     {
                         const std::lock_guard lock{mutex};
@@ -92,21 +107,51 @@ namespace genesia::generation {
                 if (snapshots)
                     for (auto& snapshot : snapshots->slots) ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{snapshot.state}.store(std::uint32_t(sdxl::SnapshotState::free), ::cuda::memory_order_release);
             }
+            if (::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].cancel}.load()) output.cancelled = true;
             if (!output.cancelled) {
+                // The last preview has completed; final decoding owns the same buffers.
+                decoder->decode(inference->latent.data());
+                compute::check(cudaEventSynchronize(decoder->finished.get()));
+                if (::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].cancel}.load()) {
+                    ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].stage}.store(static_cast<std::uint32_t>(sdxl::Stage::cancelled));
+                    return {};
+                }
+                float milliseconds;
+                compute::check(cudaEventElapsedTime(&milliseconds, decoder->started.get(), decoder->finished.get()));
+                output.decode_seconds = milliseconds * 0.001;
+                output.device_pixels  = decoder->pixels.data();
+                output.stream         = decoder->stream;
+                ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].stage}.store(static_cast<std::uint32_t>(sdxl::Stage::transferring));
+                ::cuda::copy_bytes(decoder->stream, decoder->pixels, output.pixels);
+                decoder->stream.sync();
+                ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].stage}.store(static_cast<std::uint32_t>(sdxl::Stage::complete));
                 Record record{request.parameters, request.seed, {}, std::filesystem::path{project::checkpoint}.filename()};
                 const auto ready = visuals.publish ? visuals.publish(id, false, output.device_pixels, output.width, output.height, output.stream, slot) : nullptr;
                 report({runtime::EventKind::task, id, {}, {}, {.id = id, .state = runtime::State::saving}});
                 if (ready) report({runtime::EventKind::generated, id, record, ready});
-                const auto save_started = std::chrono::steady_clock::now();
-                const auto path         = save_image(output, record);
-                const auto save_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - save_started).count();
-                record.path             = path;
-                report({.kind = runtime::EventKind::saved, .id = id, .record = record, .timing = {output.sample_seconds, output.decode_seconds, save_seconds}});
+                {
+                    std::unique_lock lock{mutex};
+                    condition.wait(lock, [this] { return !save_pending; });
+                    if (save_error) std::rethrow_exception(save_error);
+                    // The writer owns these pixels until it has reported the saved image.
+                    std::swap(output.pixels, saving_output->pixels);
+                    saving_output->sample_seconds = output.sample_seconds;
+                    saving_output->decode_seconds = output.decode_seconds;
+                    saving_record                 = std::move(record);
+                    saving_id                     = id;
+                    save_pending                  = true;
+                }
+                condition.notify_all();
                 return true;
             }
             return {};
         }
         return {};
+    }
+    void Engine::flush() {
+        std::unique_lock lock{mutex};
+        condition.wait(lock, [this] { return !save_pending; });
+        if (save_error) std::rethrow_exception(std::exchange(save_error, {}));
     }
     void Engine::cancel() {
         ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].cancel}.store(1, ::cuda::memory_order_release);
@@ -124,6 +169,13 @@ namespace genesia::generation {
     void Engine::finish() {
         if (std::exchange(finished, true)) return;
         cancel();
+        {
+            std::unique_lock lock{mutex};
+            condition.wait(lock, [this] { return !save_pending; });
+            save_closing = true;
+        }
+        condition.notify_all();
+        if (save_worker.joinable()) save_worker.join();
         release();
         {
             const std::lock_guard lock{mutex};
@@ -137,15 +189,11 @@ namespace genesia::generation {
             std::unique_lock lock{mutex};
             condition.wait(lock, [this] { return !preview_working; });
             preview_sampling = false;
-            if (visuals.publish && snapshots && !preview_done) {
-                preview_release = true;
-                condition.notify_all();
-                condition.wait(lock, [this] { return !preview_release || preview_done; });
-            }
-            model_ready = false;
+            model_ready      = false;
         }
         inference.reset();
         snapshots.reset();
+        decoder.reset();
         model.reset();
         if (visuals.publish) preview_stream.sync();
         stream.sync();
@@ -154,7 +202,6 @@ namespace genesia::generation {
         compute::check(cudaMemPoolTrimTo(pool, 0));
     }
     void Engine::preview_images() {
-        std::unique_ptr<sdxl::Preview> decoder;
         std::shared_ptr<sdxl::Snapshots> source;
         std::optional<runtime::PreviewFrame> in_flight;
         int reading        = -1;
@@ -175,33 +222,6 @@ namespace genesia::generation {
                     } else if (completion != cudaErrorNotReady) compute::check(completion);
                 }
                 if (preview_closing && !in_flight) break;
-                if (preview_release && !in_flight) {
-                    lock.unlock();
-                    decoder.reset();
-                    source.reset();
-                    lock.lock();
-                    preview_release = false;
-                    preview_ready   = false;
-                    condition.notify_all();
-                }
-                if (preview_prepare && !in_flight) {
-                    preview_working  = true;
-                    source           = snapshots;
-                    const int width  = source->width;
-                    const int height = source->height;
-                    lock.unlock();
-                    if (!decoder || decoder->width != width || decoder->height != height) {
-                        decoder.reset();
-                        decoder = std::make_unique<sdxl::Preview>(preview_stream, model->vae, project::cache, width, height);
-                    }
-                    visuals.prepare(true);
-                    lock.lock();
-                    preview_prepare = false;
-                    preview_ready   = true;
-                    preview_working = false;
-                    condition.notify_all();
-                    continue;
-                }
                 const auto stage    = static_cast<sdxl::Stage>(::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].stage}.load(::cuda::memory_order_acquire));
                 const bool sampling = preview_sampling && active && preview_visible && preview_enabled && !preview_closing && stage == sdxl::Stage::sampling && !::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].cancel}.load(::cuda::memory_order_acquire);
                 if (sampling) {
@@ -252,9 +272,10 @@ namespace genesia::generation {
                         auto state = ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{slot.state};
                         if (state.load(::cuda::memory_order_acquire) == std::uint32_t(sdxl::SnapshotState::ready)) state.store(std::uint32_t(sdxl::SnapshotState::free), ::cuda::memory_order_release);
                     }
+                    if (!in_flight) source.reset();
                 }
                 if (preview_sampling || in_flight) condition.wait_for(lock, std::chrono::milliseconds{4});
-                else condition.wait(lock, [this] { return preview_closing || preview_prepare || preview_sampling || preview_release; });
+                else condition.wait(lock, [this] { return preview_closing || preview_sampling; });
             }
         } catch (const std::exception& failure) {
             preview_stream.sync();
@@ -266,11 +287,28 @@ namespace genesia::generation {
             cancel();
             if (visuals.notify) visuals.notify();
         }
-        {
-            const std::lock_guard lock{mutex};
-            preview_done = true;
-        }
         condition.notify_all();
     }
 
+    void Engine::save_images() {
+        std::unique_lock lock{mutex};
+        for (;;) {
+            condition.wait(lock, [this] { return save_pending || save_closing; });
+            if (save_closing) return;
+            lock.unlock();
+            try {
+                const auto started = std::chrono::steady_clock::now();
+                saving_record.path = save_image(*saving_output, saving_record);
+                const auto seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+                report({.kind = runtime::EventKind::saved, .id = saving_id, .record = saving_record, .timing = {saving_output->sample_seconds, saving_output->decode_seconds, seconds}});
+            } catch (...) {
+                const std::lock_guard failure_lock{mutex};
+                save_error = std::current_exception();
+                cancel();
+            }
+            lock.lock();
+            save_pending = false;
+            condition.notify_all();
+        }
+    }
 } // namespace genesia::generation

@@ -1,6 +1,5 @@
 module;
 #include "kernels.h"
-#include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <genesia/cuda.h>
 
@@ -59,16 +58,15 @@ export namespace genesia::sdxl {
 
     struct Inference final {
         const generation::Settings parameters;
-        double prepare_seconds{};
-        std::size_t resident_bytes{};
         std::size_t cache_hits{};
         std::size_t cache_misses{};
+        ::cuda::device_buffer<float> latent;
 
         Inference(Model& model, generation::Settings parameters, Control& control, Snapshots* snapshots = nullptr);
         ~Inference();
         Inference(const Inference&)            = delete;
         Inference& operator=(const Inference&) = delete;
-        const Output& generate(std::uint64_t seed);
+        Output& sample(std::uint64_t seed);
 
     private:
         struct Phase final {
@@ -82,29 +80,22 @@ export namespace genesia::sdxl {
         Control& control;
         Snapshots* snapshots;
         UNetWorkspaceLayout unet_layout;
-        VAEWorkspaceLayout vae_layout;
         ::cuda::device_buffer<std::byte> workspace;
         UNetState unet;
         std::vector<Phase> phases;
         ::cuda::device_buffer<kernels::SamplingStep> schedule;
         ::cuda::device_buffer<std::uint64_t> seed;
         ::cuda::device_buffer<std::byte> operator_workspace;
-        ::cuda::device_buffer<float> latent;
         ::cuda::device_buffer<int> step;
         ::cuda::device_buffer<__half> input;
         ::cuda::device_buffer<__half> epsilon;
-        ::cuda::device_buffer<__nv_bfloat16> decoder;
-        ::cuda::device_buffer<__nv_bfloat16> decoded;
-        ::cuda::device_buffer<std::uint8_t> image;
+        ::cuda::device_buffer<__half> activations;
         Output output;
         std::unique_ptr<std::remove_pointer_t<cudaEvent_t>, decltype(&cudaEventDestroy)> initialized{nullptr, cudaEventDestroy};
         std::unique_ptr<std::remove_pointer_t<cudaEvent_t>, decltype(&cudaEventDestroy)> sampled{nullptr, cudaEventDestroy};
-        std::unique_ptr<std::remove_pointer_t<cudaEvent_t>, decltype(&cudaEventDestroy)> decoded_event{nullptr, cudaEventDestroy};
         std::unique_ptr<std::remove_pointer_t<cudaGraph_t>, decltype(&cudaGraphDestroy)> graph{nullptr, cudaGraphDestroy};
         std::unique_ptr<std::remove_pointer_t<cudaGraphExec_t>, decltype(&cudaGraphExecDestroy)> executable{nullptr, cudaGraphExecDestroy};
-        cudaGraphConditionalHandle decode_condition{};
 
         void denoise(const Phase& phase);
-        void decode();
     };
 } // namespace genesia::sdxl

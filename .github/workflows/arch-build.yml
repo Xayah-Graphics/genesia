@@ -47,5 +47,5 @@ jobs:
             -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++ \
             -DGENESIA_BUILD_UI=OFF
 
-      - name: Build
-        run: cmake --build cmake-build-release --target genesia classifier foreground edit qwen --parallel
+      - name: Build Genesia and all tools
+        run: cmake --build cmake-build-release --parallel

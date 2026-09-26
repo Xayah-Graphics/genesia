@@ -13,6 +13,7 @@ export namespace qwen::editor {
         void receive();
         void drop();
         void draw();
+
     private:
         std::string prompt;
         std::vector<std::string> choices{"YES", "NO"};

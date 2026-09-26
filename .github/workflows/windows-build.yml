@@ -130,5 +130,5 @@ jobs:
           "-DGENESIA_CUDNN_DLL=$env:CUDNN_ROOT/bin/x64/cudnn64_9.dll"
           -DGENESIA_BUILD_UI=${{ matrix.ui }}
 
-      - name: Build
-        run: cmake --build cmake-build-release --target genesia classifier foreground edit qwen --parallel
+      - name: Build Genesia and all tools
+        run: cmake --build cmake-build-release --parallel

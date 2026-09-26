@@ -387,9 +387,9 @@ namespace genesia::editor {
                 editor.id    = ++next_id;
             }
         }
-        addition     = TagEditor{.id = ++next_id};
-        adding       = false;
-        valid        = true;
+        addition    = TagEditor{.id = ++next_id};
+        adding      = false;
+        valid       = true;
         focus_input = false;
     }
 
@@ -399,7 +399,7 @@ namespace genesia::editor {
             editor.selection.reset();
         }
         addition.menu_open = addition.input_active = addition.focus_input = false;
-        focus_input = false;
+        focus_input                                                       = false;
     }
 
     bool PromptEditor::commit(prompt::Pair& prompt, const prompt::Catalog& catalog) {

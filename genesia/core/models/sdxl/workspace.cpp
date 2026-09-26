@@ -19,10 +19,10 @@ namespace genesia::sdxl {
         output = shortcut;
     }
 
-    VAEWorkspaceLayout::VAEWorkspaceLayout(const int height, const int width) : WorkspaceLayout{std::size_t(height) * width * 256 * 2, std::size_t(height) * width * 128 * 2, 0, std::size_t(height) * width * 128 * 2, 0} {
-        // Resizing and normalization are separate phases; attention precedes
-        // the channel-changing ResNets that need the shortcut storage.
+    VAEWorkspaceLayout::VAEWorkspaceLayout(const int height, const int width) : WorkspaceLayout{std::size_t(height) * width * 128 * 2, std::size_t(height) * width * 128 * 2, 0, 0, 0} {
+        // Upsampling uses both halves; the residual blocks reuse them separately.
         combined = normalized;
-        output   = shortcut;
+        shortcut = normalized;
+        output   = normalized;
     }
 } // namespace genesia::sdxl

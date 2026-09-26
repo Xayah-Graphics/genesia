@@ -34,7 +34,7 @@ RUN cmake -S . -B cmake-build-release -G Ninja \
         -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++ \
         -DGENESIA_BUILD_UI=OFF \
         -DGENESIA_ASSET_DIRECTORY=/opt/genesia/assets \
-    && cmake --build cmake-build-release --target genesia --parallel
+    && cmake --build cmake-build-release --parallel
 
 
 FROM cuda AS runtime

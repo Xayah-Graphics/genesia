@@ -153,7 +153,7 @@ namespace genesia::editor {
     }
 
     void Workspace::update_generation() {
-        if (!continuous_generation) return;
+        if (!continuous_generation || !task) return;
         const auto& current = *task;
         if (page != Page::generation || session_state.finished || !session_state.error.empty() || current.stopping || current.state == runtime::State::stopped || current.state == runtime::State::failed) {
             continuous_generation = false;

@@ -14,6 +14,8 @@ import genesia.io.files;
 import std;
 
 namespace genesia::compute {
+    constexpr std::size_t workspace_limit = 256uz << 20;
+
     struct InferenceRuntime::ConvPlan final {
         std::array<int, 10> key;
         cudnn_frontend::graph::Graph graph;
@@ -90,7 +92,8 @@ namespace genesia::compute {
     }
 
     InferenceRuntime::InferenceRuntime(const ::cuda::stream_ref execution, const std::filesystem::path& directory) : stream{execution}, handles{execution.get()}, workspace{stream, ::cuda::device_default_memory_pool(stream.device())}, intermediate{stream, ::cuda::device_default_memory_pool(stream.device())} {
-        cache_directory = plan_directory(directory, stream.device().get());
+        cache_directory = plan_directory(directory, stream.device().get()) / std::format("workspace-{}", workspace_limit);
+        std::filesystem::create_directories(cache_directory);
         begin_preparation();
     }
     InferenceRuntime::~InferenceRuntime() {
@@ -101,7 +104,9 @@ namespace genesia::compute {
         intermediate       = ::cuda::device_buffer<std::byte>{stream, ::cuda::device_default_memory_pool(stream.device())};
         intermediate_data  = nullptr;
         intermediate_bytes = 0;
-        workspace          = ::cuda::device_buffer<std::byte>{stream, ::cuda::device_default_memory_pool(stream.device()), (1uz << 30), ::cuda::no_init};
+        required_workspace = 0;
+        workspace          = ::cuda::device_buffer<std::byte>{stream, ::cuda::device_default_memory_pool(stream.device())};
+        workspace          = ::cuda::device_buffer<std::byte>{stream, ::cuda::device_default_memory_pool(stream.device()), workspace_limit, ::cuda::no_init};
         workspace_data     = workspace.data();
         workspace_bytes    = workspace.size();
     }
@@ -152,7 +157,7 @@ namespace genesia::compute {
                 check(plan->graph.build_operation_graph(handles.dnn.get()));
                 check(plan->graph.create_execution_plans({cudnn_frontend::HeurMode_t::A}));
                 plan->graph.deselect_numeric_notes({cudnn_frontend::NumericalNote_t::NONDETERMINISTIC, cudnn_frontend::NumericalNote_t::REDUCED_PRECISION_REDUCTION});
-                plan->graph.deselect_workspace_greater_than((1uz << 30));
+                plan->graph.deselect_workspace_greater_than(workspace_limit);
                 check(plan->graph.check_support(handles.dnn.get()));
                 check(plan->graph.build_plans(cudnn_frontend::BuildPlanPolicy_t::ALL));
                 ::cuda::device_buffer<std::byte> temporary{stream, ::cuda::device_default_memory_pool(stream.device()), output.bytes(), ::cuda::no_init};
@@ -164,8 +169,8 @@ namespace genesia::compute {
                 files::write_bytes(file, bytes);
                 ++cache_misses;
             }
-            required_workspace = std::max(required_workspace, static_cast<std::size_t>(plan->graph.get_workspace_size()));
         }
+        required_workspace = std::max(required_workspace, static_cast<std::size_t>(plan->graph.get_workspace_size()));
         check(plan->graph.execute(handles.dnn.get(), tensors, workspace_data));
     }
 
@@ -219,7 +224,7 @@ namespace genesia::compute {
                 check(plan->graph.build_operation_graph(handles.dnn.get()));
                 check(plan->graph.create_execution_plans({cudnn_frontend::HeurMode_t::A}));
                 plan->graph.deselect_numeric_notes({cudnn_frontend::NumericalNote_t::NONDETERMINISTIC, cudnn_frontend::NumericalNote_t::REDUCED_PRECISION_REDUCTION});
-                plan->graph.deselect_workspace_greater_than((1uz << 30));
+                plan->graph.deselect_workspace_greater_than(workspace_limit);
                 check(plan->graph.check_support(handles.dnn.get()));
                 check(plan->graph.build_plans(cudnn_frontend::BuildPlanPolicy_t::ALL));
                 check(plan->graph.autotune(handles.dnn.get(), tensors, workspace_data));
@@ -228,8 +233,8 @@ namespace genesia::compute {
                 files::write_bytes(file, bytes);
                 ++cache_misses;
             }
-            required_workspace = std::max(required_workspace, static_cast<std::size_t>(plan->graph.get_workspace_size()));
         }
+        required_workspace = std::max(required_workspace, static_cast<std::size_t>(plan->graph.get_workspace_size()));
         if (lengths) tensors[6] = plan->query_lengths.data();
         check(plan->graph.execute(handles.dnn.get(), tensors, workspace_data));
     }
@@ -254,9 +259,9 @@ namespace genesia::compute {
             const auto file = cache_directory / std::format("gemm-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}.json", shape.rows, shape.columns, shape.reduction, shape.leading_a, shape.leading_b, int(shape.scalar), int(shape.result_scalar), shape.transpose_a, shape.bias, shape.residual);
             if (std::filesystem::exists(file)) ++cache_hits;
             else ++cache_misses;
-            select_matrix(*plan, handles.blas.get(), stream.get(), a.data, b.data, previous, alpha, beta, result.bytes(), workspace_data, 1uz << 30, file);
-            required_workspace = std::max(required_workspace, plan->workspace_bytes);
+            select_matrix(*plan, handles.blas.get(), stream.get(), a.data, b.data, previous, alpha, beta, result.bytes(), workspace_data, workspace_limit, file);
         }
+        required_workspace = std::max(required_workspace, plan->workspace_bytes);
         check(cublasLtMatmul(handles.blas.get(), plan->operation.get(), &alpha, a.data, plan->a.get(), b.data, plan->b.get(), &beta, previous, plan->output.get(), result.data, plan->output.get(), &plan->algorithm, workspace_data, workspace_bytes, stream.get()));
     }
 

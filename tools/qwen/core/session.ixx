@@ -22,6 +22,7 @@ export namespace qwen::runtime {
         void submit(Request request);
         void cancel();
         Delivery drain();
+
     private:
         std::function<void()> notify;
         std::mutex mutex;
