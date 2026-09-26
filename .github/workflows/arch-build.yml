@@ -29,7 +29,7 @@ jobs:
       - name: Install latest build toolchain
         run: |
           pacman -Syu --noconfirm --needed \
-            base-devel cmake cuda cudnn gcc15 git ninja
+            base-devel cmake cuda cudnn git ninja
           echo "/opt/cuda/bin" >> "${GITHUB_PATH}"
 
       - name: Checkout
@@ -44,8 +44,8 @@ jobs:
             -DCMAKE_C_COMPILER=gcc \
             -DCMAKE_CXX_COMPILER=g++ \
             -DCMAKE_CUDA_COMPILER=/opt/cuda/bin/nvcc \
-            -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-15 \
+            -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++ \
             -DGENESIA_BUILD_UI=OFF
 
       - name: Build
-        run: cmake --build cmake-build-release --target genesia --parallel
+        run: cmake --build cmake-build-release --target genesia classifier foreground edit qwen --parallel

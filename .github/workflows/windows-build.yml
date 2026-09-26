@@ -13,8 +13,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CUDNN_VERSION: "9.24.0.43"
-  CUDNN_SHA256: "88f72bd1ce384197cedbc68496c6052d7ff0bd9fd0b3c74470402cf737507e06"
+  CUDNN_VERSION: "9.26.0.51"
+  CUDNN_SHA256: "f8610d403685c918e690de5b1ec68da0b4b1358a6be62627591362b7eb811644"
 
 jobs:
   build:
@@ -33,7 +33,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -44,17 +44,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -c "import sysconfig; print(sysconfig.get_path('scripts'))" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
-      - name: Install CUDA 13.3
+      - name: Install CUDA 13.4
         shell: pwsh
         run: |
-          winget install --id Nvidia.CUDA --version 13.3 --exact --silent --source winget --accept-source-agreements --accept-package-agreements --disable-interactivity
+          winget install --id Nvidia.CUDA --version 13.4 --exact --silent --source winget --accept-source-agreements --accept-package-agreements --disable-interactivity
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $cudaRoot = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3"
+          $cudaRoot = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4"
           "CUDA_PATH=$cudaRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
           "CUDACXX=$cudaRoot\bin\nvcc.exe" | Out-File -FilePath $env:GITHUB_ENV -Append
           (Join-Path $cudaRoot "bin") | Out-File -FilePath $env:GITHUB_PATH -Append
 
-      - name: Install cuDNN 9.24
+      - name: Install cuDNN 9.26
         shell: pwsh
         run: |
           $cudnnArchiveName = "cudnn-windows-x86_64-${env:CUDNN_VERSION}_cuda13-archive"
@@ -80,7 +80,7 @@ jobs:
       - name: Restore Vulkan SDK
         if: matrix.ui == 'ON'
         id: vulkan-cache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.vulkan.outputs.root }}
           key: vulkan-sdk-${{ runner.os }}-${{ runner.arch }}-${{ steps.vulkan.outputs.version }}
@@ -131,4 +131,4 @@ jobs:
           -DGENESIA_BUILD_UI=${{ matrix.ui }}
 
       - name: Build
-        run: cmake --build cmake-build-release --target genesia --parallel
+        run: cmake --build cmake-build-release --target genesia classifier foreground edit qwen --parallel

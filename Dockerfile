@@ -17,7 +17,6 @@ RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
     pacman -S --noconfirm --needed \
         base-devel \
         cmake \
-        gcc15 \
         git \
         ninja
 
@@ -32,7 +31,7 @@ RUN cmake -S . -B cmake-build-release -G Ninja \
         -DCMAKE_C_COMPILER=gcc \
         -DCMAKE_CXX_COMPILER=g++ \
         -DCMAKE_CUDA_COMPILER=/opt/cuda/bin/nvcc \
-        -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-15 \
+        -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++ \
         -DGENESIA_BUILD_UI=OFF \
         -DGENESIA_ASSET_DIRECTORY=/opt/genesia/assets \
     && cmake --build cmake-build-release --target genesia --parallel
