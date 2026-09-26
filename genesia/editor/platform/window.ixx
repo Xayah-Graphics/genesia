@@ -19,7 +19,6 @@ namespace genesia::editor {
         WindowPlatform& operator=(const WindowPlatform&) = delete;
         WindowPlatform& operator=(WindowPlatform&&)      = delete;
 
-        void request_close() noexcept;
         [[nodiscard]] bool take_close_request() noexcept;
         void toggle_fullscreen();
         void prepare_hand_cursors(float scale);

@@ -24,6 +24,19 @@ namespace genesia {
         return image;
     }
 
+    Image read_image(const std::filesystem::path& path) {
+        std::ifstream file{path, std::ios::binary | std::ios::ate};
+        file.exceptions(std::ios::badbit | std::ios::failbit);
+        std::vector<std::uint8_t> encoded(static_cast<std::size_t>(file.tellg()));
+        file.seekg(0);
+        file.read(reinterpret_cast<char*>(encoded.data()), encoded.size());
+        Image result;
+        const std::unique_ptr<unsigned char, decltype(&stbi_image_free)> pixels{stbi_load_from_memory(encoded.data(), static_cast<int>(encoded.size()), &result.width, &result.height, nullptr, 3), &stbi_image_free};
+        if (!pixels) throw std::runtime_error{stbi_failure_reason()};
+        result.pixels.assign(pixels.get(), pixels.get() + std::size_t(result.width) * result.height * 3);
+        return result;
+    }
+
     Record read_record(const std::filesystem::path& path) {
         const auto image = read_image_info(path);
         std::ifstream file{path, std::ios::binary};
@@ -49,39 +62,18 @@ namespace genesia {
             file.seekg(4, std::ios::cur);
         }
         if (!stored) throw std::runtime_error{"PNG has no Genesia generation record"};
-        const auto& metadata     = *stored;
+        const auto& metadata = *stored;
         Record result;
         result.path              = path;
         result.parameters.width  = image.width;
         result.parameters.height = image.height;
         if (metadata.at("version") != 2) throw std::runtime_error{"Unsupported Genesia PNG metadata version"};
-        result.model            = files::path(metadata.at("model").get<std::string>());
-        result.seed             = metadata.at("seed");
-        result.parameters.steps = metadata.at("steps");
-        result.parameters.cfg   = metadata.at("cfg");
-        if (metadata.contains("loras")) metadata.at("loras").get_to(result.parameters.loras);
+        result.model               = files::path(metadata.at("model").get<std::string>());
+        result.seed                = metadata.at("seed");
+        result.parameters.steps    = metadata.at("steps");
+        result.parameters.cfg      = metadata.at("cfg");
         result.parameters.positive = metadata.at("prompt").at("positive").get<std::string>();
         result.parameters.negative = metadata.at("prompt").at("negative").get<std::string>();
-        if (metadata.at("prompt").contains("auto_lora_prefix")) result.parameters.auto_lora_prefix = metadata.at("prompt").at("auto_lora_prefix").get<std::string>();
-        if (metadata.contains("repaint")) {
-            result.source             = files::path(metadata.at("repaint").at("source").get<std::string>());
-            result.parameters.denoise = metadata.at("repaint").at("denoise");
-        }
-        return result;
-    }
-
-
-    Image read_image(const std::filesystem::path& path, const int channels) {
-        std::ifstream file{path, std::ios::binary | std::ios::ate};
-        file.exceptions(std::ios::badbit | std::ios::failbit);
-        std::vector<std::uint8_t> encoded(static_cast<std::size_t>(file.tellg()));
-        file.seekg(0);
-        file.read(reinterpret_cast<char*>(encoded.data()), encoded.size());
-        Image result;
-        int source_channels;
-        const std::unique_ptr<unsigned char, decltype(&stbi_image_free)> pixels{stbi_load_from_memory(encoded.data(), static_cast<int>(encoded.size()), &result.width, &result.height, &source_channels, channels), &stbi_image_free};
-        if (!pixels) throw std::runtime_error{stbi_failure_reason()};
-        result.pixels.assign(pixels.get(), pixels.get() + std::size_t(result.width) * result.height * channels);
         return result;
     }
 } // namespace genesia

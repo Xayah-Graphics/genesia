@@ -19,21 +19,8 @@ export namespace genesia::sdxl {
         compute::Linear qkv;
         compute::Conv projection;
 
-        VaeAttention(Checkpoint& source, const std::string& prefix);
+        explicit VaeAttention(Checkpoint& source);
         void forward(compute::TensorView current, compute::InferenceRuntime& runtime, const Workspace& scratch) const;
-    };
-    struct VAEEncoder final {
-        compute::Conv input;
-        std::array<VaeStage, 4> down;
-        Residual middle_input;
-        VaeAttention attention;
-        Residual middle_output;
-        compute::Norm norm;
-        compute::Conv output;
-        compute::Conv quant;
-
-        explicit VAEEncoder(Checkpoint& source);
-        void forward(compute::TensorView latent, compute::TensorView pixels, compute::TensorView current, compute::InferenceRuntime& runtime, const Workspace& scratch) const;
     };
     struct VAE final {
         compute::Conv post_quant;

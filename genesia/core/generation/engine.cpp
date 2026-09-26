@@ -19,11 +19,10 @@ namespace genesia::generation {
     Engine::~Engine() {
         finish();
     }
-    std::optional<SavedImage> Engine::generate(dataset::Index& index, const std::uint64_t id, const runtime::Generate& request, const std::atomic_bool& interrupted) {
+    bool Engine::generate(const std::uint64_t id, const runtime::Generate& request, const std::atomic_bool& interrupted) {
         {
             const std::lock_guard lock{mutex};
-            active  = Active{id, request};
-            started = std::chrono::steady_clock::now();
+            active = Active{id, request.parameters.steps};
             ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].cancel}.store(interrupted.load() ? 1u : 0u);
         }
 
@@ -33,23 +32,9 @@ namespace genesia::generation {
             const std::lock_guard lock{mutex};
             model_ready = true;
         }
-        const auto source_id = request.source ? std::optional{request.source->sha} : std::nullopt;
-        if (!inference || inference->parameters != request.parameters || source_id != prepared_image) {
+        if (!inference || inference->parameters != request.parameters) {
             inference.reset();
             ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].stage}.store(static_cast<std::uint32_t>(sdxl::Stage::preparing));
-            if (request.source) {
-                if (source_id != encoded_image) {
-                    const auto pixels = read_image(request.source->path);
-                    source_image      = std::make_unique<sdxl::ImageInput>(stream, pixels.pixels, pixels.width, pixels.height);
-                    encoded_image     = source_id;
-                }
-                if (request.parameters.denoise > 0 && source_image->latent.empty()) {
-                    const auto started = std::chrono::steady_clock::now();
-                    model->encode(*source_image);
-                    std::println(std::cerr, "ENCODE {:.3f}s", std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
-                }
-            }
-            prepared_image = source_id;
             if (visuals.publish && (!snapshots || snapshots->width != request.parameters.width || snapshots->height != request.parameters.height)) {
                 auto next = std::make_shared<sdxl::Snapshots>(stream, request.parameters.width, request.parameters.height);
                 stream.sync();
@@ -58,14 +43,14 @@ namespace genesia::generation {
                 preview_ready = false;
             }
             try {
-                inference = std::make_unique<sdxl::Inference>(*model, request.parameters, control.data()[0], snapshots.get(), request.source ? source_image.get() : nullptr);
+                inference = std::make_unique<sdxl::Inference>(*model, request.parameters, control.data()[0], snapshots.get());
             } catch (...) {
                 release();
                 throw;
             }
             std::println(std::cerr, "READY prepare={:.3f}s cache={}/{} memory={:.2f}GiB", inference->prepare_seconds, inference->cache_hits, inference->cache_misses, inference->resident_bytes / double(1ull << 30));
             std::cerr.flush();
-            if (visuals.prepare) visuals.prepare(false, request.parameters.width, request.parameters.height, stream);
+            if (visuals.prepare) visuals.prepare(false);
             iteration = 0;
         }
         if (interrupted.load()) cancel();
@@ -73,13 +58,13 @@ namespace genesia::generation {
             const auto slot = iteration++ % 2;
             {
                 std::unique_lock lock{mutex};
-                if (visuals.publish && !preview_ready && request.parameters.denoise > 0) {
+                if (visuals.publish && !preview_ready) {
                     preview_prepare = true;
                     condition.notify_all();
                     condition.wait(lock, [this] { return preview_ready || !error.empty(); });
                     if (!error.empty()) throw std::runtime_error{error};
                 }
-                preview_sampling = visuals.publish && request.parameters.denoise > 0;
+                preview_sampling = static_cast<bool>(visuals.publish);
             }
             condition.notify_all();
             const auto& output = [&]() -> const sdxl::Output& {
@@ -108,16 +93,16 @@ namespace genesia::generation {
                     for (auto& snapshot : snapshots->slots) ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{snapshot.state}.store(std::uint32_t(sdxl::SnapshotState::free), ::cuda::memory_order_release);
             }
             if (!output.cancelled) {
-                Record record{request.parameters, request.seed, {}, std::filesystem::path{project::checkpoint}.filename(), request.source ? request.source->path.lexically_relative(project::directory) : std::filesystem::path{}};
+                Record record{request.parameters, request.seed, {}, std::filesystem::path{project::checkpoint}.filename()};
                 const auto ready = visuals.publish ? visuals.publish(id, false, output.device_pixels, output.width, output.height, output.stream, slot) : nullptr;
                 report({runtime::EventKind::task, id, {}, {}, {.id = id, .state = runtime::State::saving}});
                 if (ready) report({runtime::EventKind::generated, id, record, ready});
                 const auto save_started = std::chrono::steady_clock::now();
-                auto file               = save_image(index, output, record);
+                const auto path         = save_image(output, record);
                 const auto save_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - save_started).count();
-                record.path             = file.path;
-                report({.kind = runtime::EventKind::saved, .id = id, .record = record, .file = file, .timing = {output.sample_seconds, output.decode_seconds, save_seconds}});
-                return SavedImage{std::move(record), std::move(file), {output.pixels.data(), output.pixels.size()}};
+                record.path             = path;
+                report({.kind = runtime::EventKind::saved, .id = id, .record = record, .timing = {output.sample_seconds, output.decode_seconds, save_seconds}});
+                return true;
             }
             return {};
         }
@@ -134,7 +119,7 @@ namespace genesia::generation {
     runtime::GenerationProgress Engine::observe() {
         const std::lock_guard lock{mutex};
         if (!error.empty()) throw std::runtime_error{error};
-        return {active ? active->id : 0, static_cast<runtime::GenerationStage>(::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].stage}.load()), ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].completed}.load(), active ? active->request.parameters.steps : 0, model_ready, started};
+        return {static_cast<runtime::GenerationStage>(::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].stage}.load()), ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].completed}.load(), active ? active->steps : 0, model_ready};
     }
     void Engine::finish() {
         if (std::exchange(finished, true)) return;
@@ -160,11 +145,8 @@ namespace genesia::generation {
             model_ready = false;
         }
         inference.reset();
-        source_image.reset();
         snapshots.reset();
         model.reset();
-        encoded_image.reset();
-        prepared_image.reset();
         if (visuals.publish) preview_stream.sync();
         stream.sync();
         cudaMemPool_t pool;
@@ -212,7 +194,7 @@ namespace genesia::generation {
                         decoder.reset();
                         decoder = std::make_unique<sdxl::Preview>(preview_stream, model->vae, project::cache, width, height);
                     }
-                    visuals.prepare(true, width, height, preview_stream);
+                    visuals.prepare(true);
                     lock.lock();
                     preview_prepare = false;
                     preview_ready   = true;
@@ -255,13 +237,12 @@ namespace genesia::generation {
                                 reading         = newest;
                                 const auto step = source->slots.data()[reading].step;
                                 ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{source->slots.data()[reading].state}.store(std::uint32_t(sdxl::SnapshotState::reading), ::cuda::memory_order_release);
-                                preview_working       = true;
-                                const bool from_image = active->request.source.has_value();
+                                preview_working = true;
                                 lock.unlock();
                                 decoder->decode(source->latent.data() + std::size_t(reading) * (source->width / 8) * (source->height / 8) * 4);
                                 const auto ready = visuals.publish(task, true, decoder->pixels.data(), decoder->width, decoder->height, preview_stream, slot);
                                 compute::check(cudaEventRecord(preview_finished.get(), preview_stream.get()));
-                                in_flight = runtime::PreviewFrame{task, step, decoder->width, decoder->height, ready, from_image};
+                                in_flight = runtime::PreviewFrame{task, step, decoder->width, decoder->height, ready};
                                 lock.lock();
                             }
                         }

@@ -10,7 +10,7 @@ import genesia.editor.workspace;
 import genesia.editor.prompt.previews;
 import genesia.prompt.library;
 import genesia.project;
-import genesia.generation.defaults;
+import genesia.generation.settings;
 import genesia.io.files;
 import std;
 
@@ -21,11 +21,11 @@ namespace genesia::editor {
         Workspace ui;
         bool closing{};
 
-        Application(prompts::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, std::shared_ptr<const prompts::Library> library, std::string dataset);
+        Application(prompts::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, std::shared_ptr<const prompts::Library> library);
         void run();
     };
 
-    Application::Application(prompts::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, std::shared_ptr<const prompts::Library> library, std::string dataset) : ui{std::move(preset), std::move(catalog), std::move(library), window, renderer, std::move(dataset)} {}
+    Application::Application(prompts::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, std::shared_ptr<const prompts::Library> library) : ui{std::move(preset), std::move(catalog), std::move(library), window, renderer} {}
 
     void Application::run() {
         std::uint32_t previous_stage{}, previous_step{};
@@ -36,6 +36,7 @@ namespace genesia::editor {
                     closing                  = true;
                     ui.continuous_generation = false;
                     ui.runtime.web.stop();
+                    ui.textures.shutdown();
                     ui.runtime.session.shutdown();
                 } else window.redraw = true;
             }
@@ -52,7 +53,7 @@ namespace genesia::editor {
             }
             if (closing && done && !pending) break;
             const double now     = glfwGetTime();
-            const bool animating = now < ui.animate_until || (renderer.visible && ui.view.started >= 0) || std::ranges::any_of(std::array{&ui.dataset_sidebar, &ui.prompt_sidebar}, [](const auto* panel) { return panel->amount != float(panel->open); });
+            const bool animating = now < ui.animate_until || (renderer.visible && ui.view.started >= 0) || (ui.prompt_sidebar.amount != float(ui.prompt_sidebar.open || ui.prompt_panel.incoming.has_value()));
             if (!std::exchange(window.redraw, false) && !pending && !animating && now < ui.refresh_at && stage == previous_stage && step == previous_step && busy == previous_busy) {
                 glfwWaitEventsTimeout(std::min(busy ? 0.1 : 1.0, std::max(0.0, ui.refresh_at - now)));
                 continue;
@@ -76,25 +77,18 @@ namespace genesia::editor {
     }
 
     int run(const std::span<const std::string_view> arguments) {
-        std::string name{defaults::preset}, dataset;
+        std::string name{defaults::preset};
         for (std::size_t i = 0; i < arguments.size(); ++i) {
             const auto option = arguments[i];
             if (i + 1 == arguments.size()) throw std::runtime_error{"Missing value for " + std::string{option}};
             if (option == "--preset") name = arguments[++i];
-            else if (option == "--dataset") dataset = arguments[++i];
             else throw std::runtime_error{"Unknown Editor option: " + std::string{option}};
-        }
-        if (!dataset.empty()) {
-            const auto path  = files::path(dataset);
-            const auto count = std::distance(path.begin(), path.end());
-            if (path.is_absolute() || count < 1 || count > 2 || std::ranges::any_of(path, [](const auto& part) { return files::utf8(part).starts_with('.'); })) throw std::runtime_error{"Dataset must be ROOT or ROOT/CONCEPT"};
-            dataset = files::utf8(path);
         }
         auto catalog = std::make_shared<const prompt::Catalog>();
         auto library = std::make_shared<const prompts::Library>(std::filesystem::path{project::assets} / "prompts", *catalog);
         auto preset  = prompts::read_preset(*library, name, *catalog);
         previews::clean(*library);
-        Application application{std::move(preset), std::move(catalog), std::move(library), std::move(dataset)};
+        Application application{std::move(preset), std::move(catalog), std::move(library)};
         application.run();
         return 0;
     }

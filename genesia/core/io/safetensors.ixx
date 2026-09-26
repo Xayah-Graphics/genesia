@@ -17,9 +17,4 @@ export namespace genesia::files {
         const std::byte* base;
         explicit SafeFile(const std::filesystem::path& path);
     };
-    struct HostTensor {
-        std::vector<std::int64_t> shape;
-        std::vector<float> values;
-    };
-    void save_tensors(const std::filesystem::path& path, const std::map<std::string, HostTensor>& tensors, const nlohmann::json& metadata);
 } // namespace genesia::files

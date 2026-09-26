@@ -9,6 +9,5 @@ export namespace genesia::project {
 #elif defined(__linux__)
     inline constexpr std::string_view checkpoint = "/workspace/models/oneObsession_v22.safetensors";
 #endif
-    inline constexpr std::string_view cache        = GENESIA_CACHE_DIRECTORY;
-    inline constexpr std::string_view comfy_server = "http://127.0.0.1:8000";
+    inline constexpr std::string_view cache = GENESIA_CACHE_DIRECTORY;
 } // namespace genesia::project

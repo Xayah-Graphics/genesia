@@ -43,10 +43,12 @@ if (WIN32)
 endif ()
 
 if (MSVC)
+    # Module providers and consumers must use the same C++ compile options.
     add_compile_options(
             $<$<COMPILE_LANGUAGE:CXX>:/utf-8>
             $<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>
             $<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>
+            $<$<COMPILE_LANGUAGE:CXX>:/bigobj>
             $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/Zc:preprocessor>
     )
 endif ()
@@ -62,51 +64,32 @@ genesia_require_dependency(nlohmann_json)
 genesia_require_dependency(cudnn)
 genesia_require_dependency(cudnn_frontend)
 genesia_require_dependency(stb)
-genesia_require_dependency(httplib)
 include(cmake/ClionCudaFacade.cmake)
 if (GENESIA_BUILD_UI)
+    genesia_require_dependency(httplib)
     genesia_require_dependency(vulkan)
     genesia_require_dependency(slang)
     genesia_require_dependency(imgui)
     include(cmake/Shaders.cmake)
 endif ()
 
-# Core owns all headless business and compute modules.
+# Genesia owns its runtime, compute and file modules independently of the tools.
 add_library(genesia_core STATIC)
 target_sources(genesia_core
         PRIVATE
-        genesia/core/classification/audit.cpp
-        genesia/core/classification/classify.cpp
-        genesia/core/classification/inference.cpp
         genesia/core/compute/device.cpp
         genesia/core/compute/inference-attention.cu
         genesia/core/compute/inference-kernels.cu
         genesia/core/compute/inference.cpp
         genesia/core/compute/plans.cpp
-        genesia/core/data/concepts.cpp
-        genesia/core/data/captions.cpp
-        genesia/core/data/datasets.cpp
         genesia/core/data/images.cpp
-        genesia/core/data/operations.cpp
         genesia/core/generation/engine.cpp
+        genesia/core/generation/settings.cpp
         genesia/core/generation/output.cpp
-        genesia/core/generation/qwen-edit.cpp
         genesia/core/headless.cpp
         genesia/core/io/files.cpp
-        genesia/core/io/hash.cpp
         genesia/core/io/safetensors.cpp
-        genesia/core/models/birefnet/kernels.cu
-        genesia/core/models/birefnet/network.cpp
-        genesia/core/segmentation/foreground.cpp
-        genesia/core/models/convnext/elementwise.cu
-        genesia/core/models/convnext/network.cpp
-        genesia/core/models/convnext/normalization.cu
-        genesia/core/models/convnext/optimizer.cu
-        genesia/core/models/convnext/preprocess.cu
-        genesia/core/models/convnext/spatial.cu
-        genesia/core/models/registry.cpp
         genesia/core/models/sdxl/kernels.cu
-        genesia/core/models/sdxl/lora.cpp
         genesia/core/models/sdxl/preview.cpp
         genesia/core/models/sdxl/sdxl.cpp
         genesia/core/models/sdxl/text.cpp
@@ -119,37 +102,18 @@ target_sources(genesia_core
         genesia/core/prompt/library.cpp
         genesia/core/prompt/prompt.cpp
         genesia/core/prompt/search.cpp
-        genesia/core/runtime/catalog.cpp
         genesia/core/runtime/session.cpp
-        genesia/core/training/samples.cpp
-        genesia/core/training/state.cpp
-        genesia/core/training/training.cpp
         PUBLIC FILE_SET cxx_modules TYPE CXX_MODULES FILES
-        genesia/core/classification/audit.ixx
-        genesia/core/classification/classify.ixx
-        genesia/core/classification/inference.ixx
         genesia/core/compute/device.ixx
         genesia/core/compute/inference.ixx
         genesia/core/compute/plans.ixx
-        genesia/core/data/concepts.ixx
-        genesia/core/data/captions.ixx
-        genesia/core/data/datasets.ixx
         genesia/core/data/images.ixx
-        genesia/core/data/operations.ixx
-        genesia/core/generation/defaults.ixx
         genesia/core/generation/engine.ixx
         genesia/core/generation/output.ixx
-        genesia/core/generation/qwen-edit.ixx
         genesia/core/generation/settings.ixx
         genesia/core/headless.ixx
         genesia/core/io/files.ixx
-        genesia/core/io/hash.ixx
         genesia/core/io/safetensors.ixx
-        genesia/core/models/birefnet/network.ixx
-        genesia/core/segmentation/foreground.ixx
-        genesia/core/models/convnext/network.ixx
-        genesia/core/models/registry.ixx
-        genesia/core/models/sdxl/lora.ixx
         genesia/core/models/sdxl/preview.ixx
         genesia/core/models/sdxl/sdxl.ixx
         genesia/core/models/sdxl/text.ixx
@@ -163,43 +127,19 @@ target_sources(genesia_core
         genesia/core/prompt/library.ixx
         genesia/core/prompt/prompt.ixx
         genesia/core/prompt/search.ixx
-        genesia/core/runtime/catalog.ixx
-        genesia/core/runtime/progress.ixx
         genesia/core/runtime/session.ixx
         genesia/core/runtime/tasks.ixx
-        genesia/core/training/samples.ixx
-        genesia/core/training/state.ixx
-        genesia/core/training/training.ixx
 )
 target_compile_definitions(genesia_core PUBLIC GENESIA_DATA_DIRECTORY="${PROJECT_SOURCE_DIR}/data" GENESIA_CACHE_DIRECTORY="${PROJECT_BINARY_DIR}/genesia-cache")
+target_compile_definitions(genesia_core PRIVATE
+        GENESIA_CXX_COMPILER="${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}"
+        GENESIA_PLATFORM="${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
 target_include_directories(genesia_core PUBLIC "${GENESIA_CLION_CUDA_INCLUDE_DIRECTORY}")
 target_compile_options(genesia_core PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:-lineinfo;--extended-lambda>")
-if (MSVC)
-    target_compile_options(genesia_core PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/bigobj>")
-endif ()
-target_compile_definitions(
-        genesia_core
-        PRIVATE
-        GENESIA_CXX_COMPILER="${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}"
-        GENESIA_PLATFORM="${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}"
-)
-target_link_libraries(
-        genesia_core
-        PUBLIC
-        CCCL::libcudacxx
-        CUDA::toolkit
-        cuDNN::cuDNN
-        CUDA::cublasLt
-        nlohmann_json::nlohmann_json
-        Threads::Threads
-        CUDA::cudart
-        PRIVATE
-        genesia::cudnn-frontend
-        CUDA::cuda_driver
-        CUDA::nvrtc
-        genesia::stb
-        genesia::httplib
-)
+target_link_libraries(genesia_core PUBLIC
+        CCCL::libcudacxx CUDA::toolkit cuDNN::cuDNN CUDA::cublasLt CUDA::cudart
+        nlohmann_json::nlohmann_json Threads::Threads
+        PRIVATE genesia::cudnn-frontend genesia::stb CUDA::cuda_driver CUDA::nvrtc)
 
 # ============================================================================
 # Editor
@@ -209,6 +149,7 @@ if (GENESIA_BUILD_UI)
     target_sources(genesia_editor
             PRIVATE
             genesia/editor/editor.cpp
+            genesia/editor/panels/loras.cpp
             genesia/editor/graphics/device.cpp
             genesia/editor/graphics/interop.cpp
             genesia/editor/graphics/interop.cu
@@ -216,7 +157,6 @@ if (GENESIA_BUILD_UI)
             genesia/editor/graphics/renderer.cpp
             genesia/editor/graphics/resources.cpp
             genesia/editor/panels/application.cpp
-            genesia/editor/panels/datasets.cpp
             genesia/editor/panels/prompts.cpp
             genesia/editor/panels/sidebars.cpp
             genesia/editor/prompt/previews.cpp
@@ -226,19 +166,18 @@ if (GENESIA_BUILD_UI)
             genesia/editor/viewing/textures.cpp
             genesia/editor/widgets/controls.cpp
             genesia/editor/widgets/tag-editor.cpp
-            genesia/editor/widgets/captions.cpp
             genesia/editor/workspace.cpp
             genesia/editor/web.cpp
             PUBLIC FILE_SET cxx_modules TYPE CXX_MODULES FILES
             genesia/editor/editor.ixx
             PRIVATE FILE_SET editor_modules TYPE CXX_MODULES FILES
+            genesia/editor/panels/loras.ixx
             genesia/editor/graphics/device.ixx
             genesia/editor/graphics/interop.ixx
             genesia/editor/graphics/bridge.ixx
             genesia/editor/graphics/renderer.ixx
             genesia/editor/graphics/resources.ixx
             genesia/editor/panels/application.ixx
-            genesia/editor/panels/datasets.ixx
             genesia/editor/panels/prompts.ixx
             genesia/editor/panels/sidebars.ixx
             genesia/editor/prompt/previews.ixx
@@ -248,7 +187,6 @@ if (GENESIA_BUILD_UI)
             genesia/editor/viewing/textures.ixx
             genesia/editor/widgets/controls.ixx
             genesia/editor/widgets/tag-editor.ixx
-            genesia/editor/widgets/captions.ixx
             genesia/editor/workspace.ixx
             genesia/editor/web.ixx
     )
@@ -256,6 +194,7 @@ if (GENESIA_BUILD_UI)
     file(READ "${PROJECT_SOURCE_DIR}/genesia/editor/web.html" GENESIA_WEB_PAGE)
     file(GENERATE OUTPUT "${PROJECT_BINARY_DIR}/genesia-web-page.h"
             CONTENT "constexpr char web_page[] = R\"GENESIA_WEB(${GENESIA_WEB_PAGE})GENESIA_WEB\";\n")
+    target_compile_options(genesia_editor PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:-lineinfo;--extended-lambda>")
     target_include_directories(genesia_editor PRIVATE "${PROJECT_BINARY_DIR}")
     target_compile_definitions(
             genesia_editor
@@ -289,6 +228,7 @@ add_executable(genesia main.cpp)
 target_compile_definitions(genesia_core PRIVATE GENESIA_VERSION="${PROJECT_VERSION}")
 target_link_libraries(genesia PRIVATE genesia_core)
 if (GENESIA_BUILD_UI)
+    set_target_properties(genesia PROPERTIES WIN32_EXECUTABLE TRUE)
     target_compile_definitions(genesia PRIVATE GENESIA_HAS_EDITOR)
     target_link_libraries(genesia PRIVATE genesia_editor)
 endif ()
@@ -308,6 +248,7 @@ if (WIN32)
             VERBATIM
     )
     target_sources(genesia PRIVATE cmake/WindowsUtf8.manifest)
+    target_link_libraries(genesia PRIVATE user32)
     add_dependencies(genesia genesia_cudnn_runtime)
 endif ()
 
@@ -315,3 +256,5 @@ endif ()
 if (MSVC)
     set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/cxx-modules")
 endif ()
+
+add_subdirectory(tools)

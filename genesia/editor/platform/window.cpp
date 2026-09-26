@@ -60,10 +60,6 @@ namespace genesia::editor {
         RemovePropW(this->native_window, L"GenesiaWindow");
     }
 
-    void WindowPlatform::request_close() noexcept {
-        this->state.close_requested = true;
-    }
-
     bool WindowPlatform::take_close_request() noexcept {
         return std::exchange(this->state.close_requested, false);
     }
@@ -223,6 +219,12 @@ namespace genesia::editor {
         if (platform == nullptr) return DefWindowProcW(window, message, wparam, lparam);
         if ((message >= WM_MOUSEFIRST && message <= WM_MOUSELAST) || (message >= WM_KEYFIRST && message <= WM_KEYLAST) || message == WM_SIZE || message == WM_DPICHANGED || message == WM_PAINT || message == WM_SETFOCUS || message == WM_KILLFOCUS) platform->redraw = true;
         switch (message) {
+        case WM_KEYDOWN:
+            if (wparam == 'W' && GetKeyState(VK_CONTROL) < 0 && GetKeyState(VK_SHIFT) >= 0 && GetKeyState(VK_MENU) >= 0 && GetKeyState(VK_LWIN) >= 0 && GetKeyState(VK_RWIN) >= 0) {
+                if (!(lparam & (1LL << 30))) SendMessageW(window, WM_CLOSE, 0, 0);
+                return 0;
+            }
+            break;
         case WM_NCCALCSIZE:
             if (wparam != 0) return 0;
             break;

@@ -17,16 +17,14 @@ namespace genesia::compute {
     DeviceBuffer::DeviceBuffer(std::size_t bytes) : size(bytes) {
         if (bytes) check(cudaMalloc(&data, bytes));
     }
-    DeviceBuffer::DeviceBuffer(void* shared, std::size_t bytes) : data(shared), size(bytes), owned(false) {}
     DeviceBuffer::~DeviceBuffer() {
-        if (data && owned) cudaFree(data);
+        if (data) cudaFree(data);
     }
-    DeviceBuffer::DeviceBuffer(DeviceBuffer&& other) noexcept : data(std::exchange(other.data, nullptr)), size(std::exchange(other.size, 0)), owned(other.owned) {}
+    DeviceBuffer::DeviceBuffer(DeviceBuffer&& other) noexcept : data(std::exchange(other.data, nullptr)), size(std::exchange(other.size, 0)) {}
     DeviceBuffer& DeviceBuffer::operator=(DeviceBuffer&& other) noexcept {
-        if (data && owned) cudaFree(data);
-        data  = std::exchange(other.data, nullptr);
-        size  = std::exchange(other.size, 0);
-        owned = other.owned;
+        if (data) cudaFree(data);
+        data = std::exchange(other.data, nullptr);
+        size = std::exchange(other.size, 0);
         return *this;
     }
 } // namespace genesia::compute

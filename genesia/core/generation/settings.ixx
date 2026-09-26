@@ -1,35 +1,41 @@
 module;
 #include <nlohmann/json.hpp>
 export module genesia.generation.settings;
-export import genesia.generation.defaults;
 import std;
+
+export namespace genesia::defaults {
+    inline constexpr int width               = 1024;
+    inline constexpr int height              = 1536;
+    inline constexpr int steps               = 50;
+    inline constexpr float cfg               = 4.5F;
+    inline constexpr float lora_start        = 0.1F;
+    inline constexpr bool random_seed        = true;
+    inline constexpr std::uint64_t seed      = 16494404764960740964ULL;
+    inline constexpr bool preview_enabled    = true;
+    inline constexpr int preview_interval_ms = 1000;
+    inline constexpr std::string_view preset = "default";
+} // namespace genesia::defaults
+
 export namespace genesia::generation {
     struct Lora final {
-        std::string concept_key, sha;
+        std::string file, sha;
         float weight{1};
-        float start{};
+        float start{defaults::lora_start};
         bool operator==(const Lora&) const = default;
     };
     inline void to_json(nlohmann::json& json, const Lora& value) {
-        json = {{"concept", value.concept_key}, {"sha", value.sha}, {"weight", value.weight}, {"start", value.start}};
-    }
-    inline void from_json(const nlohmann::json& json, Lora& value) {
-        json.at("concept").get_to(value.concept_key);
-        json.at("sha").get_to(value.sha);
-        json.at("weight").get_to(value.weight);
-        json.at("start").get_to(value.start);
+        json = {{"file", value.file}, {"sha", value.sha}, {"weight", value.weight}, {"start", value.start}};
     }
     struct Settings final {
         std::string positive;
         std::string negative;
-        std::string auto_lora_prefix;
         int width{defaults::width};
         int height{defaults::height};
         int steps{defaults::steps};
         float cfg{defaults::cfg};
-        float denoise{1};
         std::vector<Lora> loras;
         bool operator==(const Settings&) const = default;
     };
 
+    std::string positive_prompt(const Settings& parameters);
 } // namespace genesia::generation

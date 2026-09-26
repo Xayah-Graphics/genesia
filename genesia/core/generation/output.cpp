@@ -8,7 +8,6 @@ import genesia.io.files;
 import genesia.project;
 
 import std;
-import genesia.data.datasets;
 
 namespace genesia {
     namespace {
@@ -35,15 +34,10 @@ namespace genesia {
         }
     } // namespace
 
-    dataset::File save_image(dataset::Index& index, const sdxl::Output& output, const Record& record) {
+    std::filesystem::path save_image(const sdxl::Output& output, const Record& record) {
         const auto model = record.model.u8string();
         nlohmann::json metadata{{"version", 2}, {"model", std::string{model.begin(), model.end()}}, {"seed", record.seed}, {"steps", record.parameters.steps}, {"cfg", record.parameters.cfg}, {"sampler", "euler"}, {"scheduler", "simple"}, {"prompt", {{"positive", record.parameters.positive}, {"negative", record.parameters.negative}}}};
-        if (!record.parameters.auto_lora_prefix.empty()) metadata["prompt"]["auto_lora_prefix"] = record.parameters.auto_lora_prefix;
         if (!record.parameters.loras.empty()) metadata["loras"] = record.parameters.loras;
-        if (!record.source.empty()) {
-            const auto source   = record.source.u8string();
-            metadata["repaint"] = {{"source", std::string{source.begin(), source.end()}}, {"denoise", record.parameters.denoise}};
-        }
         std::string text{"genesia"};
         // iTXt: keyword terminator, compression flag/method, empty language and translated keyword.
         text.append(5, '\0');
@@ -51,13 +45,22 @@ namespace genesia {
         int length{};
         const std::unique_ptr<unsigned char, decltype(&std::free)> png{stbi_write_png_to_mem(output.pixels.data(), output.width * 3, output.width, output.height, 3, &length), &std::free};
         if (!png) throw std::runtime_error{"PNG encoding failed"};
-        const auto& raw = *std::ranges::find(index.roots, std::string_view{"raw"}, [](const dataset::Root& root) { return root.all.key; });
-        if (!raw.ready) throw std::runtime_error{"Raw is not ready"};
-        const auto path = project::raw / std::format("genesia_{:06}.png", index.next_output++);
+        static auto next = [] {
+            std::filesystem::create_directories(project::raw);
+            std::uint64_t number{1};
+            for (const auto& entry : std::filesystem::directory_iterator{project::raw}) {
+                const auto name = files::utf8(entry.path().filename());
+                if (!name.starts_with("genesia_") || !name.ends_with(".png")) continue;
+                std::uint64_t value{};
+                const auto parsed = std::from_chars(name.data() + 8, name.data() + name.size() - 4, value);
+                if (parsed.ec == std::errc{} && parsed.ptr == name.data() + name.size() - 4) number = std::max(number, value + 1);
+            }
+            return number;
+        }();
+        const auto path = project::raw / std::format("genesia_{:06}.png", next++);
         auto temporary  = path;
         temporary += ".part";
         std::ofstream file{temporary, std::ios::binary | std::ios::trunc};
-        dataset::File resource;
         file.exceptions(std::ios::badbit | std::ios::failbit);
         try {
             // stb writes the PNG signature and IHDR first; insert metadata before IDAT.
@@ -66,21 +69,14 @@ namespace genesia {
             write_chunk(file, "iTXt", text);
             file.write(reinterpret_cast<const char*>(png.get() + 33), length - 33);
             file.close();
-            // Only complete files become dataset members.
-            resource            = index.identify(temporary, std::array{output.width, output.height});
-            const auto existing = std::ranges::find(raw.all.images, resource.sha, &dataset::File::sha);
-            std::filesystem::create_hard_link(existing == raw.all.images.end() ? temporary : existing->path, path);
-            if (existing != raw.all.images.end()) resource = *existing;
-            resource.path = path;
-            std::filesystem::remove(temporary);
+            files::move(temporary, path);
         } catch (...) {
             file.exceptions(std::ios::goodbit);
             file.close();
             std::filesystem::remove(temporary);
             throw;
         }
-        index.insert(resource);
-        return resource;
+        return path;
     }
 
 } // namespace genesia

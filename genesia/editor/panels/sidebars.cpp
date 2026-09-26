@@ -1,11 +1,9 @@
 module;
 #include <imgui.h>
 #include <imgui_internal.h>
-#include <misc/cpp/imgui_stdlib.h>
 module genesia.editor.panels.sidebars;
 import genesia.editor.widgets.controls;
 import genesia.editor.widgets.tags;
-import genesia.editor.panels.datasets;
 import genesia.prompt.library;
 import std;
 namespace genesia::editor {
@@ -55,7 +53,7 @@ namespace genesia::editor {
         ImGui::SetNextWindowSize({720 * scale, 520 * scale}, ImGuiCond_Appearing);
         if (ImGui::BeginPopupModal("Final prompt", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
             auto text = workspace.prompt_panel.composition.text;
-            text[0]   = workspace.with_lora_triggers(std::move(text[0])).positive;
+            text[0]   = generation::positive_prompt(workspace.parameters());
             if (ImGui::BeginChild("##FinalText", {0, -40 * scale})) {
                 for (std::size_t side = 0; side < 2; ++side) {
                     ImGui::PushID(static_cast<int>(side));
@@ -82,41 +80,23 @@ namespace genesia::editor {
         }
     }
 
-    void sidebar(Workspace& workspace, const bool left, const float scale, const ImVec2 size, const Workspace::Picture& image) {
-        const auto& panel       = left ? workspace.dataset_sidebar : workspace.prompt_sidebar;
-        const bool preview_drop = !left && workspace.prompt_panel.incoming.has_value();
+    void sidebar(Workspace& workspace, const float scale, const ImVec2 size, const Workspace::Picture& image) {
+        const auto& panel       = workspace.prompt_sidebar;
+        const bool preview_drop = workspace.prompt_panel.incoming.has_value();
         const bool temporary    = preview_drop && workspace.page != Workspace::Page::generation;
         const bool open         = panel.open || preview_drop;
-        if (!left && (!open || workspace.page != Workspace::Page::generation)) workspace.prompt_editor.suspend();
+        if (!open || workspace.page != Workspace::Page::generation) workspace.prompt_editor.suspend();
         if (panel.amount == 0) return;
         const float visible = panel.width * panel.amount;
         const float top     = (top_strip_height + 24) * scale;
-        ImGui::SetNextWindowPos({left ? visible - panel.width : size.x - visible, top});
+        ImGui::SetNextWindowPos({size.x - visible, top});
         ImGui::SetNextWindowSize({panel.width, std::max(1.0F, size.y - top - (bottom_margin + control_height + 16) * scale)});
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {16 * scale, 0});
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, panel.amount);
-        if (left) {
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {8 * scale, 5 * scale});
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {8 * scale, 6 * scale});
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4 * scale);
-            ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 0);
-            ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, 5 * scale);
-            ImGui::PushStyleColor(ImGuiCol_Header, {0.32F, 0.60F, 0.65F, 0.18F});
-            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, {0.55F, 0.65F, 0.69F, 0.12F});
-            ImGui::PushStyleColor(ImGuiCol_HeaderActive, {0.32F, 0.60F, 0.65F, 0.25F});
-            ImGui::PushStyleColor(ImGuiCol_Button, {0.18F, 0.21F, 0.24F, 0.65F});
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.24F, 0.30F, 0.33F, 0.75F});
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, {0.28F, 0.37F, 0.40F, 0.85F});
-            ImGui::PushStyleColor(ImGuiCol_PlotLines, {0.44F, 0.80F, 0.87F, 0.85F});
-            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, {0.44F, 0.80F, 0.87F, 0.75F});
-            ImGui::PushStyleColor(ImGuiCol_Separator, {0.70F, 0.72F, 0.85F, 0.12F});
-        }
-        std::optional<std::string> selected;
-        if (ImGui::Begin(left ? "##DatasetSidebar" : "##PromptSidebar", nullptr, overlay | ImGuiWindowFlags_NoBackground | (open ? ImGuiWindowFlags_None : ImGuiWindowFlags_NoInputs))) {
+        if (ImGui::Begin("##PromptSidebar", nullptr, overlay | ImGuiWindowFlags_NoBackground | (open ? ImGuiWindowFlags_None : ImGuiWindowFlags_NoInputs))) {
             ImGui::PushFont(nullptr, 12);
             const float content_y = ImGui::GetCursorPosY() + ImGui::GetFontSize() + 12 * scale;
-            if (left) ImGui::TextDisabled("DATASETS");
-            else if (temporary) ImGui::TextDisabled("SET PREVIEW");
+            if (temporary) ImGui::TextDisabled("SET PREVIEW");
             else if (workspace.page == Workspace::Page::generation) {
                 ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {0, 0});
                 ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, {0, 0.5F});
@@ -144,32 +124,15 @@ namespace genesia::editor {
                     if (ImGui::MenuItem("Save as...")) workspace.save_as_requested = true;
                     ImGui::EndPopup();
                 }
-            } else if (workspace.repaint) ImGui::TextDisabled("Repaint edits");
-            else ImGui::TextDisabled("Image prompt");
+            } else ImGui::TextDisabled("Image prompt");
             ImGui::PopFont();
             ImGui::SetCursorPosY(content_y);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
-            if (left) dataset_controls(workspace, scale);
-            else workspace.prompt_panel.status();
+            workspace.prompt_panel.status();
             if (ImGui::BeginChild(temporary ? "##PreviewDropContent" : "##SidebarContent", {0, 0}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground)) {
-                if (left) selected = dataset_contents(workspace);
-                else if (workspace.page == Workspace::Page::generation || temporary) {
+                if (workspace.page == Workspace::Page::generation || temporary) {
                     workspace.prompt_panel.draw(workspace.prompt, *workspace.catalog, scale);
                     if (!temporary) workspace.prompt_editor.draw(workspace.prompt.free, workspace.tag_search, *workspace.catalog, scale);
-                } else if (workspace.repaint) {
-                    auto& text = workspace.repaint->text;
-                    ImGui::PushID(workspace.repaint->source.sha.c_str());
-                    if (ImGui::Button("Apply current prompt recipe") && workspace.prepare_prompt()) {
-                        ImGui::ClearActiveID();
-                        text = workspace.prompt_panel.composition.text;
-                    }
-                    for (std::size_t side = 0; side < 2; ++side) {
-                        ImGui::PushID(static_cast<int>(side));
-                        ImGui::SeparatorText(side ? "Negative" : "Positive");
-                        ImGui::InputTextMultiline("##Prompt", &text[side], {-1, 230 * scale}, ImGuiInputTextFlags_WordWrap);
-                        ImGui::PopID();
-                    }
-                    ImGui::PopID();
                 } else if (image.record) {
                     ImGui::SeparatorText("Positive");
                     ImGui::TextWrapped("%s", image.record->parameters.positive.c_str());
@@ -195,11 +158,6 @@ namespace genesia::editor {
             ImGui::PopStyleVar();
         }
         ImGui::End();
-        if (left) {
-            ImGui::PopStyleColor(9);
-            ImGui::PopStyleVar(5);
-        }
         ImGui::PopStyleVar(2);
-        if (selected) workspace.select_collection(std::move(*selected));
     }
 } // namespace genesia::editor

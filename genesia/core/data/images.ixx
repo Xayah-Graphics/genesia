@@ -7,18 +7,15 @@ export namespace genesia {
         generation::Settings parameters;
         std::uint64_t seed{};
         std::filesystem::path path, model;
-        std::filesystem::path source;
     };
     struct ImageInfo final {
         int width{}, height{};
     };
     ImageInfo read_image_info(const std::filesystem::path& path);
-    Record read_record(const std::filesystem::path& path);
     struct Image final {
-        int width{};
-        int height{};
+        int width{}, height{};
         std::vector<std::uint8_t> pixels;
     };
-
-    Image read_image(const std::filesystem::path& path, int channels = 3);
+    Image read_image(const std::filesystem::path& path);
+    Record read_record(const std::filesystem::path& path);
 } // namespace genesia

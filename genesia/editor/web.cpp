@@ -180,22 +180,19 @@ namespace genesia::editor {
         accepting = enabled && !busy && unavailable.empty();
         if (!unavailable.empty()) status = std::move(unavailable);
         else if (busy) {
-            status = "主机忙碌";
-            if (state.active->kind == runtime::Kind::generate && !std::get<runtime::Generate>(state.active->request->operation).source) {
-                if (state.active->stopping) status = "正在停止";
-                else if (state.active->state == runtime::State::saving) status = "正在保存";
-                else if (state.generation.stage == runtime::GenerationStage::loading) status = "正在加载模型";
-                else if (state.generation.stage == runtime::GenerationStage::sampling) status = std::format("生成中 · {} / {}", state.generation.completed, state.generation.steps);
-                else status = "正在处理";
-            }
+            if (state.active->stopping) status = "正在停止";
+            else if (state.active->state == runtime::State::saving) status = "正在保存";
+            else if (state.generation.stage == runtime::GenerationStage::loading) status = "正在加载模型";
+            else if (state.generation.stage == runtime::GenerationStage::sampling) status = std::format("生成中 · {} / {}", state.generation.completed, state.generation.steps);
+            else status = "正在处理";
         } else status = "就绪 · 使用主机当前配置";
     }
 
     void Web::receive(const runtime::Event& event) {
         const std::lock_guard lock{mutex};
-        if (event.kind == runtime::EventKind::saved && event.record.source.empty()) history.push_back(event.record.path);
+        if (event.kind == runtime::EventKind::saved) history.push_back(event.record.path);
         if (event.id < task) return;
-        if (event.kind == runtime::EventKind::task && event.task.kind == runtime::Kind::generate && event.task.request && !std::get<runtime::Generate>(event.task.request->operation).source) {
+        if (event.kind == runtime::EventKind::task) {
             if (task != event.id) {
                 task = event.id;
                 ++sequence;
@@ -208,7 +205,7 @@ namespace genesia::editor {
                 busy      = true;
             }
             if (event.task.state == runtime::State::failed) error = event.task.error;
-        } else if (event.kind == runtime::EventKind::saved && event.record.source.empty()) {
+        } else if (event.kind == runtime::EventKind::saved) {
             final_image = event.record.path;
             if (enabled) {
                 pending = Frame{.task = event.id, .sequence = ++sequence, .file = final_image};

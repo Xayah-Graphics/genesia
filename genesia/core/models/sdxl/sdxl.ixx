@@ -18,17 +18,8 @@ import genesia.models.sdxl.vae;
 import genesia.models.sdxl.preview;
 
 export namespace genesia::sdxl {
-    struct ImageInput final {
-        int width, height;
-        ::cuda::device_buffer<std::uint8_t> pixels;
-        ::cuda::device_buffer<float> latent;
-
-        ImageInput(::cuda::stream_ref stream, std::span<const std::uint8_t> pixels, int width, int height);
-    };
-
     struct Model final {
         Model(::cuda::stream_ref stream, const std::filesystem::path& checkpoint, const std::filesystem::path& cache_directory);
-        void encode(ImageInput& image);
 
     private:
         friend struct Inference;
@@ -51,7 +42,6 @@ export namespace genesia::sdxl {
     private:
         ::cuda::device_buffer<float> training;
         std::filesystem::path checkpoint;
-        std::unique_ptr<VAEEncoder> encoder;
     };
 
     struct Output final {
@@ -74,7 +64,7 @@ export namespace genesia::sdxl {
         std::size_t cache_hits{};
         std::size_t cache_misses{};
 
-        Inference(Model& model, generation::Settings parameters, Control& control, Snapshots* snapshots = nullptr, const ImageInput* source = nullptr);
+        Inference(Model& model, generation::Settings parameters, Control& control, Snapshots* snapshots = nullptr);
         ~Inference();
         Inference(const Inference&)            = delete;
         Inference& operator=(const Inference&) = delete;
@@ -91,7 +81,6 @@ export namespace genesia::sdxl {
         Model& model;
         Control& control;
         Snapshots* snapshots;
-        const ImageInput* source;
         UNetWorkspaceLayout unet_layout;
         VAEWorkspaceLayout vae_layout;
         ::cuda::device_buffer<std::byte> workspace;

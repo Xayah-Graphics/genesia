@@ -11,10 +11,8 @@ export namespace genesia::compute {
     struct DeviceBuffer {
         void* data       = nullptr;
         std::size_t size = 0;
-        bool owned       = true;
         DeviceBuffer()   = default;
         explicit DeviceBuffer(std::size_t bytes);
-        DeviceBuffer(void* shared, std::size_t bytes);
         ~DeviceBuffer();
         DeviceBuffer(DeviceBuffer&& other) noexcept;
         DeviceBuffer& operator=(DeviceBuffer&& other) noexcept;

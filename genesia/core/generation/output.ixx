@@ -1,9 +1,9 @@
 export module genesia.generation.output;
 
 import genesia.models.sdxl;
-export import genesia.data.datasets;
+export import genesia.data.images;
 import std;
 
 export namespace genesia {
-    dataset::File save_image(dataset::Index& index, const sdxl::Output& output, const Record& record);
+    std::filesystem::path save_image(const sdxl::Output& output, const Record& record);
 } // namespace genesia
