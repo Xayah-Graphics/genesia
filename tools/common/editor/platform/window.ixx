@@ -28,6 +28,7 @@ namespace tools::editor {
         vk::Extent2D content_extent{}, extent_limit{};
         bool redraw{true}, drag_requested{};
         std::vector<std::filesystem::path> dragged, dropped;
+        POINT drag_position{}, drop_position{};
         std::string drop_error;
 
     private:

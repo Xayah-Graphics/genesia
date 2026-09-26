@@ -8,6 +8,7 @@ export namespace genesia::defaults {
     inline constexpr int height              = 1536;
     inline constexpr int steps               = 50;
     inline constexpr float cfg               = 4.5F;
+    inline constexpr float lora_weight       = 0.95F;
     inline constexpr float lora_start        = 0.1F;
     inline constexpr bool random_seed        = true;
     inline constexpr std::uint64_t seed      = 16494404764960740964ULL;
@@ -19,7 +20,7 @@ export namespace genesia::defaults {
 export namespace genesia::generation {
     struct Lora final {
         std::string file, sha;
-        float weight{1};
+        float weight{defaults::lora_weight};
         float start{defaults::lora_start};
         bool operator==(const Lora&) const = default;
     };

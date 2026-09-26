@@ -48,7 +48,7 @@ export namespace genesia::editor {
         struct LoraSettings final {
             std::string file;
             bool active{};
-            float weight{1}, start{defaults::lora_start * 100};
+            float weight{defaults::lora_weight}, start{defaults::lora_start * 100};
         };
         const std::shared_ptr<const prompt::Catalog> catalog;
         const std::shared_ptr<const prompts::Library> prompt_library;

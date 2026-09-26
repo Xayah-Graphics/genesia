@@ -2,6 +2,7 @@ export module tools.editor.graphics.renderer;
 import tools.editor.platform.window;
 import tools.editor.graphics.device;
 import tools.editor.graphics.resources;
+import tools.images;
 import std;
 import vulkan;
 
@@ -20,6 +21,8 @@ export namespace tools::editor {
         ~Renderer();
         bool begin();
         void present();
+        std::uint64_t upload(const Image& image);
+        void retire(std::uint64_t id);
 
     private:
         struct Frame final {
@@ -46,7 +49,6 @@ export namespace tools::editor {
 
         std::uint64_t texture(vk::Extent2D extent);
         void upload(std::uint64_t id, const void* pixels, int width, int height, bool initial);
-        void retire(std::uint64_t id);
         void recreate();
         void update_fonts();
         void draw();

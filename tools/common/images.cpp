@@ -2,6 +2,8 @@ module;
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
 #include <stb_image.h>
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#include <stb_image_resize2.h>
 
 module tools.images;
 import std;
@@ -32,6 +34,14 @@ namespace tools {
         const std::unique_ptr<unsigned char, decltype(&stbi_image_free)> pixels{stbi_load_from_memory(encoded.data(), static_cast<int>(encoded.size()), &result.width, &result.height, nullptr, 3), &stbi_image_free};
         if (!pixels) throw std::runtime_error{stbi_failure_reason()};
         result.pixels.assign(pixels.get(), pixels.get() + std::size_t(result.width) * result.height * 3);
+        return result;
+    }
+    Image read_thumbnail(const std::filesystem::path& path, const int extent) {
+        const auto source = read_image(path);
+        const float scale = std::min(1.0F, float(extent) / std::max(source.width, source.height));
+        Image result{.width = std::max(1, int(std::round(source.width * scale))), .height = std::max(1, int(std::round(source.height * scale)))};
+        result.pixels.resize(std::size_t(result.width) * result.height * 3);
+        if (!stbir_resize_uint8_srgb(source.pixels.data(), source.width, source.height, 0, result.pixels.data(), result.width, result.height, 0, STBIR_RGB)) throw std::runtime_error{"Cannot resize image: " + path.string()};
         return result;
     }
 } // namespace tools

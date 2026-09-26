@@ -17,12 +17,14 @@ namespace edit::headless {
         if (arguments.empty() || arguments.front() == "--help") {
             std::println(R"(Edit {}
 edit
-edit --headless INPUT --prompt TEXT
-edit --headless INPUT --prompt-file FILE
+edit --headless INPUT --prompt TEXT [--reference FILE ...]
+edit --headless INPUT --prompt-file FILE [--reference FILE ...]
 
 Editor builds open a small drag-and-drop window by default.
 Headless builds accept arguments without --headless.
 INPUT is a PNG image or a directory containing PNG images (not recursive).
+Each input image is <image1>. Up to nine --reference PNG files are fixed
+as <image2> through <image10>, in argument order, for the entire batch.
 Outputs go into INPUT/fix, or into the image's parent/fix, with original names.
 Existing results are replaced only after a complete output is ready. Originals remain.
 One Qwen Image 2.1 edit per image, with a random seed and the same positive prompt.
@@ -35,11 +37,16 @@ Progress and results are JSON Lines. Ctrl+C stops this batch.)",
         bool prompt_set{};
         for (std::size_t i = 1; i < arguments.size(); ++i) {
             const auto option = arguments[i];
-            if (option != "--prompt" && option != "--prompt-file") throw std::runtime_error{"Unknown option: " + std::string{option}};
-            if (prompt_set) throw std::runtime_error{"Specify only one of --prompt or --prompt-file"};
+            if (option != "--prompt" && option != "--prompt-file" && option != "--reference") throw std::runtime_error{"Unknown option: " + std::string{option}};
             if (++i == arguments.size()) throw std::runtime_error{"Missing value for " + std::string{option}};
-            request.prompt = option == "--prompt" ? std::string{arguments[i]} : tools::files::read_text(tools::files::path(arguments[i]));
-            prompt_set     = true;
+            if (option == "--reference") {
+                if (request.references.size() == 9) throw std::runtime_error{"Edit accepts at most nine fixed reference images"};
+                request.references.push_back(tools::files::path(arguments[i]));
+            } else {
+                if (prompt_set) throw std::runtime_error{"Specify only one of --prompt or --prompt-file"};
+                request.prompt = option == "--prompt" ? std::string{arguments[i]} : tools::files::read_text(tools::files::path(arguments[i]));
+                prompt_set     = true;
+            }
         }
         if (!prompt_set) throw std::runtime_error{"Specify --prompt or --prompt-file"};
         interrupted = false;

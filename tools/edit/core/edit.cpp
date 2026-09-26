@@ -7,14 +7,18 @@ import std;
 namespace edit {
     namespace {
         struct Stopped final {};
-        nlohmann::json workflow(const std::string& image, const std::string& prompt, const std::uint64_t seed, const std::string& prefix) {
+        nlohmann::json workflow(const std::span<const std::string> images, const std::string& prompt, const std::uint64_t seed, const std::string& prefix) {
             nlohmann::json graph;
-            graph["image"]  = {{"class_type", "LoadImage"}, {"inputs", {{"image", image}}}};
             graph["model"]  = {{"class_type", "UNETLoader"}, {"inputs", {{"unet_name", "qwen_image_2.1_int8_convrot.safetensors"}, {"weight_dtype", "default"}}}};
             graph["clip"]   = {{"class_type", "CLIPLoader"}, {"inputs", {{"clip_name", "qwen3vl_8b_int8_convrot.safetensors"}, {"type", "qwen_image"}, {"device", "default"}}}};
             graph["vae"]    = {{"class_type", "VAELoader"}, {"inputs", {{"vae_name", "qwen_image_2.1_vae_bf16.safetensors"}}}};
             graph["cache"]  = {{"class_type", "QwenImage21Cache"}, {"inputs", {{"model", {"model", 0}}, {"device", "gpu"}, {"dtype", "default"}}}};
-            graph["encode"] = {{"class_type", "TextEncodeQwenImage21"}, {"inputs", {{"clip", {"clip", 0}}, {"vae", {"vae", 0}}, {"images.image_1", {"image", 0}}, {"prompt", prompt}, {"negative_prompt", ""}, {"resolution", 0}}}};
+            graph["encode"] = {{"class_type", "TextEncodeQwenImage21"}, {"inputs", {{"clip", {"clip", 0}}, {"vae", {"vae", 0}}, {"prompt", prompt}, {"negative_prompt", ""}, {"resolution", 0}}}};
+            for (std::size_t i = 0; i < images.size(); ++i) {
+                const auto name                             = std::format("image_{}", i + 1);
+                graph[name]                                 = {{"class_type", "LoadImage"}, {"inputs", {{"image", images[i]}}}};
+                graph["encode"]["inputs"]["images." + name] = {name, 0};
+            }
             graph["sample"] = {{"class_type", "KSampler"}, {"inputs", {{"model", {"cache", 0}}, {"positive", {"encode", 0}}, {"negative", {"encode", 1}}, {"latent_image", {"encode", 2}}, {"seed", seed}, {"steps", 25}, {"cfg", 1.0}, {"sampler_name", "euler"}, {"scheduler", "simple"}, {"denoise", 1.0}}}};
             graph["decode"] = {{"class_type", "VAEDecode"}, {"inputs", {{"samples", {"sample", 0}}, {"vae", {"vae", 0}}}}};
             graph["save"]   = {{"class_type", "SaveImageAdvanced"}, {"inputs", {{"images", {"decode", 0}}, {"filename_prefix", prefix}, {"format", "png"}, {"format.bit_depth", "8-bit"}, {"format.input_color_space", "sRGB"}}}};
@@ -88,6 +92,14 @@ namespace edit {
             temporary_input = batch_input;
             if (!std::filesystem::create_directory(batch_output)) throw std::runtime_error{"Temporary directory already exists: " + tools::files::utf8(batch_output)};
             temporary_output = batch_output;
+            std::vector<std::string> inputs(1);
+            for (std::size_t i = 0; i < options.references.size(); ++i) {
+                if (interrupted) throw Stopped{};
+                current_file    = options.references[i];
+                const auto name = std::format("reference-{}.png", i + 2);
+                std::filesystem::copy_file(current_file, temporary_input / name);
+                inputs.push_back(batch + "/" + name);
+            }
             for (std::size_t i = 0; i < images.size(); ++i) {
                 if (interrupted) throw Stopped{};
                 current_file = images[i];
@@ -96,7 +108,8 @@ namespace edit {
                 const auto source = temporary_input / name;
                 std::filesystem::copy_file(current_file, source);
                 const auto seed  = std::uniform_int_distribution<std::uint64_t>{}(random);
-                const auto graph = workflow(batch + "/" + name, options.prompt, seed, batch + "/edited");
+                inputs.front()   = batch + "/" + name;
+                const auto graph = workflow(inputs, options.prompt, seed, batch + "/edited");
                 const auto high  = std::uniform_int_distribution<std::uint64_t>{}(random);
                 const auto low   = std::uniform_int_distribution<std::uint64_t>{}(random);
                 if (interrupted) throw Stopped{};

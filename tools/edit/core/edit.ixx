@@ -5,6 +5,7 @@ export namespace edit {
     struct Request final {
         std::filesystem::path input;
         std::string prompt;
+        std::vector<std::filesystem::path> references;
     };
     enum class Stage { preparing, editing, stopping };
     inline constexpr std::array<std::string_view, 3> stages{"preparing", "editing", "stopping"};

@@ -155,7 +155,9 @@ namespace tools::editor {
         return DragOver(keys, point, effect);
     }
 
-    HRESULT STDMETHODCALLTYPE WindowPlatform::DropTarget::DragOver(DWORD, POINTL, DWORD* effect) {
+    HRESULT STDMETHODCALLTYPE WindowPlatform::DropTarget::DragOver(DWORD, POINTL point, DWORD* effect) {
+        window.drag_position = {point.x, point.y};
+        ScreenToClient(window.native_window, &window.drag_position);
         *effect       = window.dragged.empty() ? DROPEFFECT_NONE : *effect & DROPEFFECT_COPY;
         window.redraw = true;
         glfwPostEmptyEvent();
@@ -171,7 +173,10 @@ namespace tools::editor {
 
     HRESULT STDMETHODCALLTYPE WindowPlatform::DropTarget::Drop(IDataObject*, DWORD keys, POINTL point, DWORD* effect) {
         DragOver(keys, point, effect);
-        if (*effect & DROPEFFECT_COPY) window.dropped = std::move(window.dragged);
+        if (*effect & DROPEFFECT_COPY) {
+            window.dropped       = std::move(window.dragged);
+            window.drop_position = window.drag_position;
+        }
         window.dragged.clear();
         return S_OK;
     }

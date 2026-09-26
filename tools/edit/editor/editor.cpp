@@ -11,7 +11,7 @@ namespace edit::editor {
         if (!arguments.empty()) throw std::runtime_error{"The Editor accepts files by drag-and-drop. Use --headless for commands."};
         tools::editor::WindowPlatform window{"Edit", {420, 224}};
         tools::editor::Renderer renderer{window};
-        Workspace workspace{window, renderer.dpi};
+        Workspace workspace{window, renderer};
         bool closing{};
         std::uint64_t revision{};
         int redraws{2};
@@ -21,7 +21,7 @@ namespace edit::editor {
             if (window.take_close_request()) {
                 workspace.session.cancel();
                 try {
-                    workspace.save_prompt();
+                    workspace.save_settings();
                     closing = true;
                 } catch (const std::exception& failure) {
                     workspace.error = failure.what();
@@ -40,7 +40,7 @@ namespace edit::editor {
             if (!renderer.begin()) continue;
             workspace.draw();
             renderer.present();
-            window.resize(window.content_extent);
+            if (window.dragged.empty()) window.resize(window.content_extent);
             if (!glfwGetWindowAttrib(window.window, GLFW_VISIBLE)) glfwShowWindow(window.window);
             if (std::exchange(window.drag_requested, false)) window.move();
             glfwWaitEventsTimeout(workspace.state.busy ? 1.0 / 30 : 1.0 / 60);

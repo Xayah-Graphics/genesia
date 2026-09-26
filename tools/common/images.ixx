@@ -10,4 +10,5 @@ export namespace tools {
         std::vector<std::uint8_t> pixels;
     };
     Image read_image(const std::filesystem::path& path);
+    Image read_thumbnail(const std::filesystem::path& path, int extent);
 } // namespace tools

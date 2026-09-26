@@ -121,6 +121,20 @@ namespace tools::editor {
         frame_index = (frame_index + 1) % frames.size();
     }
 
+    std::uint64_t Renderer::upload(const Image& image) {
+        std::vector<std::uint8_t> pixels(std::size_t(image.width) * image.height * 4, 255);
+        for (std::size_t i = 0; i < image.pixels.size() / 3; ++i) std::copy_n(image.pixels.data() + i * 3, 3, pixels.data() + i * 4);
+        const auto id = texture({std::uint32_t(image.width), std::uint32_t(image.height)});
+        upload(id, pixels.data(), image.width, image.height, true);
+        return id;
+    }
+
+    void Renderer::retire(const std::uint64_t id) {
+        auto node = textures.extract(id);
+        frames[frame_index].retired.push_back(std::move(node.mapped()));
+        frames[frame_index].recycled.push_back(static_cast<std::uint32_t>(id - 1));
+    }
+
     std::uint64_t Renderer::texture(const vk::Extent2D extent) {
         const auto slot = free_descriptors.empty() ? resources.resource_index++ : free_descriptors.back();
         if (!free_descriptors.empty()) free_descriptors.pop_back();
@@ -140,12 +154,6 @@ namespace tools::editor {
         command.copyBufferToImage(*staging.buffer, *image.image, vk::ImageLayout::eTransferDstOptimal, vk::BufferImageCopy{0, 0, 0, {vk::ImageAspectFlagBits::eColor, 0, 0, 1}, {0, 0, 0}, {std::uint32_t(width), std::uint32_t(height), 1}});
         const vk::ImageMemoryBarrier2 sampled{vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite, vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, vk::QueueFamilyIgnored, vk::QueueFamilyIgnored, *image.image, {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
         command.pipelineBarrier2(vk::DependencyInfo{{}, {}, {}, {}, {}, 1, &sampled});
-    }
-
-    void Renderer::retire(const std::uint64_t id) {
-        auto node = textures.extract(id);
-        frames[frame_index].retired.push_back(std::move(node.mapped()));
-        frames[frame_index].recycled.push_back(static_cast<std::uint32_t>(id - 1));
     }
 
     void Renderer::recreate() {
