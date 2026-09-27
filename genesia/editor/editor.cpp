@@ -7,11 +7,8 @@ module genesia.editor;
 import genesia.editor.platform.window;
 import genesia.editor.graphics.renderer;
 import genesia.editor.workspace;
-import genesia.editor.prompt.previews;
-import genesia.prompt.library;
-import genesia.project;
+import genesia.prompt.presets;
 import genesia.generation.settings;
-import genesia.io.files;
 import std;
 
 namespace genesia::editor {
@@ -21,11 +18,11 @@ namespace genesia::editor {
         Workspace ui;
         bool closing{};
 
-        Application(prompts::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, std::shared_ptr<const prompts::Library> library);
+        Application(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog);
         void run();
     };
 
-    Application::Application(prompts::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, std::shared_ptr<const prompts::Library> library) : ui{std::move(preset), std::move(catalog), std::move(library), window, renderer} {}
+    Application::Application(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog) : ui{std::move(preset), std::move(catalog), window, renderer} {}
 
     void Application::run() {
         std::uint32_t previous_stage{}, previous_step{};
@@ -38,7 +35,7 @@ namespace genesia::editor {
                 ui.textures.shutdown();
                 ui.runtime.session.shutdown();
             }
-            bool busy{}, done{true}, pending{ui.textures.pending.load() || ui.prompt_panel.images.pending.load() || ui.prompt_panel.images.saving || ui.runtime.web.enabled.load()};
+            bool busy{}, done{true}, pending{ui.textures.pending.load() || ui.runtime.web.enabled.load()};
             std::uint32_t stage{}, step{};
             {
                 const auto state = ui.runtime.session.snapshot();
@@ -51,7 +48,7 @@ namespace genesia::editor {
             }
             if (closing && done && !pending) break;
             const double now     = glfwGetTime();
-            const bool animating = now < ui.animate_until || (renderer.visible && ui.view.started >= 0) || (ui.gallery_sidebar.amount != float(ui.gallery_sidebar.open)) || (ui.prompt_sidebar.amount != float(ui.prompt_sidebar.open || ui.prompt_panel.incoming.has_value()));
+            const bool animating = now < ui.animate_until || (renderer.visible && ui.view.started >= 0) || (ui.prompt_sidebar.amount != float(ui.prompt_sidebar.open));
             if (!std::exchange(window.redraw, false) && !pending && !animating && now < ui.refresh_at && stage == previous_stage && step == previous_step && busy == previous_busy) {
                 glfwWaitEventsTimeout(std::min(busy ? 0.1 : 1.0, std::max(0.0, ui.refresh_at - now)));
                 continue;
@@ -83,10 +80,8 @@ namespace genesia::editor {
             else throw std::runtime_error{"Unknown Editor option: " + std::string{option}};
         }
         auto catalog = std::make_shared<const prompt::Catalog>();
-        auto library = std::make_shared<const prompts::Library>(std::filesystem::path{project::assets} / "prompts", *catalog);
-        auto preset  = prompts::read_preset(*library, name, *catalog);
-        previews::clean(*library);
-        Application application{std::move(preset), std::move(catalog), std::move(library)};
+        auto preset  = prompt::read_preset(name, *catalog);
+        Application application{std::move(preset), std::move(catalog)};
         application.run();
         return 0;
     }

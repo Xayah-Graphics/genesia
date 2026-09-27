@@ -4,10 +4,6 @@ module;
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
 #include <dwmapi.h>
-#include <ole2.h>
-#include <shellapi.h>
-#include <shobjidl.h>
-#include <wrl/client.h>
 #include <windowsx.h>
 
 module genesia.editor.platform.window;
@@ -49,14 +45,10 @@ namespace genesia::editor {
         const auto x     = area.left + ((area.right - area.left) - (bounds.right - bounds.left)) / 2;
         const auto y     = area.top + ((area.bottom - area.top) - (bounds.bottom - bounds.top)) / 2;
         SetWindowPos(this->native_window, nullptr, x, y, 0, 0, SWP_FRAMECHANGED | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-        DragAcceptFiles(native_window, FALSE);
-        const auto registered = RegisterDragDrop(native_window, &drop_target);
-        if (FAILED(registered)) throw std::runtime_error{std::format("Register file drop: 0x{:08X}", static_cast<unsigned long>(registered))};
         glfwShowWindow(this->window);
     }
 
     WindowPlatform::~WindowPlatform() {
-        RevokeDragDrop(native_window);
         for (auto* cursor : hand_cursors) glfwDestroyCursor(cursor);
         SetWindowLongPtrW(this->native_window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(this->state.original_window_proc));
         RemovePropW(this->native_window, L"GenesiaWindow");
@@ -130,109 +122,12 @@ namespace genesia::editor {
         }
     }
 
-    std::optional<std::filesystem::path> WindowPlatform::choose_directory() {
-        const auto check = [](const HRESULT result) {
-            if (FAILED(result)) throw std::runtime_error{std::format("Choose Gallery folder: 0x{:08X}", static_cast<unsigned long>(result))};
-        };
-        Microsoft::WRL::ComPtr<IFileOpenDialog> dialog;
-        check(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(dialog.GetAddressOf())));
-        check(dialog->SetOptions(FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST));
-        check(dialog->SetTitle(L"Register Gallery root"));
-        const auto result = dialog->Show(native_window);
-        if (result == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return std::nullopt;
-        check(result);
-        Microsoft::WRL::ComPtr<IShellItem> item;
-        check(dialog->GetResult(item.GetAddressOf()));
-        PWSTR name{};
-        check(item->GetDisplayName(SIGDN_FILESYSPATH, &name));
-        const std::unique_ptr<wchar_t, decltype(&CoTaskMemFree)> allocation{name, &CoTaskMemFree};
-        return std::filesystem::canonical(name);
-    }
-
     WindowPlatform::GlfwLifetime::GlfwLifetime() {
         if (glfwInit() != GLFW_TRUE) throw std::runtime_error("GLFW initialization failed");
     }
 
     WindowPlatform::GlfwLifetime::~GlfwLifetime() {
         glfwTerminate();
-    }
-
-    WindowPlatform::OleLifetime::OleLifetime() {
-        const auto result = OleInitialize(nullptr);
-        if (FAILED(result)) throw std::runtime_error{std::format("Initialize file drag: 0x{:08X}", static_cast<unsigned long>(result))};
-    }
-
-    WindowPlatform::OleLifetime::~OleLifetime() {
-        OleUninitialize();
-    }
-
-    WindowPlatform::DropTarget::DropTarget(WindowPlatform& owner) : window{owner} {}
-
-    HRESULT STDMETHODCALLTYPE WindowPlatform::DropTarget::QueryInterface(REFIID iid, void** object) {
-        if (iid == __uuidof(IUnknown) || iid == __uuidof(IDropTarget)) {
-            *object = static_cast<IDropTarget*>(this);
-            AddRef();
-            return S_OK;
-        }
-        *object = nullptr;
-        return E_NOINTERFACE;
-    }
-
-    ULONG STDMETHODCALLTYPE WindowPlatform::DropTarget::AddRef() {
-        return ++references;
-    }
-
-    ULONG STDMETHODCALLTYPE WindowPlatform::DropTarget::Release() {
-        // Owned by WindowPlatform; RevokeDragDrop releases OLE's reference before destruction.
-        return --references;
-    }
-
-    HRESULT STDMETHODCALLTYPE WindowPlatform::DropTarget::DragEnter(IDataObject* data, DWORD keys, POINTL point, DWORD* effect) {
-        window.dragged.clear();
-        window.drop_error.clear();
-        FORMATETC format{CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
-        STGMEDIUM storage{};
-        if (SUCCEEDED(data->GetData(&format, &storage))) {
-            try {
-                const auto handle = static_cast<HDROP>(storage.hGlobal);
-                const auto count  = DragQueryFileW(handle, 0xFFFFFFFF, nullptr, 0);
-                for (UINT i = 0; i < count; ++i) {
-                    std::wstring path(DragQueryFileW(handle, i, nullptr, 0) + 1, L'\0');
-                    const auto length = DragQueryFileW(handle, i, path.data(), static_cast<UINT>(path.size()));
-                    path.resize(length);
-                    window.dragged.emplace_back(std::move(path));
-                }
-            } catch (const std::exception& failure) {
-                window.drop_error = failure.what();
-                window.dragged.clear();
-            }
-            ReleaseStgMedium(&storage);
-        }
-        return DragOver(keys, point, effect);
-    }
-
-    HRESULT STDMETHODCALLTYPE WindowPlatform::DropTarget::DragOver(DWORD, POINTL point, DWORD* effect) {
-        POINT client{point.x, point.y};
-        ScreenToClient(window.native_window, &client);
-        window.drop_position = {static_cast<float>(client.x), static_cast<float>(client.y)};
-        *effect              = window.dragged.empty() ? DROPEFFECT_NONE : *effect & DROPEFFECT_COPY;
-        window.redraw        = true;
-        glfwPostEmptyEvent();
-        return S_OK;
-    }
-
-    HRESULT STDMETHODCALLTYPE WindowPlatform::DropTarget::DragLeave() {
-        window.dragged.clear();
-        window.redraw = true;
-        glfwPostEmptyEvent();
-        return S_OK;
-    }
-
-    HRESULT STDMETHODCALLTYPE WindowPlatform::DropTarget::Drop(IDataObject*, DWORD keys, POINTL point, DWORD* effect) {
-        DragOver(keys, point, effect);
-        if (*effect & DROPEFFECT_COPY) window.dropped = std::move(window.dragged);
-        window.dragged.clear();
-        return S_OK;
     }
 
     LRESULT CALLBACK WindowPlatform::window_proc(HWND window, const UINT message, const WPARAM wparam, const LPARAM lparam) {

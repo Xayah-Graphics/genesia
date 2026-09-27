@@ -10,7 +10,7 @@ import genesia.editor.widgets.tags;
 import genesia.io.files;
 import genesia.runtime.session;
 import genesia.project;
-import genesia.prompt.library;
+import genesia.prompt.presets;
 import genesia.editor.graphics.bridge;
 import std;
 namespace genesia::editor {
@@ -147,18 +147,16 @@ namespace genesia::editor {
         ImGui::SetCursorPos({12 * scale, 4 * scale});
         if (workspace.page == Workspace::Page::generation) {
             if (text_button("##Application", "GENESIA", scale)) ImGui::OpenPopup("Application");
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Right-click canvas: output Gallery\n`: Folders\nTab: Prompt\nF / F11: fullscreen\nCtrl+W: exit");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Right-click canvas: open Gallery\nTab: Prompt\nF / F11: fullscreen\nCtrl+W: exit");
         } else {
             if (text_button("##Back", "\xE2\x80\xB9", scale)) workspace.back();
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Back one level\nRight-click the canvas to return");
             ImGui::SameLine(0, 4 * scale);
             const auto count  = workspace.textures.history.size();
             const auto number = count ? workspace.position.index + 1 : 0;
-            const auto& directory = workspace.textures.directory;
-            const auto name = directory == project::output ? "output" : files::utf8(directory.filename().empty() ? directory : directory.filename());
-            const auto label  = std::format("{}  ·  {} / {}", name, number, count);
+            const auto label  = std::format("Gallery  ·  {} / {}", number, count);
             text_button("##Location", label.c_str(), scale);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\n`: Folders\nTab: Prompt\nLeft-click image: center / inspect\nRight-click canvas: back\nCtrl+W: exit", files::utf8(directory).c_str());
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Tab: Prompt\nLeft-click image: center / inspect\nRight-click canvas: back\nCtrl+W: exit");
         }
         const float left_end = ImGui::GetItemRectMax().x + 4 * scale;
         if (ImGui::BeginPopup("Application")) {
@@ -183,9 +181,8 @@ namespace genesia::editor {
             if (ImGui::MenuItem("View final prompt", nullptr, false, workspace.page == Workspace::Page::generation)) workspace.final_prompt_requested = true;
             if (ImGui::MenuItem("Export final prompt", nullptr, false, workspace.page == Workspace::Page::generation) && workspace.prepare_prompt()) {
                 try {
-                    auto composition    = workspace.prompt_panel.composition;
-                    composition.text[0] = generation::positive_prompt(workspace.parameters());
-                    prompts::export_prompt(workspace.prompt_library->directory, workspace.preset_name, composition);
+                    const auto parameters = workspace.parameters();
+                    prompt::export_prompt(workspace.preset_name, {generation::positive_prompt(parameters), parameters.negative});
                 } catch (const std::exception& failure) {
                     workspace.preset_error = failure.what();
                 }
@@ -225,8 +222,7 @@ namespace genesia::editor {
             }
         }
         if (submission || stop_action) {
-            const bool valid   = workspace.prompt_editor.valid && workspace.prompt_panel.ready;
-            const bool enabled = !ImGui::GetTopMostPopupModal() && (stop_action || (!active && !unavailable && valid));
+            const bool enabled = !ImGui::GetTopMostPopupModal() && (stop_action || (!active && !unavailable && workspace.prompt_editor.valid));
             if (ImGui::IsPopupOpen("Generation settings") && ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::IsMouseHoveringRect({right_start, minimum.y}, maximum) && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsMouseClicked(ImGuiMouseButton_Middle))) {
                 workspace.commit_parameters();
                 ImGui::ClosePopupsOverWindow(ImGui::GetCurrentWindow(), false);

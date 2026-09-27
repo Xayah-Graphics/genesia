@@ -4,7 +4,7 @@ module;
 module genesia.headless;
 import genesia.runtime.session;
 import genesia.io.files;
-import genesia.prompt.library;
+import genesia.prompt.presets;
 import std;
 namespace genesia::headless {
     namespace {
@@ -25,7 +25,7 @@ genesia --headless generate (--preset NAME | --prompt-file FILE) [--count N] [--
 Builds with the Editor open it by default. Builds without it default to headless mode.
 LoRA files are direct children of assets/loras. Selected filename stems are prepended to the positive prompt.
 --lora-start uses the full denoising schedule: 0 = always, 1 = never; default 0.1 (10%).
-Prompt files contain positive and negative strings. Presets use the Editor's prompt composition.
+Prompt files contain positive and negative strings. Presets contain the Editor's free groups and fixed text.
 Outputs are independent PNG files in {}. Results and progress are JSON Lines.
 Ctrl+C stops generation.)",
                 GENESIA_VERSION, files::utf8(project::output));
@@ -80,12 +80,9 @@ Ctrl+C stops generation.)",
             operation.parameters.negative = json.at("negative").get<std::string>();
         } else {
             const prompt::Catalog catalog;
-            const prompts::Library library{std::filesystem::path{project::assets} / "prompts", catalog};
-            const auto preset = prompts::read_preset(library, *preset_name, catalog);
-            auto composition  = prompts::compose(library, preset.recipe, catalog);
-            if (!composition.error.empty()) throw std::runtime_error{composition.error};
-            operation.parameters.positive = std::move(composition.text[0]);
-            operation.parameters.negative = std::move(composition.text[1]);
+            const auto preset = prompt::read_preset(*preset_name, catalog);
+            operation.parameters.positive = prompt::compose(catalog, preset.prompt.positive);
+            operation.parameters.negative = prompt::compose(catalog, preset.prompt.negative);
         }
         if (width) operation.parameters.width = *width;
         if (height) operation.parameters.height = *height;

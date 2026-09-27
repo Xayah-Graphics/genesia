@@ -56,15 +56,9 @@ namespace genesia::prompt {
         return result;
     }
 
-    void check(const Catalog& catalog, const std::string_view text, const std::string_view source) {
-        const auto parsed = parse(catalog, text);
-        if (!parsed) throw std::invalid_argument{std::format("{} at byte {}: {}", source, parsed.error().offset + 1, parsed.error().message)};
-    }
-
     std::string serialize(const Catalog& catalog, const std::span<const Tag> tags, const bool conditioning) {
         std::string result;
         for (const auto tag : tags) {
-            if (!std::isfinite(tag.weight)) throw std::invalid_argument{"Tag weight must be finite"};
             if (!result.empty()) result += ", ";
             if (tag.weight != 1) result += '(';
             const auto& entry = catalog.tags[tag.id];
@@ -84,7 +78,6 @@ namespace genesia::prompt {
             if (!result.empty()) result += ", ";
             result += serialize(catalog, group.tags, true);
         }
-        check(catalog, result, "Free prompt groups");
         if (!result.empty() && !side.fixed.empty()) result += ", ";
         result += side.fixed;
         return result;

@@ -94,7 +94,7 @@ target_sources(genesia_core
         genesia/core/models/sdxl/weights.cpp
         genesia/core/models/sdxl/workspace.cpp
         genesia/core/prompt/catalog.cpp
-        genesia/core/prompt/library.cpp
+        genesia/core/prompt/presets.cpp
         genesia/core/prompt/prompt.cpp
         genesia/core/prompt/search.cpp
         genesia/core/runtime/session.cpp
@@ -119,7 +119,7 @@ target_sources(genesia_core
         genesia/core/models/sdxl/workspace.ixx
         genesia/core/project.ixx
         genesia/core/prompt/catalog.ixx
-        genesia/core/prompt/library.ixx
+        genesia/core/prompt/presets.ixx
         genesia/core/prompt/prompt.ixx
         genesia/core/prompt/search.ixx
         genesia/core/runtime/session.ixx
@@ -152,9 +152,7 @@ if (GENESIA_BUILD_UI)
             genesia/editor/graphics/renderer.cpp
             genesia/editor/graphics/resources.cpp
             genesia/editor/panels/application.cpp
-            genesia/editor/panels/prompts.cpp
             genesia/editor/panels/sidebars.cpp
-            genesia/editor/prompt/previews.cpp
             genesia/editor/platform/window.cpp
             genesia/editor/viewing/camera.cpp
             genesia/editor/viewing/canvas.cpp
@@ -173,9 +171,7 @@ if (GENESIA_BUILD_UI)
             genesia/editor/graphics/renderer.ixx
             genesia/editor/graphics/resources.ixx
             genesia/editor/panels/application.ixx
-            genesia/editor/panels/prompts.ixx
             genesia/editor/panels/sidebars.ixx
-            genesia/editor/prompt/previews.ixx
             genesia/editor/platform/window.ixx
             genesia/editor/viewing/camera.ixx
             genesia/editor/viewing/canvas.ixx
@@ -210,7 +206,6 @@ if (GENESIA_BUILD_UI)
             dwmapi
             imm32
             shell32
-            ole32
             iphlpapi
     )
     add_dependencies(genesia_editor genesia_shaders)
@@ -231,7 +226,7 @@ endif ()
 # ============================================================================
 # Runtime Resources
 # ============================================================================
-set(GENESIA_ASSET_DIRECTORY "${PROJECT_SOURCE_DIR}/assets" CACHE PATH "Runtime assets and editable prompt presets")
+set(GENESIA_ASSET_DIRECTORY "${PROJECT_SOURCE_DIR}/assets" CACHE PATH "Runtime assets and saved prompts")
 target_compile_definitions(genesia_core PUBLIC GENESIA_ASSET_DIRECTORY="${GENESIA_ASSET_DIRECTORY}")
 
 if (WIN32)
