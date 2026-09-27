@@ -44,9 +44,7 @@ RUN groupadd --gid 10001 genesia \
     && install --directory --owner=10001 --group=10001 \
         /opt/genesia/bin \
         /workspace \
-        /workspace/data \
-        /workspace/data/raw \
-        /workspace/data/.genesia \
+        /workspace/output \
         /workspace/models \
         /workspace/cmake-build-release/genesia-cache
 

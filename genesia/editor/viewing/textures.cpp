@@ -1,4 +1,5 @@
 module;
+#include <Windows.h>
 #include <GLFW/glfw3.h>
 module genesia.editor.viewing.textures;
 import genesia.io.files;
@@ -11,19 +12,18 @@ namespace genesia::editor {
         for (const auto& [path, entry] : entries)
             if (entry.texture) renderer.retire(entry.texture);
     }
-    void TextureCache::receive() {
+    bool TextureCache::receive() {
         std::vector<Decoded> decoded;
+        bool refreshed{};
         {
             const std::lock_guard lock{mutex};
             decoded = std::exchange(results, {});
             if (scanned_ready) {
-                history.insert(history.end(), scanned.begin(), scanned.end());
-                std::ranges::sort(history);
-                history.erase(std::unique(history.begin(), history.end()), history.end());
-                scanned.clear();
+                history       = std::move(scanned);
                 scanned_ready = false;
                 history_ready = true;
                 history_error = std::move(scan_error);
+                refreshed     = true;
             }
             pending = false;
         }
@@ -47,11 +47,14 @@ namespace genesia::editor {
                 texture_bytes += cached.bytes;
             }
         }
+        if (refreshed) for (auto& [path, cached] : entries) cached.checked = {};
         condition.notify_one();
+        return refreshed;
     }
     void TextureCache::adopt(const Record& record, std::uint64_t& texture) {
         const auto& path = record.path;
         if (!std::ranges::contains(history, path)) history.push_back(path);
+        if (!history_ready) refresh();
         if (!texture) return;
         auto& cached    = entries[path];
         cached.record   = record;
@@ -67,6 +70,18 @@ namespace genesia::editor {
             const std::lock_guard lock{mutex};
             std::erase_if(requested, [&](const Load& load) { return load.path == path; });
             std::erase_if(results, [&](const Decoded& result) { return result.path == path; });
+        }
+        condition.notify_one();
+    }
+    void TextureCache::refresh() {
+        history_ready = false;
+        history_error.clear();
+        {
+            const std::lock_guard lock{mutex};
+            requested.clear();
+            results.clear();
+            scanned_ready = false;
+            rescan        = true;
         }
         condition.notify_one();
     }
@@ -123,30 +138,45 @@ namespace genesia::editor {
         condition.notify_one();
     }
     void TextureCache::read() {
-        std::vector<std::filesystem::path> paths;
-        std::string failure;
-        try {
-            std::filesystem::create_directories(project::raw);
-            for (const auto& entry : std::filesystem::directory_iterator{project::raw})
-                if (entry.is_regular_file() && entry.path().extension() == ".png") paths.push_back(entry.path());
-        } catch (const std::exception& error) {
-            failure = error.what();
-        }
-        {
-            const std::lock_guard lock{mutex};
-            scanned       = std::move(paths);
-            scan_error    = std::move(failure);
-            scanned_ready = true;
-            pending       = true;
-        }
-        glfwPostEmptyEvent();
         for (;;) {
             Load task;
+            bool scan{};
             {
                 std::unique_lock lock{mutex};
-                condition.wait(lock, [&] { return closing || (results.size() < 3 && !requested.empty()); });
+                condition.wait(lock, [&] { return closing || rescan || (results.size() < 3 && !requested.empty()); });
                 if (closing) break;
-                task = requested.front();
+                scan = std::exchange(rescan, false);
+                if (!scan) task = requested.front();
+            }
+            if (scan) {
+                std::vector<std::filesystem::path> paths;
+                std::string failure;
+                try {
+                    std::filesystem::create_directories(project::output);
+                    std::vector<std::pair<std::uint64_t, std::filesystem::path>> images;
+                    for (const auto& entry : std::filesystem::directory_iterator{project::output}) {
+                        if (!entry.is_regular_file() || entry.path().extension() != ".png") continue;
+                        WIN32_FILE_ATTRIBUTE_DATA attributes;
+                        if (!GetFileAttributesExW(entry.path().c_str(), GetFileExInfoStandard, &attributes)) throw std::system_error{static_cast<int>(GetLastError()), std::system_category(), "Read image creation time: " + files::utf8(entry.path())};
+                        const auto created = (std::uint64_t{attributes.ftCreationTime.dwHighDateTime} << 32) | attributes.ftCreationTime.dwLowDateTime;
+                        images.emplace_back(created, entry.path());
+                    }
+                    std::ranges::sort(images);
+                    paths.reserve(images.size());
+                    for (auto& [created, path] : images) paths.push_back(std::move(path));
+                } catch (const std::exception& error) {
+                    failure = error.what();
+                }
+                {
+                    const std::lock_guard lock{mutex};
+                    if (closing || rescan) continue;
+                    scanned       = std::move(paths);
+                    scan_error    = std::move(failure);
+                    scanned_ready = true;
+                    pending       = true;
+                }
+                glfwPostEmptyEvent();
+                continue;
             }
             Decoded result{.path = task.path};
             try {

@@ -37,8 +37,7 @@ namespace genesia::editor {
             const bool hovered     = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::IsMouseHoveringRect(origin, {right, origin.y + row});
             if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
                 workspace.commit_parameters();
-                lora.active           = !lora.active;
-                workspace.loras_dirty = true;
+                lora.active = !lora.active;
             }
             const bool editing   = workspace.parameter_edit.id && (workspace.parameter_edit.value == &lora.weight || workspace.parameter_edit.value == &lora.start);
             const bool expanded  = hovered || editing;
@@ -63,11 +62,9 @@ namespace genesia::editor {
                 constexpr float step = .05F, percent = 1;
                 ImGui::SetCursorScreenPos({strength_x, origin.y});
                 number_field("##Strength", "Strength", ImGuiDataType_Float, &lora.weight, {138 * scale, row}, &step, "%.2f", scale, workspace.parameter_edit);
-                workspace.loras_dirty |= ImGui::IsItemEdited();
                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) ImGui::SetTooltip("LoRA strength for the next image");
                 ImGui::SetCursorScreenPos({start_x, origin.y});
                 number_field("##Start", "Start", ImGuiDataType_Float, &lora.start, {112 * scale, row}, &percent, "%.0f%%", scale, workspace.parameter_edit);
-                workspace.loras_dirty |= ImGui::IsItemEdited();
                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) ImGui::SetTooltip("Start in the full denoising schedule\n0%%: all steps · 100%%: never");
                 ImGui::EndDisabled();
                 ImGui::PopStyleVar();

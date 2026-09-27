@@ -26,9 +26,9 @@ Builds with the Editor open it by default. Builds without it default to headless
 LoRA files are direct children of assets/loras. Selected filename stems are prepended to the positive prompt.
 --lora-start uses the full denoising schedule: 0 = always, 1 = never; default 0.1 (10%).
 Prompt files contain positive and negative strings. Presets use the Editor's prompt composition.
-Outputs are independent PNG files in data/raw. Results and progress are JSON Lines.
+Outputs are independent PNG files in {}. Results and progress are JSON Lines.
 Ctrl+C stops generation.)",
-                GENESIA_VERSION);
+                GENESIA_VERSION, files::utf8(project::output));
             return 0;
         }
         if (arguments.front() != "generate") throw std::runtime_error{"Unknown command: " + std::string{arguments.front()}};

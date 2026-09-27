@@ -46,9 +46,9 @@ namespace genesia {
         const std::unique_ptr<unsigned char, decltype(&std::free)> png{stbi_write_png_to_mem(output.pixels.data(), output.width * 3, output.width, output.height, 3, &length), &std::free};
         if (!png) throw std::runtime_error{"PNG encoding failed"};
         static auto next = [] {
-            std::filesystem::create_directories(project::raw);
+            std::filesystem::create_directories(project::output);
             std::uint64_t number{1};
-            for (const auto& entry : std::filesystem::directory_iterator{project::raw}) {
+            for (const auto& entry : std::filesystem::directory_iterator{project::output}) {
                 const auto name = files::utf8(entry.path().filename());
                 if (!name.starts_with("genesia_") || !name.ends_with(".png")) continue;
                 std::uint64_t value{};
@@ -57,7 +57,7 @@ namespace genesia {
             }
             return number;
         }();
-        const auto path = project::raw / std::format("genesia_{:06}.png", next++);
+        const auto path = project::output / std::format("genesia_{:06}.png", next++);
         auto temporary  = path;
         temporary += ".part";
         std::ofstream file{temporary, std::ios::binary | std::ios::trunc};

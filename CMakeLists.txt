@@ -125,7 +125,7 @@ target_sources(genesia_core
         genesia/core/runtime/session.ixx
         genesia/core/runtime/tasks.ixx
 )
-target_compile_definitions(genesia_core PUBLIC GENESIA_DATA_DIRECTORY="${PROJECT_SOURCE_DIR}/data" GENESIA_CACHE_DIRECTORY="${PROJECT_BINARY_DIR}/genesia-cache")
+target_compile_definitions(genesia_core PUBLIC GENESIA_CACHE_DIRECTORY="${PROJECT_BINARY_DIR}/genesia-cache")
 target_compile_definitions(genesia_core PRIVATE
         GENESIA_CXX_COMPILER="${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}"
         GENESIA_PLATFORM="${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")

@@ -20,8 +20,9 @@ export namespace genesia::editor {
         std::atomic_bool pending{};
         explicit TextureCache(Renderer& renderer);
         ~TextureCache();
-        void receive();
+        bool receive();
         void adopt(const Record& record, std::uint64_t& texture);
+        void refresh();
         void request(std::vector<std::filesystem::path> files);
         void discard(const std::filesystem::path& path);
         void shutdown();
@@ -47,6 +48,7 @@ export namespace genesia::editor {
         std::vector<Load> requested;
         std::vector<std::filesystem::path> scanned;
         bool closing{}, scanned_ready{};
+        bool rescan{true};
         std::string scan_error;
         std::size_t texture_bytes{};
         std::uint64_t clock{};

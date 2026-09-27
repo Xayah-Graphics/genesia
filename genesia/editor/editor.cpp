@@ -32,13 +32,11 @@ namespace genesia::editor {
         bool previous_busy{};
         for (;;) {
             if (window.take_close_request()) {
-                if (ui.save_model_settings()) {
-                    closing                  = true;
-                    ui.continuous_generation = false;
-                    ui.runtime.web.stop();
-                    ui.textures.shutdown();
-                    ui.runtime.session.shutdown();
-                } else window.redraw = true;
+                closing                  = true;
+                ui.continuous_generation = false;
+                ui.runtime.web.stop();
+                ui.textures.shutdown();
+                ui.runtime.session.shutdown();
             }
             bool busy{}, done{true}, pending{ui.textures.pending.load() || ui.prompt_panel.images.pending.load() || ui.prompt_panel.images.saving || ui.runtime.web.enabled.load()};
             std::uint32_t stage{}, step{};

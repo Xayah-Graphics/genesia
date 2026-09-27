@@ -69,7 +69,6 @@ export namespace genesia::editor {
         PromptEditor prompt_editor;
         Output generation;
         std::vector<LoraSettings> loras;
-        bool loras_dirty{};
         runtime::Snapshot session_state;
         std::optional<runtime::TaskStatus> task;
         Page page{Page::generation};
@@ -94,7 +93,6 @@ export namespace genesia::editor {
         void receive();
         void update_generation();
         void update_web();
-        bool save_model_settings();
         void open_history();
         void center_image(std::size_t index);
         void back();

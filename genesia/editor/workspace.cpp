@@ -2,7 +2,6 @@ module;
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_internal.h>
-#include <nlohmann/json.hpp>
 module genesia.editor.workspace;
 import genesia.project;
 import genesia.generation.settings;
@@ -29,17 +28,6 @@ namespace genesia::editor {
             for (const auto& entry : std::filesystem::directory_iterator{directory})
                 if (entry.is_regular_file() && entry.path().extension() == ".safetensors") loras.push_back({files::utf8(entry.path().filename())});
             std::ranges::sort(loras, {}, &LoraSettings::file);
-            const auto preferences = project::directory / ".genesia" / "loras.json";
-            if (std::filesystem::exists(preferences)) {
-                const auto saved = files::read_json(preferences);
-                for (auto& lora : loras) {
-                    const auto found = saved.find(lora.file);
-                    if (found == saved.end()) continue;
-                    found->at("active").get_to(lora.active);
-                    found->at("strength").get_to(lora.weight);
-                    found->at("start_percent").get_to(lora.start);
-                }
-            }
         } catch (const std::exception& error) {
             action_error = error.what();
         }
@@ -128,23 +116,26 @@ namespace genesia::editor {
                         generation.preview = false;
                     } else renderer.discard(*source.timeline, presentation->ready);
                 } else if (current) {
-                    if (generation.texture) {
-                        if (generation.preview) renderer.retire(std::exchange(generation.texture, 0));
-                        else textures.adopt(event.record, generation.texture);
-                    }
-                    if (!std::ranges::contains(textures.history, event.record.path)) textures.history.push_back(event.record.path);
+                    if (generation.texture && generation.preview) renderer.retire(std::exchange(generation.texture, 0));
+                    textures.adopt(event.record, generation.texture);
                     generation.saved   = event.record.path;
                     generation.record  = std::move(event.record);
                     generation.preview = false;
                 }
             }
         }
-        textures.receive();
+        const bool refreshed = textures.receive();
         if (!textures.history_error.empty()) action_error = textures.history_error;
+        if (refreshed && textures.history_error.empty() && generation.saved && !std::ranges::contains(textures.history, *generation.saved)) {
+            generation.saved.reset();
+            generation.record.reset();
+        }
         if (!textures.history.empty()) {
             const auto selected = std::ranges::find(textures.history, position.selected);
-            if (selected != textures.history.end()) position.index = std::size_t(selected - textures.history.begin());
-            else {
+            if (selected != textures.history.end()) {
+                position.index = std::size_t(selected - textures.history.begin());
+                if (refreshed) position.scroll = float(position.index);
+            } else {
                 position.index    = position.selected.empty() ? textures.history.size() - 1 : std::min(position.index, textures.history.size() - 1);
                 position.selected = textures.history[position.index];
                 position.scroll   = float(position.index);
@@ -194,26 +185,13 @@ namespace genesia::editor {
         web.update(state, std::move(unavailable), std::move(failure));
     }
 
-    bool Workspace::save_model_settings() {
-        if (!loras_dirty) return true;
-        try {
-            auto value = nlohmann::json::object();
-            for (const auto& lora : loras) value[lora.file] = {{"active", lora.active}, {"strength", lora.weight}, {"start_percent", lora.start}};
-            files::write_json(project::directory / ".genesia" / "loras.json", value);
-            loras_dirty = false;
-            return true;
-        } catch (const std::exception& failure) {
-            action_error = failure.what();
-            shown_error.clear();
-            return false;
-        }
-    }
     void Workspace::open_history() {
         commit_parameters();
         if (!prompt_editor.commit(prompt.free, *catalog)) {
             prompt_sidebar.open = true;
             return;
         }
+        textures.refresh();
         prompt_editor.suspend();
         generation_view = view;
         page            = Page::history;
@@ -371,7 +349,7 @@ namespace genesia::editor {
         canvas(*this, scale, size);
         Picture image;
         if (page == Page::generation) image = resolve_generation();
-        else if (!textures.history.empty()) image = resolve_image(textures.history[position.index]);
+        else if (textures.history_ready && !textures.history.empty()) image = resolve_image(textures.history[position.index]);
         const auto controls = control_layout(*this, scale, size, image);
         sidebar(*this, scale, size, image);
         if (!window.drop_error.empty()) {
@@ -382,7 +360,6 @@ namespace genesia::editor {
         window.dropped.clear();
         bottom_controls(*this, scale, size, controls, image);
         lora_controls(*this, scale, size, controls);
-        if (loras_dirty && !parameter_edit.id && !ImGui::IsAnyItemActive()) save_model_settings();
         top_strip(*this, scale, size);
         preset_dialogs(*this, scale);
         const bool inspecting = page != Page::generation && viewing == View::inspect;

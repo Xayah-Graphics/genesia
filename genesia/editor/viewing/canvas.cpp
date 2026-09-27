@@ -106,7 +106,7 @@ namespace genesia::editor {
                 draw->AddCircle({center.x, center.y - 88 * scale}, 14 * scale, IM_COL32(145, 142, 225, 180), 32, 1.5F * scale);
                 draw->AddCircleFilled({center.x + 14 * scale, center.y - 100 * scale}, 3 * scale, IM_COL32(184, 182, 250, 255));
             }
-        } else if (!workspace.textures.history.empty()) {
+        } else if (workspace.textures.history_ready && !workspace.textures.history.empty()) {
             auto& position = workspace.position;
             if (workspace.viewing == Workspace::View::inspect) {
                 const auto& file = workspace.textures.history[position.index];
@@ -153,8 +153,8 @@ namespace genesia::editor {
                 }
             }
         }
-        if (workspace.page == Workspace::Page::history && workspace.textures.history.empty()) {
-            const char* label = workspace.textures.history_ready ? "No images in Raw" : "Loading Raw history";
+        if (workspace.page == Workspace::Page::history && (!workspace.textures.history_ready || workspace.textures.history.empty())) {
+            const char* label = workspace.textures.history_ready ? "No PNG images in this folder" : "Loading Gallery";
             const auto text   = ImGui::CalcTextSize(label);
             ImGui::GetWindowDrawList()->AddText({origin.x + (available.x - text.x) / 2, origin.y + (available.y - text.y) / 2}, ImGui::GetColorU32(ImGuiCol_TextDisabled), label);
         }
@@ -162,11 +162,11 @@ namespace genesia::editor {
             const auto cached = workspace.textures.entries.find(file);
             if (cached != workspace.textures.entries.end() && !cached->second.error.empty()) workspace.action_error = cached->second.error;
         }
-        if (workspace.page == Workspace::Page::history && !workspace.textures.history.empty()) {
+        if (workspace.page == Workspace::Page::history && workspace.textures.history_ready && !workspace.textures.history.empty()) {
             const auto selected = std::ranges::find(wanted, workspace.textures.history[workspace.position.index]);
             if (selected != wanted.end()) std::rotate(wanted.begin(), selected, selected + 1);
         }
-        if (workspace.generation.saved && !std::ranges::contains(wanted, *workspace.generation.saved)) wanted.push_back(*workspace.generation.saved);
+        if (workspace.generation.saved && (workspace.page == Workspace::Page::generation || workspace.textures.history_ready) && !std::ranges::contains(wanted, *workspace.generation.saved)) wanted.push_back(*workspace.generation.saved);
         if (workspace.pending_delete) std::erase(wanted, *workspace.pending_delete);
         workspace.textures.request(std::move(wanted));
         ImGui::PopClipRect();

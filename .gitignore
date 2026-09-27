@@ -3,7 +3,6 @@
 cmake-build-*
 build*
 /install/
-/data/
 /assets/weights/
 /assets/prompts/
 /assets/loras/
