@@ -6,6 +6,8 @@ module;
 #include <dwmapi.h>
 #include <ole2.h>
 #include <shellapi.h>
+#include <shobjidl.h>
+#include <wrl/client.h>
 #include <windowsx.h>
 
 module genesia.editor.platform.window;
@@ -126,6 +128,25 @@ namespace genesia::editor {
             if (!cursor) throw std::runtime_error{"Cannot create image cursor"};
             glfwDestroyCursor(std::exchange(hand_cursors[shape], cursor));
         }
+    }
+
+    std::optional<std::filesystem::path> WindowPlatform::choose_directory() {
+        const auto check = [](const HRESULT result) {
+            if (FAILED(result)) throw std::runtime_error{std::format("Choose Gallery folder: 0x{:08X}", static_cast<unsigned long>(result))};
+        };
+        Microsoft::WRL::ComPtr<IFileOpenDialog> dialog;
+        check(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(dialog.GetAddressOf())));
+        check(dialog->SetOptions(FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST));
+        check(dialog->SetTitle(L"Register Gallery root"));
+        const auto result = dialog->Show(native_window);
+        if (result == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return std::nullopt;
+        check(result);
+        Microsoft::WRL::ComPtr<IShellItem> item;
+        check(dialog->GetResult(item.GetAddressOf()));
+        PWSTR name{};
+        check(item->GetDisplayName(SIGDN_FILESYSPATH, &name));
+        const std::unique_ptr<wchar_t, decltype(&CoTaskMemFree)> allocation{name, &CoTaskMemFree};
+        return std::filesystem::canonical(name);
     }
 
     WindowPlatform::GlfwLifetime::GlfwLifetime() {

@@ -51,7 +51,7 @@ namespace genesia::editor {
             }
             if (closing && done && !pending) break;
             const double now     = glfwGetTime();
-            const bool animating = now < ui.animate_until || (renderer.visible && ui.view.started >= 0) || (ui.prompt_sidebar.amount != float(ui.prompt_sidebar.open || ui.prompt_panel.incoming.has_value()));
+            const bool animating = now < ui.animate_until || (renderer.visible && ui.view.started >= 0) || (ui.gallery_sidebar.amount != float(ui.gallery_sidebar.open)) || (ui.prompt_sidebar.amount != float(ui.prompt_sidebar.open || ui.prompt_panel.incoming.has_value()));
             if (!std::exchange(window.redraw, false) && !pending && !animating && now < ui.refresh_at && stage == previous_stage && step == previous_step && busy == previous_busy) {
                 glfwWaitEventsTimeout(std::min(busy ? 0.1 : 1.0, std::max(0.0, ui.refresh_at - now)));
                 continue;

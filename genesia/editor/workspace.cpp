@@ -2,6 +2,7 @@ module;
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <nlohmann/json.hpp>
 module genesia.editor.workspace;
 import genesia.project;
 import genesia.generation.settings;
@@ -22,6 +23,15 @@ namespace genesia::editor {
 
     Workspace::Workspace(prompts::Preset preset, std::shared_ptr<const prompt::Catalog> catalog, std::shared_ptr<const prompts::Library> prompt_library, WindowPlatform& platform, Renderer& display) : catalog{std::move(catalog)}, prompt_library{std::move(prompt_library)}, preset_name{std::move(preset.name)}, window{platform}, renderer{display}, prompt_panel{*this->prompt_library, display, platform}, runtime{display.device}, textures{display}, prompt{std::move(preset.recipe)}, tag_search{*this->catalog} {
         prompt_editor.reset(prompt.free);
+        try {
+            const auto settings = std::filesystem::path{std::getenv("LOCALAPPDATA")} / "Genesia" / "gallery.json";
+            if (std::filesystem::exists(settings)) {
+                const auto saved = files::read_json(settings);
+                for (const auto& root : saved.at("roots")) gallery_roots.push_back(files::path(root.get<std::string>()));
+            }
+        } catch (const std::exception& error) {
+            action_error = error.what();
+        }
         try {
             const auto directory = std::filesystem::path{project::assets} / "loras";
             std::filesystem::create_directories(directory);
@@ -126,10 +136,11 @@ namespace genesia::editor {
         }
         const bool refreshed = textures.receive();
         if (!textures.history_error.empty()) action_error = textures.history_error;
-        if (refreshed && textures.history_error.empty() && generation.saved && !std::ranges::contains(textures.history, *generation.saved)) {
+        if (refreshed && generation.saved && !std::filesystem::exists(*generation.saved)) {
             generation.saved.reset();
             generation.record.reset();
         }
+        if (!textures.history_ready) return;
         if (!textures.history.empty()) {
             const auto selected = std::ranges::find(textures.history, position.selected);
             if (selected != textures.history.end()) {
@@ -186,25 +197,54 @@ namespace genesia::editor {
     }
 
     void Workspace::open_history() {
+        open_gallery(project::output);
+        if (page == Page::history && generation.saved) position.selected = *generation.saved;
+    }
+    void Workspace::open_gallery(const std::filesystem::path& directory) {
         commit_parameters();
         if (!prompt_editor.commit(prompt.free, *catalog)) {
             prompt_sidebar.open = true;
             return;
         }
-        textures.refresh();
+        if (textures.directory != directory) position = {};
+        textures.refresh(directory);
         prompt_editor.suspend();
-        generation_view = view;
+        if (page == Page::generation) generation_view = view;
         page            = Page::history;
         viewing         = View::browse;
         view            = {};
-        if (generation.saved) {
-            const auto found = std::ranges::find(textures.history, *generation.saved);
-            if (found != textures.history.end()) {
-                center_image(std::size_t(found - textures.history.begin()));
-                position.scroll = float(position.index);
-            }
-        }
         window.redraw = true;
+    }
+    void Workspace::register_gallery_root() {
+        try {
+            const auto root = window.choose_directory();
+            if (!root) return;
+            if (!std::ranges::contains(gallery_roots, *root)) {
+                std::vector<std::string> roots;
+                for (const auto& directory : gallery_roots | std::views::drop(1)) roots.push_back(files::utf8(directory));
+                roots.push_back(files::utf8(*root));
+                files::write_json(std::filesystem::path{std::getenv("LOCALAPPDATA")} / "Genesia" / "gallery.json", {{"roots", roots}});
+                gallery_roots.push_back(*root);
+            }
+            expand_gallery_roots = true;
+            open_gallery(*root);
+        } catch (const std::exception& error) {
+            action_error = error.what();
+            shown_error.clear();
+        }
+    }
+    void Workspace::unregister_gallery_root(const std::filesystem::path& directory) {
+        try {
+            std::vector<std::string> roots;
+            for (const auto& root : gallery_roots | std::views::drop(1)) if (root != directory) roots.push_back(files::utf8(root));
+            files::write_json(std::filesystem::path{std::getenv("LOCALAPPDATA")} / "Genesia" / "gallery.json", {{"roots", roots}});
+            const auto relative = textures.directory.lexically_relative(directory);
+            std::erase(gallery_roots, directory);
+            if (!relative.empty() && *relative.begin() != "..") open_history();
+        } catch (const std::exception& error) {
+            action_error = error.what();
+            shown_error.clear();
+        }
     }
     void Workspace::center_image(const std::size_t index) {
         position.index    = index;
@@ -333,11 +373,14 @@ namespace genesia::editor {
         const float scale         = renderer.dpi;
         const auto size           = ImGui::GetIO().DisplaySize;
         const float interpolation = std::min(1.0F, ImGui::GetIO().DeltaTime / 0.045F);
-        const float target        = float(prompt_sidebar.open || prompt_panel.incoming.has_value());
-        prompt_sidebar.amount     = std::lerp(prompt_sidebar.amount, target, interpolation);
-        if (std::abs(prompt_sidebar.amount - target) < 0.01F) prompt_sidebar.amount = target;
-        prompt_sidebar.width = std::min(800.0F * scale, size.x * 0.40F);
-        canvas_size          = {std::max(1.0F, size.x - prompt_sidebar.width * prompt_sidebar.amount), size.y};
+        for (auto* panel : {&gallery_sidebar, &prompt_sidebar}) {
+            const float target = float(panel->open || (panel == &prompt_sidebar && prompt_panel.incoming.has_value()));
+            panel->amount = std::lerp(panel->amount, target, interpolation);
+            if (std::abs(panel->amount - target) < 0.01F) panel->amount = target;
+            panel->width = std::min(800.0F * scale, size.x * 0.40F);
+        }
+        canvas_origin = {gallery_sidebar.width * gallery_sidebar.amount, 0};
+        canvas_size = {std::max(1.0F, size.x - canvas_origin.x - prompt_sidebar.width * prompt_sidebar.amount), size.y};
         {
             auto& session          = runtime.session;
             const bool generating  = session_state.active.has_value();
@@ -351,7 +394,8 @@ namespace genesia::editor {
         if (page == Page::generation) image = resolve_generation();
         else if (textures.history_ready && !textures.history.empty()) image = resolve_image(textures.history[position.index]);
         const auto controls = control_layout(*this, scale, size, image);
-        sidebar(*this, scale, size, image);
+        sidebar(*this, true, scale, size, image);
+        sidebar(*this, false, scale, size, image);
         if (!window.drop_error.empty()) {
             action_error = std::exchange(window.drop_error, {});
             shown_error.clear();
@@ -422,6 +466,13 @@ namespace genesia::editor {
         if (ImGui::Shortcut(ImGuiKey_F11, ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverActive) || (!ImGui::GetIO().WantTextInput && !(page == Page::generation && prompt_sidebar.open && prompt_editor.focus_input) && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && ImGui::Shortcut(ImGuiKey_F, ImGuiInputFlags_RouteGlobal))) window.toggle_fullscreen();
         if (!ImGui::GetIO().WantTextInput && !(page == Page::generation && prompt_sidebar.open && prompt_editor.focus_input) && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
             if (ImGui::Shortcut(ImGuiKey_Tab, ImGuiInputFlags_RouteGlobal)) prompt_sidebar.open = !prompt_sidebar.open;
+            if (ImGui::Shortcut(ImGuiKey_GraveAccent, ImGuiInputFlags_RouteGlobal)) {
+                gallery_sidebar.open = !gallery_sidebar.open;
+                if (gallery_sidebar.open) {
+                    expand_gallery_roots = true;
+                    for (const auto& root : gallery_roots) textures.scan(root);
+                }
+            }
         }
         if (page == Page::history || generation.saved) refresh_at = std::min(refresh_at, frame_time + 2);
         const auto& io = ImGui::GetIO();

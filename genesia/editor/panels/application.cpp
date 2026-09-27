@@ -147,16 +147,18 @@ namespace genesia::editor {
         ImGui::SetCursorPos({12 * scale, 4 * scale});
         if (workspace.page == Workspace::Page::generation) {
             if (text_button("##Application", "GENESIA", scale)) ImGui::OpenPopup("Application");
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Right-click canvas: open Gallery\nTab: Prompt\nF / F11: fullscreen\nCtrl+W: exit");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Right-click canvas: output Gallery\n`: Folders\nTab: Prompt\nF / F11: fullscreen\nCtrl+W: exit");
         } else {
             if (text_button("##Back", "\xE2\x80\xB9", scale)) workspace.back();
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Back one level\nRight-click the canvas to return");
             ImGui::SameLine(0, 4 * scale);
             const auto count  = workspace.textures.history.size();
             const auto number = count ? workspace.position.index + 1 : 0;
-            const auto label  = std::format("Gallery  ·  {} / {}", number, count);
+            const auto& directory = workspace.textures.directory;
+            const auto name = directory == project::output ? "output" : files::utf8(directory.filename().empty() ? directory : directory.filename());
+            const auto label  = std::format("{}  ·  {} / {}", name, number, count);
             text_button("##Location", label.c_str(), scale);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Tab: Prompt\nLeft-click image: center / inspect\nRight-click canvas: back\nCtrl+W: exit");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\n`: Folders\nTab: Prompt\nLeft-click image: center / inspect\nRight-click canvas: back\nCtrl+W: exit", files::utf8(directory).c_str());
         }
         const float left_end = ImGui::GetItemRectMax().x + 4 * scale;
         if (ImGui::BeginPopup("Application")) {

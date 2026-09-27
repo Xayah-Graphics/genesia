@@ -4,6 +4,7 @@ export module genesia.editor.panels.sidebars;
 import genesia.editor.workspace;
 import std;
 export namespace genesia::editor {
+    void gallery_contents(Workspace& workspace);
     void preset_dialogs(Workspace& workspace, float scale);
-    void sidebar(Workspace& workspace, float scale, ImVec2 size, const Workspace::Picture& image);
+    void sidebar(Workspace& workspace, bool left, float scale, ImVec2 size, const Workspace::Picture& image);
 } // namespace genesia::editor

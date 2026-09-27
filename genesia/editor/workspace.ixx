@@ -1,6 +1,7 @@
 module;
 #include <imgui.h>
 export module genesia.editor.workspace;
+import genesia.project;
 import genesia.generation.settings;
 import genesia.editor.panels.prompts;
 import genesia.editor.platform.window;
@@ -78,7 +79,10 @@ export namespace genesia::editor {
         std::uint64_t seed{defaults::seed};
         bool random_seed{defaults::random_seed}, continuous_generation{};
         Sidebar prompt_sidebar;
-        ImVec2 canvas_size{};
+        Sidebar gallery_sidebar;
+        std::vector<std::filesystem::path> gallery_roots{project::output};
+        bool expand_gallery_roots{};
+        ImVec2 canvas_origin{}, canvas_size{};
         ParameterEdit parameter_edit;
         ImageView view, generation_view;
         ImVec2 view_available{};
@@ -94,6 +98,9 @@ export namespace genesia::editor {
         void update_generation();
         void update_web();
         void open_history();
+        void open_gallery(const std::filesystem::path& directory);
+        void register_gallery_root();
+        void unregister_gallery_root(const std::filesystem::path& directory);
         void center_image(std::size_t index);
         void back();
         Picture resolve_image(const std::filesystem::path& file) const;

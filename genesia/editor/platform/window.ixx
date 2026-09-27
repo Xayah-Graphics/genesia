@@ -22,6 +22,7 @@ namespace genesia::editor {
         [[nodiscard]] bool take_close_request() noexcept;
         void toggle_fullscreen();
         void prepare_hand_cursors(float scale);
+        std::optional<std::filesystem::path> choose_directory();
 
         GLFWwindow* window{};
         HWND native_window{};

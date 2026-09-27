@@ -82,7 +82,7 @@ namespace genesia::editor {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
         ImGui::Begin("##Canvas", nullptr, overlay | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoBringToFrontOnFocus);
         ImGui::PopStyleVar();
-        constexpr ImVec2 origin{};
+        const auto origin = workspace.canvas_origin;
         const auto available = workspace.canvas_size;
         // Navigate on press so releasing a popup-dismissal click cannot also change the view.
         const bool navigating = ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(origin, {origin.x + available.x, origin.y + available.y}) && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && ImGui::IsMouseClicked(ImGuiMouseButton_Right);

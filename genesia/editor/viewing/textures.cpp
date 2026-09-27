@@ -18,13 +18,15 @@ namespace genesia::editor {
         {
             const std::lock_guard lock{mutex};
             decoded = std::exchange(results, {});
-            if (scanned_ready) {
-                history       = std::move(scanned);
-                scanned_ready = false;
+            for (auto& result : scanned) {
+                for (auto& [path, folder] : result.folders) folders[path] = std::move(folder);
+                if (result.path != directory) continue;
+                history       = std::move(result.images);
                 history_ready = true;
-                history_error = std::move(scan_error);
+                history_error = std::move(result.error);
                 refreshed     = true;
             }
+            scanned.clear();
             pending = false;
         }
         for (auto& result : decoded) {
@@ -53,8 +55,9 @@ namespace genesia::editor {
     }
     void TextureCache::adopt(const Record& record, std::uint64_t& texture) {
         const auto& path = record.path;
-        if (!std::ranges::contains(history, path)) history.push_back(path);
-        if (!history_ready) refresh();
+        const auto relative = path.lexically_relative(directory);
+        if (!relative.empty() && *relative.begin() != ".." && !std::ranges::contains(history, path)) history.push_back(path);
+        if (!history_ready) refresh(directory);
         if (!texture) return;
         auto& cached    = entries[path];
         cached.record   = record;
@@ -73,15 +76,25 @@ namespace genesia::editor {
         }
         condition.notify_one();
     }
-    void TextureCache::refresh() {
+    void TextureCache::refresh(const std::filesystem::path& path) {
+        if (directory != path) history.clear();
+        directory = path;
         history_ready = false;
         history_error.clear();
         {
             const std::lock_guard lock{mutex};
             requested.clear();
             results.clear();
-            scanned_ready = false;
-            rescan        = true;
+        }
+        scan(path);
+    }
+    void TextureCache::scan(const std::filesystem::path& path) {
+        folders[path].ready = false;
+        {
+            const std::lock_guard lock{mutex};
+            std::erase(requested_directories, path);
+            std::erase_if(scanned, [&](const auto& result) { return result.path == path; });
+            requested_directories.push_back(path);
         }
         condition.notify_one();
     }
@@ -134,45 +147,59 @@ namespace genesia::editor {
             const std::lock_guard lock{mutex};
             closing = true;
             requested.clear();
+            requested_directories.clear();
         }
         condition.notify_one();
     }
     void TextureCache::read() {
         for (;;) {
             Load task;
-            bool scan{};
+            std::optional<std::filesystem::path> directory;
             {
                 std::unique_lock lock{mutex};
-                condition.wait(lock, [&] { return closing || rescan || (results.size() < 3 && !requested.empty()); });
+                condition.wait(lock, [&] { return closing || !requested_directories.empty() || (results.size() < 3 && !requested.empty()); });
                 if (closing) break;
-                scan = std::exchange(rescan, false);
-                if (!scan) task = requested.front();
+                if (!requested_directories.empty()) {
+                    directory = std::move(requested_directories.front());
+                    requested_directories.pop_front();
+                } else task = requested.front();
             }
-            if (scan) {
-                std::vector<std::filesystem::path> paths;
-                std::string failure;
+            if (directory) {
+                Directory result{.path = *directory};
+                result.folders[*directory];
                 try {
-                    std::filesystem::create_directories(project::output);
+                    if (*directory == project::output) std::filesystem::create_directories(*directory);
                     std::vector<std::pair<std::uint64_t, std::filesystem::path>> images;
-                    for (const auto& entry : std::filesystem::directory_iterator{project::output}) {
-                        if (!entry.is_regular_file() || entry.path().extension() != ".png") continue;
+                    for (const auto& entry : std::filesystem::recursive_directory_iterator{*directory}) {
+                        if (entry.is_directory()) {
+                            result.folders[entry.path().parent_path()].children.push_back(entry.path());
+                            result.folders[entry.path()];
+                            continue;
+                        }
+                        if (!entry.is_regular_file() || (entry.path().extension() != ".png" && entry.path().extension() != ".PNG")) continue;
                         WIN32_FILE_ATTRIBUTE_DATA attributes;
                         if (!GetFileAttributesExW(entry.path().c_str(), GetFileExInfoStandard, &attributes)) throw std::system_error{static_cast<int>(GetLastError()), std::system_category(), "Read image creation time: " + files::utf8(entry.path())};
                         const auto created = (std::uint64_t{attributes.ftCreationTime.dwHighDateTime} << 32) | attributes.ftCreationTime.dwLowDateTime;
                         images.emplace_back(created, entry.path());
+                        ++result.folders[entry.path().parent_path()].images;
+                    }
+                    for (auto& [path, folder] : result.folders | std::views::reverse) {
+                        std::ranges::sort(folder.children);
+                        folder.ready = true;
+                        if (path != *directory) result.folders.at(path.parent_path()).images += folder.images;
                     }
                     std::ranges::sort(images);
-                    paths.reserve(images.size());
-                    for (auto& [created, path] : images) paths.push_back(std::move(path));
+                    result.images.reserve(images.size());
+                    for (auto& [created, path] : images) result.images.push_back(std::move(path));
                 } catch (const std::exception& error) {
-                    failure = error.what();
+                    result.error = error.what();
+                    result.folders[*directory].error = result.error;
+                    result.folders[*directory].ready = true;
                 }
                 {
                     const std::lock_guard lock{mutex};
-                    if (closing || rescan) continue;
-                    scanned       = std::move(paths);
-                    scan_error    = std::move(failure);
-                    scanned_ready = true;
+                    if (closing || std::ranges::contains(requested_directories, *directory)) continue;
+                    scanned.push_back(std::move(result));
                     pending       = true;
                 }
                 glfwPostEmptyEvent();
