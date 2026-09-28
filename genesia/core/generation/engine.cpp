@@ -138,6 +138,7 @@ namespace genesia::generation {
                     saving_output->sample_seconds = output.sample_seconds;
                     saving_output->decode_seconds = output.decode_seconds;
                     saving_record                 = std::move(record);
+                    saving_directory              = request.output;
                     saving_id                     = id;
                     save_pending                  = true;
                 }
@@ -298,7 +299,7 @@ namespace genesia::generation {
             lock.unlock();
             try {
                 const auto started = std::chrono::steady_clock::now();
-                saving_record.path = save_image(*saving_output, saving_record);
+                saving_record.path = save_image(*saving_output, saving_record, saving_directory);
                 const auto seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
                 report({.kind = runtime::EventKind::saved, .id = saving_id, .record = saving_record, .timing = {saving_output->sample_seconds, saving_output->decode_seconds, seconds}});
             } catch (...) {

@@ -37,6 +37,7 @@ namespace genesia::editor {
         ImGui::CreateContext();
         auto& io               = ImGui::GetIO();
         io.IniFilename         = nullptr;
+        io.LogFilename         = nullptr;
         io.BackendRendererName = "genesia_shader_object";
         io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasTextures;
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;

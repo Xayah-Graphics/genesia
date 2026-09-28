@@ -127,6 +127,7 @@ target_sources(genesia_core
 )
 target_compile_definitions(genesia_core PUBLIC GENESIA_CACHE_DIRECTORY="${PROJECT_BINARY_DIR}/genesia-cache")
 target_compile_definitions(genesia_core PRIVATE
+        GENESIA_RUNTIME_DIRECTORY="${PROJECT_BINARY_DIR}/runtime"
         GENESIA_CXX_COMPILER="${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}"
         GENESIA_PLATFORM="${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
 target_include_directories(genesia_core PUBLIC "${GENESIA_CLION_CUDA_INCLUDE_DIRECTORY}")
@@ -265,6 +266,7 @@ target_sources(tools_common PRIVATE
         tools/common/images.ixx
         tools/common/safetensors.ixx)
 target_link_libraries(tools_common PUBLIC nlohmann_json::nlohmann_json PRIVATE genesia::stb)
+target_compile_definitions(tools_common PRIVATE TOOLS_RUNTIME_DIRECTORY="${PROJECT_BINARY_DIR}/runtime")
 if (WIN32)
     target_link_libraries(tools_common PRIVATE user32)
 endif ()
@@ -370,14 +372,20 @@ target_link_libraries(classifier PRIVATE
 add_executable(edit tools/edit/main.cpp)
 target_sources(edit PRIVATE
         tools/edit/core/edit.cpp
+        tools/edit/core/worker.py
+        tools/edit/core/preset.cpp
         tools/edit/core/session.cpp
         tools/edit/core/headless.cpp
         PRIVATE FILE_SET cxx_modules TYPE CXX_MODULES FILES
         tools/edit/core/edit.ixx
+        tools/edit/core/preset.ixx
         tools/edit/core/session.ixx
         tools/edit/core/headless.ixx)
-target_compile_definitions(edit PRIVATE EDIT_VERSION="${PROJECT_VERSION}")
-target_link_libraries(edit PRIVATE Threads::Threads genesia::httplib)
+target_compile_definitions(edit PRIVATE EDIT_VERSION="${PROJECT_VERSION}"
+        EDIT_ASSET_DIRECTORY="${GENESIA_ASSET_DIRECTORY}"
+        EDIT_WORKER_SCRIPT="${PROJECT_SOURCE_DIR}/tools/edit/core/worker.py"
+        EDIT_RUNTIME_DIRECTORY="${PROJECT_BINARY_DIR}/tools/edit-runtime")
+target_link_libraries(edit PRIVATE Threads::Threads)
 
 add_executable(foreground tools/foreground/main.cpp)
 target_sources(foreground PRIVATE
@@ -408,7 +416,8 @@ target_sources(qwen PRIVATE
         tools/qwen/core/qwen.ixx
         tools/qwen/core/session.ixx
         tools/qwen/core/headless.ixx)
-target_compile_definitions(qwen PRIVATE QWEN_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(qwen PRIVATE QWEN_VERSION="${PROJECT_VERSION}"
+        QWEN_ASSET_DIRECTORY="${GENESIA_ASSET_DIRECTORY}")
 target_link_libraries(qwen PRIVATE Threads::Threads genesia::httplib)
 
 foreach (tool IN ITEMS classifier edit foreground qwen)

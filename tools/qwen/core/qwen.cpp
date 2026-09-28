@@ -57,9 +57,10 @@ namespace qwen {
                 for (std::size_t j = 0; j < i; ++j)
                     if (request.choices[i] == request.choices[j]) throw std::runtime_error{"Qwen candidate results must be unique"};
             }
-            const auto input = std::filesystem::canonical(request.input);
+            const auto input     = std::filesystem::canonical(request.input);
+            const bool directory = std::filesystem::is_directory(input);
             std::vector<std::filesystem::path> files;
-            if (std::filesystem::is_directory(input)) {
+            if (directory) {
                 progress({Stage::scanning});
                 for (const auto& entry : std::filesystem::directory_iterator{input}) {
                     auto extension = entry.path().extension().string();
@@ -83,17 +84,24 @@ namespace qwen {
                     const auto index = next.fetch_add(1);
                     if (index >= files.size()) break;
                     try {
-                        const auto label = classify(files[index], request);
+                        auto file = files[index];
+                        const auto label = classify(file, request);
+                        if (directory) {
+                            if (interrupted) break;
+                            const auto destination = input / tools::files::path(label) / file.filename();
+                            tools::files::move(file, destination);
+                            file = destination;
+                        }
                         std::size_t completed{};
                         {
                             const std::lock_guard lock{mutex};
-                            result.items.push_back({files[index], label});
+                            result.items.push_back({file, label});
                             completed = result.items.size();
                         }
-                        progress({Stage::classifying, completed, result.total, files[index], label});
+                        progress({Stage::classifying, completed, result.total, file, label});
                     } catch (const std::exception& failure) {
                         const std::lock_guard lock{mutex};
-                        if (error.empty()) error = files[index].string() + ": " + failure.what();
+                        if (error.empty()) error = tools::files::utf8(files[index]) + ": " + failure.what();
                         interrupted = true;
                         break;
                     }

@@ -15,7 +15,9 @@ import std;
 
 namespace tools::files {
     Instance::Instance(const std::string_view application) {
-        const auto path = std::filesystem::temp_directory_path() / std::format("{}-instance.lock", application);
+        const std::filesystem::path directory{TOOLS_RUNTIME_DIRECTORY};
+        std::filesystem::create_directories(directory);
+        const auto path = directory / std::format("{}-instance.lock", application);
 #if defined(_WIN32)
         const auto file = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (file == INVALID_HANDLE_VALUE) throw std::system_error{static_cast<int>(GetLastError()), std::system_category(), std::format("Open {} instance lock", application)};
@@ -66,7 +68,7 @@ namespace tools::files {
         file.exceptions(std::ios::badbit | std::ios::failbit);
         return nlohmann::json::parse(file);
     }
-    void write_json(const std::filesystem::path& path, const nlohmann::json& value) {
+    void write_json(const std::filesystem::path& path, const nlohmann::json& value, const bool replace) {
         std::filesystem::create_directories(path.parent_path());
         auto temporary = path;
         temporary += ".part";
@@ -74,7 +76,13 @@ namespace tools::files {
         file.exceptions(std::ios::badbit | std::ios::failbit);
         file << value.dump();
         file.close();
-        publish(temporary, path);
+        try {
+            if (replace) publish(temporary, path);
+            else move(temporary, path);
+        } catch (...) {
+            std::filesystem::remove(temporary);
+            throw;
+        }
     }
     std::vector<std::uint8_t> read_bytes(const std::filesystem::path& path) {
         std::ifstream file{path, std::ios::binary | std::ios::ate};

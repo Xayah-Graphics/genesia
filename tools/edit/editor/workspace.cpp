@@ -1,50 +1,24 @@
 module;
-#include <Windows.h>
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <misc/cpp/imgui_stdlib.h>
-#include <shlobj.h>
-#include <nlohmann/json.hpp>
 module edit.editor.workspace;
 import tools.files;
 import std;
 namespace edit::editor {
     Workspace::Workspace(tools::editor::WindowPlatform& platform, tools::editor::Renderer& display) : window{platform}, renderer{display}, session{[] { glfwPostEmptyEvent(); }} {
-        PWSTR directory{};
-        const auto status = SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &directory);
-        if (FAILED(status)) throw std::system_error{static_cast<int>(status), std::system_category(), "Find Edit settings directory"};
-        settings = std::filesystem::path{directory} / "Genesia" / "Edit" / "settings.json";
-        CoTaskMemFree(directory);
-        if (std::filesystem::exists(settings)) {
-            const auto saved = tools::files::read_json(settings);
-            prompt           = saved.at("prompt").get<std::string>();
-            for (const auto& path : saved.at("references")) {
-                auto& image = references.emplace_back();
-                image.path  = tools::files::path(path.get<std::string>());
-                load_image(image);
-                if (!image.error.empty()) {
-                    if (!error.empty()) error += '\n';
-                    error += image.error;
-                }
-            }
-        }
+        load_preset(read_preset("default"));
     }
     void Workspace::receive() {
         const auto now = std::chrono::steady_clock::now();
-        if (connection_check.valid() && connection_check.wait_for(std::chrono::seconds{0}) == std::future_status::ready) {
-            connected             = connection_check.get();
-            next_connection_check = now + std::chrono::seconds{3};
-            window.redraw         = true;
-        }
-        if (!connection_check.valid() && now >= next_connection_check) connection_check = std::async(std::launch::async, check_connection);
         auto delivery       = session.drain();
         const auto previous = state.revision;
         state               = std::move(delivery.state);
         if (state.revision != previous && !state.result.error.empty()) error = state.result.error;
-        if (save_at && std::chrono::steady_clock::now() >= *save_at) {
+        if (save_at && now >= *save_at) {
             try {
-                save_settings();
+                save_preset(preset_name);
             } catch (const std::exception& failure) {
                 error         = failure.what();
                 window.redraw = true;
@@ -67,7 +41,7 @@ namespace edit::editor {
                     if (!image.error.empty()) throw std::runtime_error{image.error};
                     request.references.push_back(image.path);
                 }
-                save_settings();
+                save_preset(preset_name);
                 session.submit(std::move(request));
                 state = session.drain().state;
                 error = state.result.error;
@@ -83,7 +57,7 @@ namespace edit::editor {
                     if (destination.texture) retired.push_back(destination.texture);
                     destination = std::move(image);
                 }
-                save_settings();
+                save_preset(preset_name);
             }
         } catch (const std::exception& failure) {
             error = failure.what();
@@ -101,12 +75,55 @@ namespace edit::editor {
         ImGui::SetNextWindowSize({width, float(window.extent_limit.height)});
         ImGui::Begin("Edit", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
         ImGui::TextUnformatted("Edit Images with Qwen");
+        ImGui::BeginDisabled(state.busy);
+        ImGui::SetNextItemWidth(-90 * dpi);
+        if (ImGui::BeginCombo("##Preset", preset_name.c_str())) {
+            try {
+                if (ImGui::IsWindowAppearing()) preset_names = list_presets();
+                for (const auto& name : preset_names) {
+                    if (!ImGui::Selectable(name.c_str(), name == preset_name) || name == preset_name) continue;
+                    save_preset(preset_name);
+                    load_preset(read_preset(name));
+                }
+            } catch (const std::exception& failure) {
+                error = failure.what();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Save as...")) {
+            new_preset_name.fill(0);
+            preset_error.clear();
+            ImGui::OpenPopup("Save edit preset as");
+        }
+        ImGui::EndDisabled();
+        ImGui::SetNextWindowSize({360 * dpi, 0});
+        if (ImGui::BeginPopupModal("Save edit preset as", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextDisabled("Preset name");
+            if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+            ImGui::SetNextItemWidth(-1);
+            const bool enter = ImGui::InputText("##PresetName", new_preset_name.data(), new_preset_name.size(), ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackCharFilter, [](ImGuiInputTextCallbackData* data) {
+                const auto c = data->EventChar;
+                return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' ? 0 : 1;
+            });
+            ImGui::TextDisabled("Letters, numbers, hyphens and underscores");
+            if (!preset_error.empty()) ImGui::TextWrapped("%s", preset_error.c_str());
+            ImGui::BeginDisabled(state.busy || new_preset_name[0] == 0);
+            if ((ImGui::Button("Save") || enter) && !state.busy && new_preset_name[0]) {
+                try {
+                    save_preset(preset_name);
+                    save_preset(new_preset_name.data(), false);
+                    ImGui::CloseCurrentPopup();
+                } catch (const std::exception& failure) {
+                    preset_error = failure.what();
+                }
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
         ImGui::TextDisabled("Positive prompt");
-        const auto connection_label = !connected ? "ComfyUI: Checking..." : *connected ? "ComfyUI: Connected" : "ComfyUI: Offline";
-        const auto connection_color = !connected ? style.Colors[ImGuiCol_TextDisabled] : *connected ? style.Colors[ImGuiCol_PlotHistogram] : ImVec4{0.95F, 0.59F, 0.55F, 1};
-        ImGui::SameLine(width - style.WindowPadding.x - ImGui::CalcTextSize(connection_label).x);
-        ImGui::TextColored(connection_color, "%s", connection_label);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", server_url.data());
         const float text_width    = ImGui::GetContentRegionAvail().x - 2 * style.FramePadding.x - style.ScrollbarSize;
         const float text_height   = ImGui::CalcTextSize(prompt.c_str(), nullptr, false, text_width).y;
         const float prompt_height = std::clamp(text_height, 3 * ImGui::GetTextLineHeight(), 8 * ImGui::GetTextLineHeight()) + 2 * style.FramePadding.y;
@@ -137,7 +154,7 @@ namespace edit::editor {
             references.erase(references.begin() + *removed);
             window.redraw = true;
             try {
-                save_settings();
+                save_preset(preset_name);
             } catch (const std::exception& failure) {
                 error = failure.what();
             }
@@ -189,11 +206,33 @@ namespace edit::editor {
         window.drag_requested = !ImGui::IsAnyItemHovered() && !ImGui::IsAnyItemActive() && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
         ImGui::End();
     }
-    void Workspace::save_settings() {
+    void Workspace::save_preset(const std::string& name, const bool replace) {
         save_at.reset();
-        auto paths = nlohmann::json::array();
-        for (const auto& image : references) paths.push_back(tools::files::utf8(image.path));
-        tools::files::write_json(settings, {{"prompt", prompt}, {"references", std::move(paths)}});
+        Preset preset{name, prompt};
+        for (const auto& image : references) preset.references.push_back(image.path);
+        write_preset(preset, replace);
+        preset_name = name;
+    }
+    void Workspace::load_preset(Preset preset) {
+        std::vector<ImageSlot> images;
+        std::string image_errors;
+        for (auto& path : preset.references) {
+            auto& image = images.emplace_back();
+            image.path  = std::move(path);
+            load_image(image);
+            if (!image.error.empty()) {
+                if (!image_errors.empty()) image_errors += '\n';
+                image_errors += image.error;
+            }
+        }
+        for (const auto& image : references)
+            if (image.texture) retired.push_back(image.texture);
+        references       = std::move(images);
+        preset_name      = std::move(preset.name);
+        prompt           = std::move(preset.prompt);
+        error            = std::move(image_errors);
+        reveal_reference = false;
+        window.redraw    = true;
     }
     void Workspace::load_image(ImageSlot& image) {
         try {

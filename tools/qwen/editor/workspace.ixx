@@ -16,13 +16,12 @@ export namespace qwen::editor {
 
     private:
         std::string prompt;
-        std::vector<std::string> choices{"YES", "NO"};
+        std::vector<std::string> choices;
         std::optional<std::size_t> editing_choice;
         std::string choice_original;
         bool focus_choice{};
         bool choice_created{};
         std::vector<Item> results;
-        std::filesystem::path settings;
         std::optional<std::chrono::steady_clock::time_point> save_at;
         std::optional<bool> connected;
         std::chrono::steady_clock::time_point next_connection_check{};

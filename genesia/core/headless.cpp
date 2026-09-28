@@ -18,20 +18,21 @@ namespace genesia::headless {
         if (arguments.empty() || arguments.front() == "--help") {
             std::println(R"(Genesia {}
 genesia [--preset NAME]
-genesia --headless generate (--preset NAME | --prompt-file FILE) [--count N] [--seed SEED]
-                            [--width N] [--height N] [--steps N] [--cfg VALUE]
-                            [--lora FILE.safetensors WEIGHT ...] [--lora-start FILE.safetensors FRACTION ...]
+genesia --headless (--preset NAME | --preset-file FILE | --prompt-file FILE)
+                  [--count N] [--seed SEED] [--output DIRECTORY]
+                  [--width N] [--height N] [--steps N] [--cfg VALUE]
+                  [--lora FILE.safetensors WEIGHT ...] [--lora-start FILE.safetensors FRACTION ...]
 
 Builds with the Editor open it by default. Builds without it default to headless mode.
 LoRA files are direct children of assets/loras. Selected filename stems are prepended to the positive prompt.
 --lora-start uses the full denoising schedule: 0 = always, 1 = never; default 0.1 (10%).
 Prompt files contain positive and negative strings. Presets contain the Editor's free groups and fixed text.
 Outputs are independent PNG files in {}. Results and progress are JSON Lines.
+--output selects another output directory. --preset-file reads a preset by path.
 Ctrl+C stops generation.)",
                 GENESIA_VERSION, files::utf8(project::output));
             return 0;
         }
-        if (arguments.front() != "generate") throw std::runtime_error{"Unknown command: " + std::string{arguments.front()}};
         runtime::Generate operation;
         int count{1};
         std::optional<std::uint64_t> first_seed;
@@ -41,7 +42,8 @@ Ctrl+C stops generation.)",
         std::vector<generation::Lora> loras;
         std::map<std::string, float> lora_starts;
         std::filesystem::path prompt_file;
-        for (std::size_t i = 1; i < arguments.size(); ++i) {
+        std::filesystem::path preset_file;
+        for (std::size_t i = 0; i < arguments.size(); ++i) {
             const auto option   = arguments[i];
             const auto argument = [&]() {
                 if (i + 1 == arguments.size()) throw std::runtime_error{"Missing value for " + std::string{option}};
@@ -54,6 +56,8 @@ Ctrl+C stops generation.)",
             };
             if (option == "--prompt-file") prompt_file = files::path(argument());
             else if (option == "--preset") preset_name = argument();
+            else if (option == "--preset-file") preset_file = files::path(argument());
+            else if (option == "--output") operation.output = std::filesystem::absolute(files::path(argument())).lexically_normal();
             else if (option == "--count") number(count);
             else if (option == "--seed") number(first_seed.emplace());
             else if (option == "--width") number(width.emplace());
@@ -67,11 +71,10 @@ Ctrl+C stops generation.)",
             } else if (option == "--lora-start") {
                 const std::string key{argument()};
                 number(lora_starts[key]);
-            } else throw std::runtime_error{"Unknown option for this command: " + std::string{option}};
+            } else throw std::runtime_error{"Unknown Headless option: " + std::string{option}};
         }
         if (count <= 0) throw std::runtime_error{"Count must be positive"};
-        if (preset_name && !prompt_file.empty()) throw std::runtime_error{"Choose --preset or --prompt-file"};
-        if (!preset_name && prompt_file.empty()) throw std::runtime_error{"Generate requires --preset or --prompt-file"};
+        if (int(preset_name.has_value()) + int(!preset_file.empty()) + int(!prompt_file.empty()) != 1) throw std::runtime_error{"Specify one of --preset, --preset-file or --prompt-file"};
         if (!prompt_file.empty()) {
             std::ifstream file{prompt_file};
             file.exceptions(std::ios::badbit | std::ios::failbit);
@@ -80,7 +83,7 @@ Ctrl+C stops generation.)",
             operation.parameters.negative = json.at("negative").get<std::string>();
         } else {
             const prompt::Catalog catalog;
-            const auto preset = prompt::read_preset(*preset_name, catalog);
+            const auto preset = preset_name ? prompt::read_preset(*preset_name, catalog) : prompt::read_preset_file(preset_file, catalog);
             operation.parameters.positive = prompt::compose(catalog, preset.prompt.positive);
             operation.parameters.negative = prompt::compose(catalog, preset.prompt.negative);
         }

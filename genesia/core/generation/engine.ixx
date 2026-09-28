@@ -50,6 +50,7 @@ export namespace genesia::generation {
         std::jthread preview_worker;
         std::unique_ptr<sdxl::Output> saving_output;
         Record saving_record;
+        std::filesystem::path saving_directory;
         std::uint64_t saving_id{};
         bool save_pending{}, save_closing{};
         std::exception_ptr save_error;

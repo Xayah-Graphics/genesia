@@ -20,7 +20,9 @@ qwen
 qwen --headless INPUT --prompt TEXT [--choice RESULT ...]
 
 INPUT is a PNG image or a directory containing PNG images (not recursive).
-The default candidates are YES and NO. Originals are never changed.
+The default candidates are YES and NO. A single image is only analyzed.
+Folder inputs move each PNG into a subfolder named after its result.
+Existing destination files are never overwritten. Results contain the final paths.
 Results are printed as JSON Lines. LM Studio: {}, model: {}.)",
                 QWEN_VERSION, server_url, model);
             return 0;

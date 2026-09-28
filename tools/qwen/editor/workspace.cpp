@@ -1,6 +1,5 @@
 module;
 #include <GLFW/glfw3.h>
-#include <ShlObj.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <misc/cpp/imgui_stdlib.h>
@@ -11,17 +10,10 @@ import tools.editor.style;
 import std;
 namespace qwen::editor {
     Workspace::Workspace(tools::editor::WindowPlatform& platform, const float& scale) : window{platform}, dpi{scale}, session{[] { glfwPostEmptyEvent(); }} {
-        PWSTR directory{};
-        const auto status = SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &directory);
-        if (FAILED(status)) throw std::system_error{static_cast<int>(status), std::system_category(), "Find Qwen settings directory"};
-        settings = std::filesystem::path{directory} / "Genesia" / "Qwen" / "settings.json";
-        CoTaskMemFree(directory);
-        if (std::filesystem::exists(settings)) {
-            const auto value = tools::files::read_json(settings);
-            prompt           = value.at("prompt").get<std::string>();
-            choices          = value.at("choices").get<std::vector<std::string>>();
-            std::erase_if(choices, [](const std::string& value) { return value.find_first_not_of(" \t\r\n") == std::string::npos; });
-        }
+        const auto value = tools::files::read_json(std::filesystem::path{QWEN_ASSET_DIRECTORY} / "qwen" / "settings.json");
+        prompt           = value.at("prompt").get<std::string>();
+        choices          = value.at("choices").get<std::vector<std::string>>();
+        std::erase_if(choices, [](const std::string& value) { return value.find_first_not_of(" \t\r\n") == std::string::npos; });
     }
     void Workspace::receive() {
         const auto now = std::chrono::steady_clock::now();
@@ -271,6 +263,6 @@ namespace qwen::editor {
         std::vector<std::string> saved_choices;
         for (const auto& choice : choices)
             if (choice.find_first_not_of(" \t\r\n") != std::string::npos) saved_choices.push_back(choice);
-        tools::files::write_json(settings, {{"prompt", prompt}, {"choices", saved_choices}});
+        tools::files::write_json(std::filesystem::path{QWEN_ASSET_DIRECTORY} / "qwen" / "settings.json", {{"prompt", prompt}, {"choices", saved_choices}});
     }
 } // namespace qwen::editor

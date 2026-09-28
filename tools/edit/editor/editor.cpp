@@ -21,7 +21,7 @@ namespace edit::editor {
             if (window.take_close_request()) {
                 workspace.session.cancel();
                 try {
-                    workspace.save_settings();
+                    workspace.save_preset(workspace.preset_name);
                     closing = true;
                 } catch (const std::exception& failure) {
                     workspace.error = failure.what();

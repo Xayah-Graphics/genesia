@@ -1,54 +1,188 @@
 module;
-#include <httplib.h>
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <cerrno>
+#include <csignal>
+#include <fcntl.h>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 #include <nlohmann/json.hpp>
 module edit.processing;
 import tools.files;
 import std;
+
 namespace edit {
     namespace {
         struct Stopped final {};
-        nlohmann::json workflow(const std::span<const std::string> images, const std::string& prompt, const std::uint64_t seed, const std::string& prefix) {
-            nlohmann::json graph;
-            graph["model"]  = {{"class_type", "UNETLoader"}, {"inputs", {{"unet_name", "qwen_image_2.1_int8_convrot.safetensors"}, {"weight_dtype", "default"}}}};
-            graph["clip"]   = {{"class_type", "CLIPLoader"}, {"inputs", {{"clip_name", "qwen3vl_8b_int8_convrot.safetensors"}, {"type", "qwen_image"}, {"device", "default"}}}};
-            graph["vae"]    = {{"class_type", "VAELoader"}, {"inputs", {{"vae_name", "qwen_image_2.1_vae_bf16.safetensors"}}}};
-            graph["cache"]  = {{"class_type", "QwenImage21Cache"}, {"inputs", {{"model", {"model", 0}}, {"device", "gpu"}, {"dtype", "default"}}}};
-            graph["encode"] = {{"class_type", "TextEncodeQwenImage21"}, {"inputs", {{"clip", {"clip", 0}}, {"vae", {"vae", 0}}, {"prompt", prompt}, {"negative_prompt", ""}, {"resolution", 0}}}};
-            for (std::size_t i = 0; i < images.size(); ++i) {
-                const auto name                             = std::format("image_{}", i + 1);
-                graph[name]                                 = {{"class_type", "LoadImage"}, {"inputs", {{"image", images[i]}}}};
-                graph["encode"]["inputs"]["images." + name] = {name, 0};
+#if !defined(_WIN32)
+        struct Descriptor final {
+            int value{-1};
+            ~Descriptor() { if (value >= 0) close(value); }
+        };
+#endif
+        struct Worker final {
+#if defined(_WIN32)
+            std::unique_ptr<void, decltype(&CloseHandle)> job{nullptr, CloseHandle};
+            std::unique_ptr<void, decltype(&CloseHandle)> process{nullptr, CloseHandle};
+            std::unique_ptr<void, decltype(&CloseHandle)> input{nullptr, CloseHandle};
+            std::unique_ptr<void, decltype(&CloseHandle)> output{nullptr, CloseHandle};
+#else
+            pid_t process{-1};
+            Descriptor input, output;
+#endif
+            std::optional<int> exit_code;
+            ~Worker();
+            void start(const std::filesystem::path& python, const std::filesystem::path& directory);
+            bool send(std::string_view message);
+            std::string receive();
+            void poll();
+        };
+
+        Worker::~Worker() {
+#if defined(_WIN32)
+            job.reset();
+            if (process) {
+                TerminateProcess(process.get(), 1);
+                WaitForSingleObject(process.get(), INFINITE);
             }
-            graph["sample"] = {{"class_type", "KSampler"}, {"inputs", {{"model", {"cache", 0}}, {"positive", {"encode", 0}}, {"negative", {"encode", 1}}, {"latent_image", {"encode", 2}}, {"seed", seed}, {"steps", 25}, {"cfg", 1.0}, {"sampler_name", "euler"}, {"scheduler", "simple"}, {"denoise", 1.0}}}};
-            graph["decode"] = {{"class_type", "VAEDecode"}, {"inputs", {{"samples", {"sample", 0}}, {"vae", {"vae", 0}}}}};
-            graph["save"]   = {{"class_type", "SaveImageAdvanced"}, {"inputs", {{"images", {"decode", 0}}, {"filename_prefix", prefix}, {"format", "png"}, {"format.bit_depth", "8-bit"}, {"format.input_color_space", "sRGB"}}}};
-            return graph;
+#else
+            if (process > 0) {
+                kill(-process, SIGKILL);
+                int status{};
+                while (waitpid(process, &status, 0) < 0 && errno == EINTR) {}
+            }
+#endif
+        }
+        void Worker::start(const std::filesystem::path& python, const std::filesystem::path& directory) {
+#if defined(_WIN32)
+            SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+            HANDLE read{}, write{};
+            if (!CreatePipe(&read, &write, &security, 0)) throw std::system_error{int(GetLastError()), std::system_category(), "Create Python input pipe"};
+            std::unique_ptr<void, decltype(&CloseHandle)> child_input{read, CloseHandle};
+            input.reset(write);
+            if (!SetHandleInformation(input.get(), HANDLE_FLAG_INHERIT, 0)) throw std::system_error{int(GetLastError()), std::system_category(), "Set Python input handle"};
+            if (!CreatePipe(&read, &write, &security, 0)) throw std::system_error{int(GetLastError()), std::system_category(), "Create Python output pipe"};
+            output.reset(read);
+            std::unique_ptr<void, decltype(&CloseHandle)> child_output{write, CloseHandle};
+            if (!SetHandleInformation(output.get(), HANDLE_FLAG_INHERIT, 0)) throw std::system_error{int(GetLastError()), std::system_category(), "Set Python output handle"};
+            const auto log = CreateFileW((directory / "stderr.log").c_str(), GENERIC_WRITE, FILE_SHARE_READ, &security, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (log == INVALID_HANDLE_VALUE) throw std::system_error{int(GetLastError()), std::system_category(), "Create Python log"};
+            std::unique_ptr<void, decltype(&CloseHandle)> child_error{log, CloseHandle};
+            job.reset(CreateJobObjectW(nullptr, nullptr));
+            if (!job) throw std::system_error{int(GetLastError()), std::system_category(), "Create Python job"};
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if (!SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation, &limits, sizeof(limits))) throw std::system_error{int(GetLastError()), std::system_category(), "Configure Python job"};
+            STARTUPINFOW startup{sizeof(STARTUPINFOW)};
+            startup.dwFlags    = STARTF_USESTDHANDLES;
+            startup.hStdInput  = child_input.get();
+            startup.hStdOutput = child_output.get();
+            startup.hStdError  = child_error.get();
+            auto command = std::format(L"\"{}\" -X utf8 -B -u \"{}\"", python.native(), std::filesystem::path{EDIT_WORKER_SCRIPT}.native());
+            PROCESS_INFORMATION created{};
+            if (!CreateProcessW(python.c_str(), command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, directory.c_str(), &startup, &created)) throw std::system_error{int(GetLastError()), std::system_category(), "Start Edit Python worker"};
+            process.reset(created.hProcess);
+            std::unique_ptr<void, decltype(&CloseHandle)> thread{created.hThread, CloseHandle};
+            if (!AssignProcessToJobObject(job.get(), process.get())) throw std::system_error{int(GetLastError()), std::system_category(), "Attach Python worker to job"};
+            if (ResumeThread(thread.get()) == DWORD(-1)) throw std::system_error{int(GetLastError()), std::system_category(), "Resume Python worker"};
+#else
+            std::signal(SIGPIPE, SIG_IGN);
+            std::array<int, 2> pipe{};
+            if (pipe2(pipe.data(), O_CLOEXEC) < 0) throw std::system_error{errno, std::generic_category(), "Create Python input pipe"};
+            Descriptor child_input{pipe[0]};
+            input.value = pipe[1];
+            if (pipe2(pipe.data(), O_CLOEXEC) < 0) throw std::system_error{errno, std::generic_category(), "Create Python output pipe"};
+            output.value = pipe[0];
+            Descriptor child_output{pipe[1]};
+            Descriptor child_error{open((directory / "stderr.log").c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600)};
+            if (child_error.value < 0) throw std::system_error{errno, std::generic_category(), "Create Python log"};
+            if (fcntl(output.value, F_SETFL, O_NONBLOCK) < 0) throw std::system_error{errno, std::generic_category(), "Configure Python output pipe"};
+            posix_spawn_file_actions_t actions{};
+            if (const int error = posix_spawn_file_actions_init(&actions)) throw std::system_error{error, std::generic_category(), "Create Python file actions"};
+            const std::unique_ptr<posix_spawn_file_actions_t, decltype(&posix_spawn_file_actions_destroy)> release_actions{&actions, posix_spawn_file_actions_destroy};
+            for (const auto [source, target] : {std::pair{child_input.value, STDIN_FILENO}, std::pair{child_output.value, STDOUT_FILENO}, std::pair{child_error.value, STDERR_FILENO}})
+                if (const int error = posix_spawn_file_actions_adddup2(&actions, source, target)) throw std::system_error{error, std::generic_category(), "Redirect Python stream"};
+            posix_spawnattr_t attributes{};
+            if (const int error = posix_spawnattr_init(&attributes)) throw std::system_error{error, std::generic_category(), "Create Python spawn attributes"};
+            const std::unique_ptr<posix_spawnattr_t, decltype(&posix_spawnattr_destroy)> release_attributes{&attributes, posix_spawnattr_destroy};
+            if (const int error = posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETPGROUP)) throw std::system_error{error, std::generic_category(), "Configure Python process group"};
+            if (const int error = posix_spawnattr_setpgroup(&attributes, 0)) throw std::system_error{error, std::generic_category(), "Set Python process group"};
+            const std::string script{EDIT_WORKER_SCRIPT};
+            const std::array arguments{const_cast<char*>(python.c_str()), const_cast<char*>("-X"), const_cast<char*>("utf8"), const_cast<char*>("-B"), const_cast<char*>("-u"), const_cast<char*>(script.c_str()), static_cast<char*>(nullptr)};
+            if (const int error = posix_spawn(&process, python.c_str(), &actions, &attributes, arguments.data(), environ)) throw std::system_error{error, std::generic_category(), "Start Edit Python worker"};
+#endif
+        }
+        bool Worker::send(std::string_view message) {
+            while (!message.empty()) {
+#if defined(_WIN32)
+                DWORD written{};
+                if (!WriteFile(input.get(), message.data(), DWORD(std::min(message.size(), std::size_t(MAXDWORD))), &written, nullptr)) {
+                    const auto error = GetLastError();
+                    if (error == ERROR_BROKEN_PIPE || error == ERROR_NO_DATA) return false;
+                    throw std::system_error{int(error), std::system_category(), "Write to Python worker"};
+                }
+#else
+                const auto written = write(input.value, message.data(), message.size());
+                if (written < 0) {
+                    if (errno == EINTR) continue;
+                    if (errno == EPIPE) return false;
+                    throw std::system_error{errno, std::generic_category(), "Write to Python worker"};
+                }
+#endif
+                message.remove_prefix(std::size_t(written));
+            }
+            return true;
+        }
+        std::string Worker::receive() {
+            std::array<char, 65536> bytes;
+#if defined(_WIN32)
+            DWORD available{}, read{};
+            if (!PeekNamedPipe(output.get(), nullptr, 0, nullptr, &available, nullptr)) {
+                const auto error = GetLastError();
+                if (error == ERROR_BROKEN_PIPE) return {};
+                throw std::system_error{int(error), std::system_category(), "Poll Python output"};
+            }
+            if (!available) return {};
+            if (!ReadFile(output.get(), bytes.data(), DWORD(std::min(bytes.size(), std::size_t(available))), &read, nullptr)) throw std::system_error{int(GetLastError()), std::system_category(), "Read Python output"};
+#else
+            const auto read = ::read(output.value, bytes.data(), bytes.size());
+            if (read < 0) {
+                if (errno == EAGAIN || errno == EINTR) return {};
+                throw std::system_error{errno, std::generic_category(), "Read Python output"};
+            }
+#endif
+            return {bytes.data(), std::size_t(read)};
+        }
+        void Worker::poll() {
+            if (exit_code) return;
+#if defined(_WIN32)
+            const auto status = WaitForSingleObject(process.get(), 0);
+            if (status == WAIT_TIMEOUT) return;
+            if (status == WAIT_FAILED) throw std::system_error{int(GetLastError()), std::system_category(), "Wait for Python worker"};
+            DWORD code{};
+            if (!GetExitCodeProcess(process.get(), &code)) throw std::system_error{int(GetLastError()), std::system_category(), "Read Python exit code"};
+            exit_code = int(code);
+#else
+            int status{};
+            const auto finished = waitpid(process, &status, WNOHANG);
+            if (!finished) return;
+            if (finished < 0) {
+                if (errno == EINTR) return;
+                throw std::system_error{errno, std::generic_category(), "Wait for Python worker"};
+            }
+            exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+            kill(-process, SIGKILL);
+            process = -1;
+#endif
         }
     } // namespace
-    bool check_connection() {
-        httplib::Client client{std::string{server_url}};
-        client.set_connection_timeout(1);
-        client.set_read_timeout(1);
-        client.set_write_timeout(1);
-        client.set_max_timeout(std::chrono::seconds{2});
-        const auto response = client.Get("/system_stats");
-        return response && response->status == 200;
-    }
+
     Result process(const Request& options, const std::atomic_bool& interrupted, const std::function<void(const Progress&)>& progress) {
         Result result;
-        httplib::Client client{std::string{server_url}};
-        client.set_connection_timeout(5);
-        client.set_read_timeout(10);
-        client.set_write_timeout(10);
-        const auto request = [&](const std::string& route, const std::optional<nlohmann::json>& body = {}) {
-            const auto response = body ? client.Post(route, body->dump(), "application/json") : client.Get(route);
-            if (!response) throw std::runtime_error{std::format("ComfyUI {}: {}", route, httplib::to_string(response.error()))};
-            if (response->status != 200) throw std::runtime_error{std::format("ComfyUI {}: HTTP {}\n{}", route, response->status, response->body)};
-            return response->body.empty() ? nlohmann::json{} : nlohmann::json::parse(response->body);
-        };
-        std::filesystem::path temporary_input, pending_output, current_file;
-        std::string prompt_id;
-        std::vector<std::string> submitted;
+        std::filesystem::path working, pending_output, current_file;
         bool output_created{};
         try {
             progress({Stage::preparing});
@@ -56,7 +190,7 @@ namespace edit {
             if (options.prompt.find_first_not_of(" \t\r\n") == std::string::npos) throw std::runtime_error{"Enter a positive prompt before editing images"};
             const auto input     = std::filesystem::canonical(options.input);
             const bool directory = std::filesystem::is_directory(input);
-            result.output        = (directory ? input : input.parent_path()) / "fix";
+            result.output        = options.output ? std::filesystem::absolute(*options.output).lexically_normal() : (directory ? input : input.parent_path()) / "fix";
             std::vector<std::filesystem::path> images;
             if (directory) {
                 for (const auto& entry : std::filesystem::directory_iterator{input}) {
@@ -76,95 +210,71 @@ namespace edit {
             std::ranges::sort(images);
             result.total = images.size();
             progress({Stage::preparing, 0, result.total});
-            const auto stats      = request("/system_stats");
-            const auto arguments  = stats.at("system").at("argv").get<std::vector<std::string>>();
-            const auto input_arg  = std::ranges::find(arguments, "--input-directory");
-            const auto output_arg = std::ranges::find(arguments, "--output-directory");
-            if (input_arg == arguments.end() || std::next(input_arg) == arguments.end() || output_arg == arguments.end() || std::next(output_arg) == arguments.end()) throw std::runtime_error{"Start local ComfyUI with --input-directory and --output-directory"};
-            const auto input_directory  = tools::files::path(*std::next(input_arg));
-            const auto output_directory = tools::files::path(*std::next(output_arg));
-            if (interrupted) throw Stopped{};
+            const auto runtime = tools::files::read_json(std::filesystem::path{EDIT_ASSET_DIRECTORY} / "edit" / "runtime.json");
             std::random_device random;
-            const auto batch       = std::format("edit-{:016x}-{:016x}", std::chrono::system_clock::now().time_since_epoch().count(), std::uniform_int_distribution<std::uint64_t>{}(random));
-            const auto batch_input = input_directory / batch;
-            if (!std::filesystem::create_directory(batch_input)) throw std::runtime_error{"Temporary directory already exists: " + tools::files::utf8(batch_input)};
-            temporary_input = batch_input;
-            std::vector<std::string> inputs(1);
-            for (std::size_t i = 0; i < options.references.size(); ++i) {
-                if (interrupted) throw Stopped{};
-                current_file    = options.references[i];
-                const auto name = std::format("reference-{}.png", i + 2);
-                std::filesystem::copy_file(current_file, temporary_input / name);
-                inputs.push_back(batch + "/" + name);
-            }
-            for (std::size_t i = 0; i < images.size(); ++i) {
-                if (interrupted) throw Stopped{};
-                current_file = images[i];
-                progress({Stage::editing, result.completed, result.total, current_file});
-                const auto name   = std::format("{:06}.png", i);
-                const auto source = temporary_input / name;
-                std::filesystem::copy_file(current_file, source);
-                const auto seed  = std::uniform_int_distribution<std::uint64_t>{}(random);
-                inputs.front()   = batch + "/" + name;
-                const auto graph = workflow(inputs, options.prompt, seed, batch + "/edited");
-                const auto high  = std::uniform_int_distribution<std::uint64_t>{}(random);
-                const auto low   = std::uniform_int_distribution<std::uint64_t>{}(random);
-                if (interrupted) throw Stopped{};
-                // Retain the ID before submission so a lost reply cannot leave an untracked job.
-                prompt_id = std::format("{:08x}-{:04x}-{:04x}-{:04x}-{:012x}", high >> 32, (high >> 16) & 0xffff, (high & 0x0fff) | 0x4000, (low >> 48 & 0x3fff) | 0x8000, low & 0xffffffffffff);
-                submitted.push_back(prompt_id);
-                request("/prompt", nlohmann::json{{"prompt_id", prompt_id}, {"prompt", graph}});
-                nlohmann::json completed;
-                for (;;) {
-                    if (interrupted) throw Stopped{};
-                    const auto history = request("/history/" + prompt_id);
-                    if (history.contains(prompt_id)) {
-                        completed = history.at(prompt_id);
-                        prompt_id.clear();
-                        break;
-                    }
-                    std::this_thread::sleep_for(std::chrono::milliseconds{100});
+            const auto batch = std::format("edit-{:016x}-{:016x}", std::chrono::system_clock::now().time_since_epoch().count(), std::uniform_int_distribution<std::uint64_t>{}(random));
+            std::filesystem::create_directories(EDIT_RUNTIME_DIRECTORY);
+            const auto directory_path = std::filesystem::path{EDIT_RUNTIME_DIRECTORY} / batch;
+            if (!std::filesystem::create_directory(directory_path)) throw std::runtime_error{"Worker directory already exists: " + tools::files::utf8(directory_path)};
+            working = directory_path;
+            auto inputs = nlohmann::json::array(), references = nlohmann::json::array();
+            for (const auto& image : images) inputs.push_back(tools::files::utf8(image));
+            for (const auto& reference : options.references) references.push_back(tools::files::utf8(std::filesystem::canonical(reference)));
+            const nlohmann::json request{{"runtime", runtime}, {"working", tools::files::utf8(working)}, {"batch", batch}, {"images", std::move(inputs)}, {"references", std::move(references)}, {"prompt", options.prompt}};
+            if (interrupted) throw Stopped{};
+            Worker worker;
+            worker.start(tools::files::path(runtime.at("python").get<std::string>()), working);
+            if (!worker.send(request.dump() + "\n")) throw std::runtime_error{"Python worker closed its input before reading the batch"};
+            std::string buffered;
+            bool finished{};
+            std::optional<std::chrono::steady_clock::time_point> stop_deadline;
+            for (;;) {
+                const auto data = worker.receive();
+                buffered += data;
+                for (auto end = buffered.find('\n'); end != std::string::npos; end = buffered.find('\n')) {
+                    const auto event = nlohmann::json::parse(buffered.substr(0, end));
+                    buffered.erase(0, end + 1);
+                    const auto type = event.at("type").get<std::string>();
+                    if (type == "progress") {
+                        current_file = tools::files::path(event.at("file").get<std::string>());
+                        progress({stop_deadline ? Stage::stopping : event.at("stage") == "preparing" ? Stage::preparing : Stage::editing, result.completed, result.total, current_file});
+                    } else if (type == "image") {
+                        current_file = tools::files::path(event.at("file").get<std::string>());
+                        output_created |= std::filesystem::create_directories(result.output);
+                        pending_output = result.output / tools::files::path(batch + ".part");
+                        std::filesystem::copy_file(tools::files::path(event.at("generated").get<std::string>()), pending_output);
+                        const auto filename = current_file.stem().native() + tools::files::path(options.suffix).native() + current_file.extension().native();
+                        tools::files::publish(pending_output, result.output / filename);
+                        pending_output.clear();
+                        ++result.completed;
+                        progress({stop_deadline ? Stage::stopping : Stage::editing, result.completed, result.total, current_file});
+                    } else if (type == "complete") finished = true;
+                    else if (type == "stopped") {
+                        finished       = true;
+                        result.stopped = true;
+                    } else if (type == "error") {
+                        finished     = true;
+                        result.error = event.at("error").get<std::string>();
+                    } else throw std::runtime_error{"Unknown Python worker event: " + type};
                 }
-                if (completed.at("status").at("status_str") != "success") throw std::runtime_error{completed.at("status").at("messages").dump(2)};
-                if (interrupted) throw Stopped{};
-                const auto& saved    = completed.at("outputs").at("save").at("images").at(0);
-                const auto generated = output_directory / tools::files::path(saved.at("subfolder").get<std::string>()) / tools::files::path(saved.at("filename").get<std::string>());
-                output_created |= std::filesystem::create_directories(result.output);
-                pending_output = result.output / tools::files::path(batch + ".part");
-                std::filesystem::copy_file(generated, pending_output);
-                tools::files::publish(pending_output, result.output / current_file.filename());
-                pending_output.clear();
-                ++result.completed;
-                std::filesystem::remove(source);
-                progress({Stage::editing, result.completed, result.total, current_file});
+                worker.poll();
+                if (interrupted && !stop_deadline && !worker.exit_code) {
+                    progress({Stage::stopping, result.completed, result.total, current_file});
+                    worker.send("stop\n");
+                    stop_deadline = std::chrono::steady_clock::now() + std::chrono::seconds{60};
+                }
+                if (worker.exit_code && data.empty()) break;
+                if (stop_deadline && !worker.exit_code && std::chrono::steady_clock::now() >= *stop_deadline) throw std::runtime_error{"Python worker did not stop within 60 seconds"};
+                if (!worker.exit_code) std::this_thread::sleep_for(std::chrono::milliseconds{20});
             }
+            if ((!finished || *worker.exit_code != 0) && result.error.empty()) throw std::runtime_error{std::format("Python worker exited with code {}\n{}", *worker.exit_code, tools::files::read_text(working / "stderr.log"))};
+            result.stopped = result.stopped && result.completed != result.total;
         } catch (const Stopped&) {
             result.stopped = true;
         } catch (const std::exception& failure) {
             result.error = current_file.empty() ? failure.what() : std::format("{}\n{}", tools::files::utf8(current_file), failure.what());
         }
-        if (!prompt_id.empty()) {
-            try {
-                progress({Stage::stopping, result.completed, result.total, current_file});
-                request("/api/jobs/" + prompt_id + "/cancel", nlohmann::json::object());
-                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{60};
-                for (;;) {
-                    const auto queue = request("/queue");
-                    bool pending{};
-                    for (const auto name : {"queue_running", "queue_pending"})
-                        for (const auto& item : queue.at(name)) pending |= item.at(1) == prompt_id;
-                    if (!pending) break;
-                    if (std::chrono::steady_clock::now() >= deadline) throw std::runtime_error{"ComfyUI has not stopped task " + prompt_id};
-                    std::this_thread::sleep_for(std::chrono::milliseconds{100});
-                }
-                prompt_id.clear();
-            } catch (const std::exception& failure) {
-                if (!result.error.empty()) result.error += '\n';
-                result.error += std::format("{}\nTemporary input retained: {}", failure.what(), tools::files::utf8(temporary_input));
-            }
-        }
-        // Never remove files that a server job may still be reading or writing.
-        for (const auto& path : {pending_output, prompt_id.empty() ? temporary_input : std::filesystem::path{}}) {
+        for (const auto& path : {pending_output, working}) {
             if (path.empty()) continue;
             try {
                 std::filesystem::remove_all(path);
@@ -181,9 +291,9 @@ namespace edit {
                 result.error += failure.what();
             }
         }
-        if (prompt_id.empty() && !submitted.empty()) {
+        if (!working.empty()) {
             try {
-                request("/history", nlohmann::json{{"delete", submitted}});
+                if (std::filesystem::is_empty(EDIT_RUNTIME_DIRECTORY)) std::filesystem::remove(EDIT_RUNTIME_DIRECTORY);
             } catch (const std::exception& failure) {
                 if (!result.error.empty()) result.error += '\n';
                 result.error += failure.what();

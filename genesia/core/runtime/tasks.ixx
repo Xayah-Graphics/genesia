@@ -1,5 +1,6 @@
 export module genesia.runtime.tasks;
 export import genesia.data.images;
+import genesia.project;
 import std;
 export namespace genesia::runtime {
     struct Generate final {
@@ -7,6 +8,7 @@ export namespace genesia::runtime {
         std::uint64_t seed{};
         int count{1};
         bool random_seed{};
+        std::filesystem::path output{project::output};
     };
     enum class State { running, saving, complete, stopped, failed };
     inline constexpr std::array<std::string_view, 5> states{"running", "saving", "complete", "stopped", "failed"};

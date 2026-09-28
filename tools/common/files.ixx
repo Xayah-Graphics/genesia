@@ -17,7 +17,7 @@ export namespace tools::files {
     std::filesystem::path path(std::string_view text);
     std::string read_text(const std::filesystem::path& path);
     nlohmann::json read_json(const std::filesystem::path& path);
-    void write_json(const std::filesystem::path& path, const nlohmann::json& value);
+    void write_json(const std::filesystem::path& path, const nlohmann::json& value, bool replace = true);
     std::vector<std::uint8_t> read_bytes(const std::filesystem::path& path);
     void write_bytes(const std::filesystem::path& path, std::span<const std::uint8_t> bytes);
     std::string digest(const std::filesystem::path& path);

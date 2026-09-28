@@ -38,6 +38,7 @@ namespace tools::editor {
         apply_style();
         auto& io               = ImGui::GetIO();
         io.IniFilename         = nullptr;
+        io.LogFilename         = nullptr;
         io.BackendRendererName = "tools_shader_object";
         io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasTextures;
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;

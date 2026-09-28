@@ -88,7 +88,9 @@ namespace genesia::files {
     }
 
     Instance::Instance() {
-        const auto path = std::filesystem::temp_directory_path() / "genesia-instance.lock";
+        const std::filesystem::path directory{GENESIA_RUNTIME_DIRECTORY};
+        std::filesystem::create_directories(directory);
+        const auto path = directory / "genesia-instance.lock";
 #if defined(_WIN32)
         const auto file = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (file == INVALID_HANDLE_VALUE) throw std::system_error{static_cast<int>(GetLastError()), std::system_category(), "Open Genesia instance lock"};

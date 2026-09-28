@@ -5,7 +5,6 @@ module;
 #include <stb_image_write.h>
 module genesia.generation.output;
 import genesia.io.files;
-import genesia.project;
 
 import std;
 
@@ -34,7 +33,7 @@ namespace genesia {
         }
     } // namespace
 
-    std::filesystem::path save_image(const sdxl::Output& output, const Record& record) {
+    std::filesystem::path save_image(const sdxl::Output& output, const Record& record, const std::filesystem::path& directory) {
         const auto model = record.model.u8string();
         nlohmann::json metadata{{"version", 2}, {"model", std::string{model.begin(), model.end()}}, {"seed", record.seed}, {"steps", record.parameters.steps}, {"cfg", record.parameters.cfg}, {"sampler", "euler"}, {"scheduler", "simple"}, {"prompt", {{"positive", record.parameters.positive}, {"negative", record.parameters.negative}}}};
         if (!record.parameters.loras.empty()) metadata["loras"] = record.parameters.loras;
@@ -45,19 +44,19 @@ namespace genesia {
         int length{};
         const std::unique_ptr<unsigned char, decltype(&std::free)> png{stbi_write_png_to_mem(output.pixels.data(), output.width * 3, output.width, output.height, 3, &length), &std::free};
         if (!png) throw std::runtime_error{"PNG encoding failed"};
-        static auto next = [] {
-            std::filesystem::create_directories(project::output);
-            std::uint64_t number{1};
-            for (const auto& entry : std::filesystem::directory_iterator{project::output}) {
+        static std::map<std::filesystem::path, std::uint64_t> numbers;
+        const auto [next, first] = numbers.try_emplace(directory, 1);
+        if (first) {
+            std::filesystem::create_directories(directory);
+            for (const auto& entry : std::filesystem::directory_iterator{directory}) {
                 const auto name = files::utf8(entry.path().filename());
                 if (!name.starts_with("genesia_") || !name.ends_with(".png")) continue;
                 std::uint64_t value{};
                 const auto parsed = std::from_chars(name.data() + 8, name.data() + name.size() - 4, value);
-                if (parsed.ec == std::errc{} && parsed.ptr == name.data() + name.size() - 4) number = std::max(number, value + 1);
+                if (parsed.ec == std::errc{} && parsed.ptr == name.data() + name.size() - 4) next->second = std::max(next->second, value + 1);
             }
-            return number;
-        }();
-        const auto path = project::output / std::format("genesia_{:06}.png", next++);
+        }
+        const auto path = directory / std::format("genesia_{:06}.png", next->second++);
         auto temporary  = path;
         temporary += ".part";
         std::ofstream file{temporary, std::ios::binary | std::ios::trunc};

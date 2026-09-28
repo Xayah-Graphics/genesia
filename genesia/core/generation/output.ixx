@@ -5,5 +5,5 @@ export import genesia.data.images;
 import std;
 
 export namespace genesia {
-    std::filesystem::path save_image(const sdxl::Output& output, const Record& record);
+    std::filesystem::path save_image(const sdxl::Output& output, const Record& record, const std::filesystem::path& directory);
 } // namespace genesia
