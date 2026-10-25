@@ -161,21 +161,6 @@ namespace genesia::editor {
         const float left_end = ImGui::GetItemRectMax().x + 4 * scale;
         if (ImGui::BeginPopup("Application")) {
             ImGui::MenuItem("Live preview", nullptr, &workspace.preview_enabled);
-            auto& web = workspace.runtime.web;
-            if (ImGui::MenuItem("LAN access", nullptr, web.enabled.load())) {
-                try {
-                    if (web.enabled) web.stop();
-                    else web.start();
-                } catch (const std::exception& failure) {
-                    workspace.action_error = failure.what();
-                }
-            }
-            if (web.enabled) {
-                for (const auto& address : web.addresses) {
-                    if (ImGui::MenuItem(address.c_str())) ImGui::SetClipboardText(address.c_str());
-                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Click to copy · allow port 7860 on the private network firewall");
-                }
-            }
             ImGui::Separator();
             if (ImGui::MenuItem("Save prompt", "Ctrl+S", false, workspace.page == Workspace::Page::generation)) workspace.save_prompt();
             if (ImGui::MenuItem("View final prompt", nullptr, false, workspace.page == Workspace::Page::generation)) workspace.final_prompt_requested = true;

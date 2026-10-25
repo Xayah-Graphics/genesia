@@ -68,60 +68,54 @@ namespace genesia::editor {
     }
 
     void Workspace::receive() {
-        auto delivered = runtime.session.drain();
-        for (const auto& event : delivered.events) runtime.web.receive(event);
-        {
-            auto& session  = runtime.session;
-            session_state  = session.snapshot();
-            auto& events   = delivered.events;
-            auto& previews = delivered.previews;
-            for (const auto& frame : previews) {
-                const auto presentation = std::static_pointer_cast<const PresentedFrame>(frame.frame);
-                auto& source            = presentation->bridge->slots[presentation->slot];
-                const bool final_ready  = std::ranges::any_of(events, [&](const runtime::Event& event) { return event.kind == runtime::EventKind::generated && event.id == frame.id; });
-                if ((generation.task && frame.id < *generation.task) || !preview_enabled || !renderer.visible || final_ready || (generation.task == frame.id && (generation.record || frame.step <= generation.step))) {
-                    renderer.discard(*source.timeline, presentation->ready);
-                    continue;
-                }
-                if (generation.task != frame.id) begin_generation(frame.id, frame.width, frame.height);
-                if (generation.texture) renderer.retire(generation.texture);
-                generation.texture = renderer.texture({static_cast<std::uint32_t>(frame.width), static_cast<std::uint32_t>(frame.height)});
-                renderer.copy(generation.texture, source.buffer, *source.timeline, presentation->ready);
-                generation.width   = frame.width;
-                generation.height  = frame.height;
-                generation.preview = true;
-                generation.step    = frame.step;
+        auto [events, previews] = runtime.session.drain();
+        session_state          = runtime.session.snapshot();
+        for (const auto& frame : previews) {
+            const auto presentation = std::static_pointer_cast<const PresentedFrame>(frame.frame);
+            auto& source            = presentation->bridge->slots[presentation->slot];
+            const bool final_ready  = std::ranges::any_of(events, [&](const runtime::Event& event) { return event.kind == runtime::EventKind::generated && event.id == frame.id; });
+            if ((generation.task && frame.id < *generation.task) || !preview_enabled || !renderer.visible || final_ready || (generation.task == frame.id && (generation.record || frame.step <= generation.step))) {
+                renderer.discard(*source.timeline, presentation->ready);
+                continue;
             }
-            for (auto& event : events) {
-                if (event.kind == runtime::EventKind::task) {
-                    task = event.task;
-                    if (task->state == runtime::State::failed) {
-                        action_error = task->error;
-                        shown_error.clear();
-                    }
-                    continue;
+            if (generation.task != frame.id) begin_generation(frame.id, frame.width, frame.height);
+            if (generation.texture) renderer.retire(generation.texture);
+            generation.texture = renderer.texture({static_cast<std::uint32_t>(frame.width), static_cast<std::uint32_t>(frame.height)});
+            renderer.copy(generation.texture, source.buffer, *source.timeline, presentation->ready);
+            generation.width   = frame.width;
+            generation.height  = frame.height;
+            generation.preview = true;
+            generation.step    = frame.step;
+        }
+        for (auto& event : events) {
+            if (event.kind == runtime::EventKind::task) {
+                task = event.task;
+                if (task->state == runtime::State::failed) {
+                    action_error = task->error;
+                    shown_error.clear();
                 }
-                const bool current = !generation.task || event.id >= *generation.task;
-                if (current && generation.task != event.id) begin_generation(event.id, event.record.parameters.width, event.record.parameters.height);
-                if (event.kind == runtime::EventKind::generated) {
-                    const auto presentation = std::static_pointer_cast<const PresentedFrame>(event.frame);
-                    auto& source            = presentation->bridge->slots[presentation->slot];
-                    if (current) {
-                        if (generation.texture) renderer.retire(generation.texture);
-                        generation.width   = event.record.parameters.width;
-                        generation.height  = event.record.parameters.height;
-                        generation.texture = renderer.texture({static_cast<std::uint32_t>(generation.width), static_cast<std::uint32_t>(generation.height)});
-                        renderer.copy(generation.texture, source.buffer, *source.timeline, presentation->ready);
-                        generation.record  = std::move(event.record);
-                        generation.preview = false;
-                    } else renderer.discard(*source.timeline, presentation->ready);
-                } else if (current) {
-                    if (generation.texture && generation.preview) renderer.retire(std::exchange(generation.texture, 0));
-                    textures.adopt(event.record, generation.texture);
-                    generation.saved   = event.record.path;
+                continue;
+            }
+            const bool current = !generation.task || event.id >= *generation.task;
+            if (current && generation.task != event.id) begin_generation(event.id, event.record.parameters.width, event.record.parameters.height);
+            if (event.kind == runtime::EventKind::generated) {
+                const auto presentation = std::static_pointer_cast<const PresentedFrame>(event.frame);
+                auto& source            = presentation->bridge->slots[presentation->slot];
+                if (current) {
+                    if (generation.texture) renderer.retire(generation.texture);
+                    generation.width   = event.record.parameters.width;
+                    generation.height  = event.record.parameters.height;
+                    generation.texture = renderer.texture({static_cast<std::uint32_t>(generation.width), static_cast<std::uint32_t>(generation.height)});
+                    renderer.copy(generation.texture, source.buffer, *source.timeline, presentation->ready);
                     generation.record  = std::move(event.record);
                     generation.preview = false;
-                }
+                } else renderer.discard(*source.timeline, presentation->ready);
+            } else if (current) {
+                if (generation.texture && generation.preview) renderer.retire(std::exchange(generation.texture, 0));
+                textures.adopt(event.record, generation.texture);
+                generation.saved   = event.record.path;
+                generation.record  = std::move(event.record);
+                generation.preview = false;
             }
         }
         const bool refreshed = textures.receive();
@@ -158,31 +152,6 @@ namespace genesia::editor {
             action_error          = failure.what();
             shown_error.clear();
         }
-    }
-
-    void Workspace::update_web() {
-        auto& web = runtime.web;
-        if (!web.enabled) return;
-        auto state = runtime.session.snapshot();
-        std::string unavailable, failure;
-        if (!state.error.empty()) unavailable = state.error;
-        else if (state.finished) unavailable = "主机正在关闭";
-        else if (page != Page::generation) unavailable = "暂不可用 · 请将主机切换到文生图界面";
-        else if (ImGui::GetTopMostPopupModal()) unavailable = "暂不可用 · 请先处理主机对话框";
-        if (web.requested) {
-            if (!unavailable.empty()) failure = unavailable;
-            else if (state.active) failure = "主机忙碌";
-            else {
-                try {
-                    if (!submit()) failure = preset_error;
-                } catch (const std::exception& error) {
-                    failure = error.what();
-                }
-            }
-            web.requested = false;
-            state         = runtime.session.snapshot();
-        }
-        web.update(state, std::move(unavailable), std::move(failure));
     }
 
     void Workspace::open_history() {
@@ -331,13 +300,7 @@ namespace genesia::editor {
         if (std::abs(prompt_sidebar.amount - target) < 0.01F) prompt_sidebar.amount = target;
         prompt_sidebar.width = std::min(800.0F * scale, size.x * 0.40F);
         canvas_size          = {std::max(1.0F, size.x - prompt_sidebar.width * prompt_sidebar.amount), size.y};
-        {
-            auto& session          = runtime.session;
-            const bool generating  = session_state.active.has_value();
-            const bool visible     = renderer.visible && generating && page == Page::generation;
-            const bool web_preview = runtime.web.watching() && generating;
-            session.configure_preview(preview_enabled || web_preview, visible || web_preview);
-        }
+        runtime.session.configure_preview(preview_enabled, renderer.visible && session_state.active && page == Page::generation);
         if (!renderer.visible) return;
         canvas(*this, scale, size);
         Picture image;

@@ -31,11 +31,10 @@ namespace genesia::editor {
             if (window.take_close_request()) {
                 closing                  = true;
                 ui.continuous_generation = false;
-                ui.runtime.web.stop();
                 ui.textures.shutdown();
                 ui.runtime.session.shutdown();
             }
-            bool busy{}, done{true}, pending{ui.textures.pending.load() || ui.runtime.web.enabled.load()};
+            bool busy{}, done{true}, pending{ui.textures.pending.load()};
             std::uint32_t stage{}, step{};
             {
                 const auto state = ui.runtime.session.snapshot();
@@ -63,7 +62,6 @@ namespace genesia::editor {
             ui.receive();
             ui.draw();
             ui.update_generation();
-            ui.update_web();
             renderer.present();
             const double wait = std::min(ui.refresh_at - glfwGetTime(), glfwGetTime() < ui.animate_until || animating ? 1.0 / 120 : busy ? 0.1 : 1.0);
             if (wait > 0) glfwWaitEventsTimeout(wait);

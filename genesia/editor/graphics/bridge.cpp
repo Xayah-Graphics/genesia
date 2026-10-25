@@ -11,8 +11,7 @@ namespace genesia::editor {
                                       auto& bridge = is_preview ? preview : interop;
                                       if (!bridge) bridge = std::make_shared<Interop>(this->device);
                                   },
-                              .publish = [this](std::uint64_t task, bool is_preview, const std::uint8_t* pixels, int width, int height, ::cuda::stream_ref stream, std::size_t slot) -> std::shared_ptr<const void> {
-                                  if (is_preview) web.capture(task, pixels, width, height, stream);
+                              .publish = [this](bool is_preview, const std::uint8_t* pixels, int width, int height, ::cuda::stream_ref stream, std::size_t slot) -> std::shared_ptr<const void> {
                                   auto& bridge     = is_preview ? preview : interop;
                                   const auto bytes = std::size_t(width) * height * 4;
                                   for (const auto& target : bridge->slots)
@@ -25,6 +24,6 @@ namespace genesia::editor {
                               },
                               .available = [this](std::size_t slot) -> bool {
                                   const auto& target = preview->slots[slot];
-                                  return web.watching() || !target.value || target.timeline.getCounterValue() >= target.value + 1;
+                                  return !target.value || target.timeline.getCounterValue() >= target.value + 1;
                               }}} {}
 } // namespace genesia::editor

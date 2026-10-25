@@ -126,7 +126,7 @@ namespace genesia::generation {
                 decoder->stream.sync();
                 ::cuda::atomic_ref<std::uint32_t, ::cuda::thread_scope_system>{control.data()[0].stage}.store(static_cast<std::uint32_t>(sdxl::Stage::complete));
                 Record record{request.parameters, request.seed, {}, std::filesystem::path{project::checkpoint}.filename()};
-                const auto ready = visuals.publish ? visuals.publish(id, false, output.device_pixels, output.width, output.height, output.stream, slot) : nullptr;
+                const auto ready = visuals.publish ? visuals.publish(false, output.device_pixels, output.width, output.height, output.stream, slot) : nullptr;
                 report({runtime::EventKind::task, id, {}, {}, {.id = id, .state = runtime::State::saving}});
                 if (ready) report({runtime::EventKind::generated, id, record, ready});
                 {
@@ -261,7 +261,7 @@ namespace genesia::generation {
                                 preview_working = true;
                                 lock.unlock();
                                 decoder->decode(source->latent.data() + std::size_t(reading) * (source->width / 8) * (source->height / 8) * 4);
-                                const auto ready = visuals.publish(task, true, decoder->pixels.data(), decoder->width, decoder->height, preview_stream, slot);
+                                const auto ready = visuals.publish(true, decoder->pixels.data(), decoder->width, decoder->height, preview_stream, slot);
                                 compute::check(cudaEventRecord(preview_finished.get(), preview_stream.get()));
                                 in_flight = runtime::PreviewFrame{task, step, decoder->width, decoder->height, ready};
                                 lock.lock();

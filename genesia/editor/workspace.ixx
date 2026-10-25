@@ -90,7 +90,6 @@ export namespace genesia::editor {
         ~Workspace();
         void receive();
         void update_generation();
-        void update_web();
         void open_history();
         void center_image(std::size_t index);
         void back();

@@ -59,7 +59,6 @@ genesia_require_dependency(nlohmann_json)
 genesia_require_dependency(cudnn)
 genesia_require_dependency(cudnn_frontend)
 genesia_require_dependency(stb)
-genesia_require_dependency(httplib)
 include(cmake/ClionCudaFacade.cmake)
 if (GENESIA_BUILD_UI)
     genesia_require_dependency(vulkan)
@@ -161,7 +160,6 @@ if (GENESIA_BUILD_UI)
             genesia/editor/widgets/controls.cpp
             genesia/editor/widgets/tag-editor.cpp
             genesia/editor/workspace.cpp
-            genesia/editor/web.cpp
             PUBLIC FILE_SET cxx_modules TYPE CXX_MODULES FILES
             genesia/editor/editor.ixx
             PRIVATE FILE_SET editor_modules TYPE CXX_MODULES FILES
@@ -180,14 +178,8 @@ if (GENESIA_BUILD_UI)
             genesia/editor/widgets/controls.ixx
             genesia/editor/widgets/tag-editor.ixx
             genesia/editor/workspace.ixx
-            genesia/editor/web.ixx
     )
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/genesia/editor/web.html")
-    file(READ "${PROJECT_SOURCE_DIR}/genesia/editor/web.html" GENESIA_WEB_PAGE)
-    file(GENERATE OUTPUT "${PROJECT_BINARY_DIR}/genesia-web-page.h"
-            CONTENT "constexpr char web_page[] = R\"GENESIA_WEB(${GENESIA_WEB_PAGE})GENESIA_WEB\";\n")
     target_compile_options(genesia_editor PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:-lineinfo;--extended-lambda>")
-    target_include_directories(genesia_editor PRIVATE "${PROJECT_BINARY_DIR}")
     target_compile_definitions(
             genesia_editor
             PRIVATE
@@ -201,13 +193,10 @@ if (GENESIA_BUILD_UI)
             genesia_core
             genesia::vulkan
             genesia::imgui
-            genesia::stb
-            genesia::httplib
             CUDA::cudart
             dwmapi
             imm32
             shell32
-            iphlpapi
     )
     add_dependencies(genesia_editor genesia_shaders)
 endif ()
@@ -407,6 +396,7 @@ target_compile_definitions(foreground PRIVATE
 target_compile_options(foreground PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:-lineinfo;--extended-lambda>")
 target_link_libraries(foreground PRIVATE tools_compute Threads::Threads genesia::stb)
 
+genesia_require_dependency(httplib)
 add_executable(qwen tools/qwen/main.cpp)
 target_sources(qwen PRIVATE
         tools/qwen/core/qwen.cpp
