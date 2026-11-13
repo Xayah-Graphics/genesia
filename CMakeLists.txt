@@ -96,6 +96,7 @@ target_sources(genesia_core
         genesia/core/prompt/presets.cpp
         genesia/core/prompt/prompt.cpp
         genesia/core/prompt/search.cpp
+        genesia/core/runtime/diagnostics.cpp
         genesia/core/runtime/session.cpp
         PUBLIC FILE_SET cxx_modules TYPE CXX_MODULES FILES
         genesia/core/compute/device.ixx
@@ -121,6 +122,7 @@ target_sources(genesia_core
         genesia/core/prompt/presets.ixx
         genesia/core/prompt/prompt.ixx
         genesia/core/prompt/search.ixx
+        genesia/core/runtime/diagnostics.ixx
         genesia/core/runtime/session.ixx
         genesia/core/runtime/tasks.ixx
 )
@@ -211,6 +213,13 @@ if (GENESIA_BUILD_UI)
     set_target_properties(genesia PROPERTIES WIN32_EXECUTABLE TRUE)
     target_compile_definitions(genesia PRIVATE GENESIA_HAS_EDITOR)
     target_link_libraries(genesia PRIVATE genesia_editor)
+endif ()
+if (MSVC)
+    set_property(TARGET genesia genesia_core PROPERTY MSVC_DEBUG_INFORMATION_FORMAT ProgramDatabase)
+    if (GENESIA_BUILD_UI)
+        set_property(TARGET genesia_editor PROPERTY MSVC_DEBUG_INFORMATION_FORMAT ProgramDatabase)
+    endif ()
+    target_link_options(genesia PRIVATE /DEBUG:FULL /OPT:REF /OPT:ICF /INCREMENTAL:NO)
 endif ()
 
 # ============================================================================

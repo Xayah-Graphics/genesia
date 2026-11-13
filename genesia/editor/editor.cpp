@@ -9,6 +9,7 @@ import genesia.editor.graphics.renderer;
 import genesia.editor.workspace;
 import genesia.prompt.presets;
 import genesia.generation.settings;
+import genesia.runtime.diagnostics;
 import std;
 
 namespace genesia::editor {
@@ -24,7 +25,7 @@ namespace genesia::editor {
 
     Application::Application(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog) : ui{std::move(preset), std::move(catalog), window, renderer} {}
 
-    void Application::run() {
+    void Application::run() try {
         std::uint32_t previous_stage{}, previous_step{};
         bool previous_busy{};
         for (;;) {
@@ -52,6 +53,7 @@ namespace genesia::editor {
                 glfwWaitEventsTimeout(std::min(busy ? 0.1 : 1.0, std::max(0.0, ui.refresh_at - now)));
                 continue;
             }
+            if (stage != previous_stage || step / 10 != previous_step / 10 || busy != previous_busy) diagnostics::record("editor.progress", std::format("stage={} step={} busy={}", stage, step, busy));
             previous_stage = stage;
             previous_step  = step;
             previous_busy  = busy;
@@ -67,6 +69,9 @@ namespace genesia::editor {
             if (wait > 0) glfwWaitEventsTimeout(wait);
             else glfwPollEvents();
         }
+    } catch (const std::exception& error) {
+        diagnostics::record("editor.exception", error.what());
+        throw;
     }
 
     int run(const std::span<const std::string_view> arguments) {

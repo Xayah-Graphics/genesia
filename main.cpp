@@ -8,6 +8,7 @@
 #endif
 import genesia.headless;
 import genesia.io.files;
+import genesia.runtime.diagnostics;
 #if defined(GENESIA_HAS_EDITOR)
 import genesia.editor;
 #endif
@@ -46,6 +47,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 int main(const int argc, char** argv) {
     bool editor = false;
 #endif
+    bool logging{};
     try {
         const std::vector<std::string_view> values{argv + 1, argv + argc};
         std::span<const std::string_view> arguments{values};
@@ -57,11 +59,18 @@ int main(const int argc, char** argv) {
         if (!editor) attach_console();
 #endif
         const genesia::files::Instance instance;
+        genesia::diagnostics::initialize(editor);
+        logging = true;
+        int result;
 #if defined(GENESIA_HAS_EDITOR)
-        if (editor) return genesia::editor::run(arguments);
+        if (editor) result = genesia::editor::run(arguments);
+        else
 #endif
-        return genesia::headless::run(arguments);
+            result = genesia::headless::run(arguments);
+        genesia::diagnostics::record("process.exit", std::format("code={}", result));
+        return result;
     } catch (const std::exception& error) {
+        if (logging) genesia::diagnostics::record("main.exception", error.what());
 #if defined(_WIN32)
         if (editor) MessageBoxA(nullptr, error.what(), "Genesia", MB_OK | MB_ICONERROR);
         else
