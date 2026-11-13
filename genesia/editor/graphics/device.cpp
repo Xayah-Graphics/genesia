@@ -22,8 +22,8 @@ namespace genesia::editor::graphics {
                 family = i;
                 break;
             }
-        std::vector<const char*> extensions{vk::EXTDescriptorHeapExtensionName, vk::KHRShaderUntypedPointersExtensionName, vk::EXTShaderObjectExtensionName, vk::KHRExternalMemoryWin32ExtensionName, vk::KHRExternalSemaphoreWin32ExtensionName, vk::KHRSwapchainExtensionName};
-        vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan12Features, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceDescriptorHeapFeaturesEXT, vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR, vk::PhysicalDeviceShaderObjectFeaturesEXT> features;
+        std::vector<const char*> extensions{vk::EXTDescriptorHeapExtensionName, vk::KHRShaderUntypedPointersExtensionName, vk::EXTShaderObjectExtensionName, vk::KHRExternalMemoryWin32ExtensionName, vk::KHRExternalSemaphoreWin32ExtensionName, vk::KHRSwapchainExtensionName, vk::NVDeviceDiagnosticCheckpointsExtensionName, vk::NVDeviceDiagnosticsConfigExtensionName};
+        vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan12Features, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceDescriptorHeapFeaturesEXT, vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR, vk::PhysicalDeviceShaderObjectFeaturesEXT, vk::PhysicalDeviceDiagnosticsConfigFeaturesNV> features;
         features.get<vk::PhysicalDeviceFeatures2>().features.shaderInt64        = true;
         features.get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters = true;
         auto& v12                                                               = features.get<vk::PhysicalDeviceVulkan12Features>();
@@ -33,13 +33,11 @@ namespace genesia::editor::graphics {
         features.get<vk::PhysicalDeviceDescriptorHeapFeaturesEXT>().descriptorHeap               = true;
         features.get<vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR>().shaderUntypedPointers = true;
         features.get<vk::PhysicalDeviceShaderObjectFeaturesEXT>().shaderObject                   = true;
+        features.get<vk::PhysicalDeviceDiagnosticsConfigFeaturesNV>().diagnosticsConfig          = true;
+        const vk::DeviceDiagnosticsConfigCreateInfoNV diagnostics_config{vk::DeviceDiagnosticsConfigFlagBitsNV::eEnableResourceTracking | vk::DeviceDiagnosticsConfigFlagBitsNV::eEnableShaderDebugInfo | vk::DeviceDiagnosticsConfigFlagBitsNV::eEnableShaderErrorReporting, &features.get<vk::PhysicalDeviceFeatures2>()};
         const std::array priorities{1.0F};
         const vk::DeviceQueueCreateInfo queues{{}, family, 1, priorities.data()};
-        logical  = vk::raii::Device{physical, vk::DeviceCreateInfo{{}, 1, &queues, 0, nullptr, static_cast<std::uint32_t>(extensions.size()), extensions.data(), nullptr, &features.get<vk::PhysicalDeviceFeatures2>()}};
+        logical  = vk::raii::Device{physical, vk::DeviceCreateInfo{{}, 1, &queues, 0, nullptr, static_cast<std::uint32_t>(extensions.size()), extensions.data(), nullptr, &diagnostics_config}};
         graphics = logical.getQueue(family, 0);
-    }
-
-    Device::~Device() {
-        if (*logical) logical.waitIdle();
     }
 } // namespace genesia::editor::graphics

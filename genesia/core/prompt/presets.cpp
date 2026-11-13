@@ -48,11 +48,7 @@ namespace genesia::prompt {
                 output["groups"].push_back({{"enabled", group.enabled}, {"tags", std::move(tags)}});
             }
         }
-        std::filesystem::create_directories(directory / "presets");
-        std::ofstream file{directory / "presets" / files::path(preset.name + ".json"), std::ios::out | (replace ? std::ios::trunc : std::ios::noreplace)};
-        file.exceptions(std::ios::badbit | std::ios::failbit);
-        file << json.dump(2) << '\n';
-        file.close();
+        files::write_json(directory / "presets" / files::path(preset.name + ".json"), json, 2, replace);
     }
 
     std::vector<std::string> list_presets() {
@@ -64,10 +60,6 @@ namespace genesia::prompt {
     }
 
     void export_prompt(const std::string_view name, const std::array<std::string, 2>& text) {
-        std::filesystem::create_directories(directory / "exports");
-        std::ofstream file{directory / "exports" / files::path(std::string{name} + ".json")};
-        file.exceptions(std::ios::badbit | std::ios::failbit);
-        file << nlohmann::json{{"positive", text[0]}, {"negative", text[1]}}.dump(2) << '\n';
-        file.close();
+        files::write_json(directory / "exports" / files::path(std::string{name} + ".json"), {{"positive", text[0]}, {"negative", text[1]}}, 2);
     }
 } // namespace genesia::prompt

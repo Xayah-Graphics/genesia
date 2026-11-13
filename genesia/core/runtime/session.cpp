@@ -7,17 +7,16 @@ import std;
 namespace genesia::runtime {
     Session::Session(generation::Visuals hooks) : visuals{std::move(hooks)}, worker{[this] { run(); }} {}
     Session::~Session() {
-        shutdown();
-        worker.join();
+        finish();
     }
-    TaskStatus Session::submit(Generate request) {
+    std::optional<TaskStatus> Session::submit(Generate request) {
         std::ranges::sort(request.parameters.loras, {}, &generation::Lora::file);
         request.parameters.positive = generation::positive_prompt(request.parameters);
         TaskStatus initial;
         {
             const std::lock_guard lock{mutex};
             if (closing) throw std::runtime_error{"Genesia is closing"};
-            if (active) throw std::runtime_error{"Finish the current generation first"};
+            if (active) return std::nullopt;
             const auto count = request.count;
             active           = TaskStatus{.id = next_id++, .total = std::size_t(count), .started = std::chrono::steady_clock::now(), .request = std::make_shared<const Generate>(std::move(request))};
             interrupted      = false;
@@ -54,6 +53,10 @@ namespace genesia::runtime {
             if (generation) generation->cancel();
         }
         condition.notify_one();
+    }
+    void Session::finish() {
+        shutdown();
+        if (worker.joinable()) worker.join();
     }
     Snapshot Session::snapshot() {
         Snapshot result;

@@ -11,6 +11,7 @@ module genesia.runtime.diagnostics;
 import std;
 
 namespace genesia::diagnostics {
+    std::filesystem::path log_path;
     namespace {
         // Keep the log open until process exit, including static destruction and fatal handlers.
 #if defined(_WIN32)
@@ -73,12 +74,12 @@ namespace genesia::diagnostics {
 #else
         const auto process = getpid();
 #endif
-        const auto path = directory / std::format("genesia-{:%Y%m%d-%H%M%S}-{}.log", std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()), process);
+        log_path = directory / std::format("genesia-{:%Y%m%d-%H%M%S}-{}.log", std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()), process);
 #if defined(_WIN32)
-        file = CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+        file = CreateFileW(log_path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (file == INVALID_HANDLE_VALUE) throw std::system_error{static_cast<int>(GetLastError()), std::system_category(), "Create Genesia diagnostic log"};
 #else
-        file = open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_APPEND | O_CLOEXEC, 0600);
+        file = open(log_path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_APPEND | O_CLOEXEC, 0600);
         if (file == -1) throw std::system_error{errno, std::generic_category(), "Create Genesia diagnostic log"};
 #endif
         std::set_terminate([] {

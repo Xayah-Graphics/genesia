@@ -2,9 +2,9 @@ module;
 #if defined(_WIN32)
 #include <windows.h>
 #else
+#include <cerrno>
 #include <fcntl.h>
 #include <linux/fs.h>
-#include <sys/file.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 #endif
@@ -87,40 +87,6 @@ namespace genesia::files {
         state[7] += h;
     }
 
-    Instance::Instance() {
-        const std::filesystem::path directory{GENESIA_RUNTIME_DIRECTORY};
-        std::filesystem::create_directories(directory);
-        const auto path = directory / "genesia-instance.lock";
-#if defined(_WIN32)
-        const auto file = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (file == INVALID_HANDLE_VALUE) throw std::system_error{static_cast<int>(GetLastError()), std::system_category(), "Open Genesia instance lock"};
-        OVERLAPPED operation{};
-        if (!LockFileEx(file, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &operation)) {
-            const auto error = GetLastError();
-            CloseHandle(file);
-            if (error == ERROR_LOCK_VIOLATION) throw std::runtime_error{"Genesia is already running"};
-            throw std::system_error{static_cast<int>(error), std::system_category(), "Lock Genesia instance"};
-        }
-        handle = reinterpret_cast<std::intptr_t>(file);
-#else
-        handle = open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0666);
-        if (handle == -1) throw std::system_error{errno, std::generic_category(), "Open Genesia instance lock"};
-        if (flock(static_cast<int>(handle), LOCK_EX | LOCK_NB) == -1) {
-            const auto error = errno;
-            close(static_cast<int>(handle));
-            if (error == EWOULDBLOCK) throw std::runtime_error{"Genesia is already running"};
-            throw std::system_error{error, std::generic_category(), "Lock Genesia instance"};
-        }
-#endif
-    }
-    Instance::~Instance() {
-#if defined(_WIN32)
-        CloseHandle(reinterpret_cast<HANDLE>(handle));
-#else
-        close(static_cast<int>(handle));
-#endif
-    }
-
     std::string utf8(const std::filesystem::path& path) {
         const auto text = path.generic_u8string();
         return {text.begin(), text.end()};
@@ -128,39 +94,78 @@ namespace genesia::files {
     std::filesystem::path path(const std::string_view text) {
         return std::filesystem::path{std::u8string{text.begin(), text.end()}};
     }
-    nlohmann::json read_json(const std::filesystem::path& path) {
-        std::ifstream file{path};
-        file.exceptions(std::ios::badbit | std::ios::failbit);
-        return nlohmann::json::parse(file);
+    std::string random_id() {
+        std::random_device random;
+        std::uniform_int_distribution<std::uint64_t> bits;
+        return std::format("{:016x}{:016x}", bits(random), bits(random));
     }
-    void write_json(const std::filesystem::path& path, const nlohmann::json& value) {
-        std::filesystem::create_directories(path.parent_path());
-        auto temporary = path;
-        temporary += ".part";
-        std::ofstream file{temporary, std::ios::binary | std::ios::trunc};
-        file.exceptions(std::ios::badbit | std::ios::failbit);
-        file << value.dump();
-        file.close();
-        publish(temporary, path);
+    nlohmann::json read_json(const std::filesystem::path& path) {
+        return nlohmann::json::parse(read_bytes(path));
+    }
+    void write_json(const std::filesystem::path& path, const nlohmann::json& value, const int indent, const bool replace) {
+        auto text = value.dump(indent);
+        if (indent >= 0) text += '\n';
+        write_bytes(path, {reinterpret_cast<const std::uint8_t*>(text.data()), text.size()}, replace);
     }
     std::vector<std::uint8_t> read_bytes(const std::filesystem::path& path) {
+#if defined(_WIN32)
+        const auto file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+        if (file == INVALID_HANDLE_VALUE) throw std::system_error{static_cast<int>(GetLastError()), std::system_category(), "Open " + utf8(path)};
+        const std::unique_ptr<void, decltype(&CloseHandle)> handle{file, CloseHandle};
+        LARGE_INTEGER size;
+        if (!GetFileSizeEx(file, &size)) throw std::system_error{static_cast<int>(GetLastError()), std::system_category(), "Read size of " + utf8(path)};
+        std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size.QuadPart));
+        for (std::size_t offset = 0; offset < bytes.size();) {
+            const auto count = static_cast<DWORD>(std::min(bytes.size() - offset, std::size_t{MAXDWORD}));
+            DWORD read;
+            if (!ReadFile(file, bytes.data() + offset, count, &read, nullptr)) throw std::system_error{static_cast<int>(GetLastError()), std::system_category(), "Read " + utf8(path)};
+            if (!read) throw std::runtime_error{"Unexpected end of " + utf8(path)};
+            offset += read;
+        }
+#else
         std::ifstream file{path, std::ios::binary | std::ios::ate};
         file.exceptions(std::ios::badbit | std::ios::failbit);
         std::vector<std::uint8_t> bytes(static_cast<std::size_t>(file.tellg()));
         file.seekg(0);
         file.read(reinterpret_cast<char*>(bytes.data()), bytes.size());
+#endif
         return bytes;
     }
 
-    void write_bytes(const std::filesystem::path& path, const std::span<const std::uint8_t> bytes) {
+    void write_bytes(const std::filesystem::path& path, const std::span<const std::uint8_t> bytes, const bool replace) {
         std::filesystem::create_directories(path.parent_path());
-        auto temporary = path;
-        temporary += ".part";
-        std::ofstream file{temporary, std::ios::binary | std::ios::trunc};
+        const auto temporary = path.parent_path() / (random_id() + ".part");
+        std::ofstream file;
         file.exceptions(std::ios::badbit | std::ios::failbit);
-        file.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-        file.close();
-        publish(temporary, path);
+        file.open(temporary, std::ios::binary | std::ios::noreplace);
+        try {
+            file.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+            file.close();
+#if defined(_WIN32)
+            const auto source = CreateFileW(temporary.c_str(), DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (source == INVALID_HANDLE_VALUE) throw std::system_error{static_cast<int>(GetLastError()), std::system_category(), "Open " + utf8(temporary)};
+            const std::unique_ptr<void, decltype(&CloseHandle)> handle{source, CloseHandle};
+            const auto destination = std::filesystem::absolute(path).native();
+            const auto name_bytes = destination.size() * sizeof(wchar_t);
+            const auto size = sizeof(FILE_RENAME_INFO) + name_bytes;
+            const auto storage = std::make_unique<std::byte[]>(size);
+            const auto info = std::start_lifetime_as<FILE_RENAME_INFO>(storage.get());
+            info->Flags = replace ? FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS : 0;
+            info->RootDirectory = nullptr;
+            info->FileNameLength = static_cast<DWORD>(name_bytes);
+            std::memcpy(storage.get() + offsetof(FILE_RENAME_INFO, FileName), destination.data(), name_bytes);
+            if (!SetFileInformationByHandle(source, FileRenameInfoEx, info, static_cast<DWORD>(size))) throw std::system_error{static_cast<int>(GetLastError()), std::system_category(), "Publish " + utf8(path)};
+#else
+            if (replace) std::filesystem::rename(temporary, path);
+            else if (syscall(SYS_renameat2, AT_FDCWD, temporary.c_str(), AT_FDCWD, path.c_str(), RENAME_NOREPLACE)) throw std::system_error{errno, std::system_category(), "Publish " + utf8(path)};
+#endif
+        } catch (...) {
+            file.exceptions(std::ios::goodbit);
+            file.close();
+            std::error_code error;
+            std::filesystem::remove(temporary, error);
+            throw;
+        }
     }
     std::string digest(const std::filesystem::path& path) {
         std::ifstream file{path, std::ios::binary};
@@ -173,20 +178,5 @@ namespace genesia::files {
         std::string result;
         for (const auto byte : hash.finish()) result += std::format("{:02x}", byte);
         return result;
-    }
-    void publish(const std::filesystem::path& source, const std::filesystem::path& destination) {
-#if defined(_WIN32)
-        if (!MoveFileExW(source.c_str(), destination.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) throw std::system_error{static_cast<int>(GetLastError()), std::system_category(), "Publish " + utf8(destination)};
-#else
-        std::filesystem::rename(source, destination);
-#endif
-    }
-    void move(const std::filesystem::path& source, const std::filesystem::path& destination) {
-        std::filesystem::create_directories(destination.parent_path());
-#if defined(_WIN32)
-        if (!MoveFileExW(source.c_str(), destination.c_str(), MOVEFILE_WRITE_THROUGH)) throw std::system_error{static_cast<int>(GetLastError()), std::system_category(), "Move " + utf8(source) + " -> " + utf8(destination)};
-#else
-        if (syscall(SYS_renameat2, AT_FDCWD, source.c_str(), AT_FDCWD, destination.c_str(), RENAME_NOREPLACE)) throw std::system_error{errno, std::system_category(), "Move " + utf8(source) + " -> " + utf8(destination)};
-#endif
     }
 } // namespace genesia::files

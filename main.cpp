@@ -7,7 +7,7 @@
 #include <cstdlib>
 #endif
 import genesia.headless;
-import genesia.io.files;
+import genesia.lan;
 import genesia.runtime.diagnostics;
 #if defined(GENESIA_HAS_EDITOR)
 import genesia.editor;
@@ -51,14 +51,14 @@ int main(const int argc, char** argv) {
     try {
         const std::vector<std::string_view> values{argv + 1, argv + argc};
         std::span<const std::string_view> arguments{values};
-        if (!arguments.empty() && arguments.front() == "--headless") {
+        const bool lan = !arguments.empty() && arguments.front() == "--lan";
+        if (lan || (!arguments.empty() && arguments.front() == "--headless")) {
             editor    = false;
             arguments = arguments.subspan(1);
         }
 #if defined(_WIN32)
         if (!editor) attach_console();
 #endif
-        const genesia::files::Instance instance;
         genesia::diagnostics::initialize(editor);
         logging = true;
         int result;
@@ -66,7 +66,7 @@ int main(const int argc, char** argv) {
         if (editor) result = genesia::editor::run(arguments);
         else
 #endif
-            result = genesia::headless::run(arguments);
+            result = lan ? genesia::lan::run(arguments) : genesia::headless::run(arguments);
         genesia::diagnostics::record("process.exit", std::format("code={}", result));
         return result;
     } catch (const std::exception& error) {

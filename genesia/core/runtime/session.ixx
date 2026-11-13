@@ -6,10 +6,11 @@ export namespace genesia::runtime {
     struct Session final {
         explicit Session(generation::Visuals visuals = {});
         ~Session();
-        TaskStatus submit(Generate request);
+        std::optional<TaskStatus> submit(Generate request);
         void configure_preview(bool enabled, bool visible);
         void cancel(std::uint64_t id);
         void shutdown();
+        void finish();
         Snapshot snapshot();
         Delivery drain();
 

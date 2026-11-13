@@ -10,6 +10,7 @@ import genesia.editor.graphics.bridge;
 import genesia.editor.viewing.textures;
 import genesia.editor.viewing.camera;
 import genesia.editor.widgets.controls;
+import genesia.lan;
 import std;
 export namespace genesia::editor {
     struct Workspace final {
@@ -60,6 +61,8 @@ export namespace genesia::editor {
         WindowPlatform& window;
         Renderer& renderer;
         WorkspaceRuntime runtime;
+        std::optional<lan::Server> lan_server;
+        std::string lan_url;
         TextureCache textures;
         generation::Settings draft;
         prompt::Pair prompt;

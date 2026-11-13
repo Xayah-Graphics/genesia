@@ -58,10 +58,12 @@ genesia_require_dependency(threads)
 genesia_require_dependency(nlohmann_json)
 genesia_require_dependency(cudnn)
 genesia_require_dependency(cudnn_frontend)
+genesia_require_dependency(httplib)
 genesia_require_dependency(stb)
 include(cmake/ClionCudaFacade.cmake)
 if (GENESIA_BUILD_UI)
     genesia_require_dependency(vulkan)
+    genesia_require_dependency(aftermath)
     genesia_require_dependency(slang)
     genesia_require_dependency(imgui)
     include(cmake/Shaders.cmake)
@@ -139,6 +141,22 @@ target_link_libraries(genesia_core PUBLIC
         PRIVATE genesia::cudnn-frontend genesia::stb CUDA::cuda_driver CUDA::nvrtc)
 
 # ============================================================================
+# LAN
+# ============================================================================
+add_library(genesia_lan STATIC)
+target_sources(genesia_lan PRIVATE genesia/lan/lan.cpp
+        PUBLIC FILE_SET cxx_modules TYPE CXX_MODULES FILES genesia/lan/lan.ixx)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/genesia/lan/index.html")
+file(READ "${PROJECT_SOURCE_DIR}/genesia/lan/index.html" GENESIA_LAN_PAGE)
+file(GENERATE OUTPUT "${PROJECT_BINARY_DIR}/generated/genesia-lan-page.h"
+        CONTENT "constexpr char page[] = R\"GENESIA_LAN(${GENESIA_LAN_PAGE})GENESIA_LAN\";\n")
+target_include_directories(genesia_lan PRIVATE "${PROJECT_BINARY_DIR}/generated")
+target_link_libraries(genesia_lan PUBLIC genesia_core genesia::httplib PRIVATE genesia::stb)
+if (WIN32)
+    target_link_libraries(genesia_lan PRIVATE iphlpapi)
+endif ()
+
+# ============================================================================
 # Editor
 # ============================================================================
 if (GENESIA_BUILD_UI)
@@ -148,6 +166,7 @@ if (GENESIA_BUILD_UI)
             genesia/editor/editor.cpp
             genesia/editor/panels/loras.cpp
             genesia/editor/graphics/device.cpp
+            genesia/editor/graphics/diagnostics.cpp
             genesia/editor/graphics/interop.cpp
             genesia/editor/graphics/interop.cu
             genesia/editor/graphics/bridge.cpp
@@ -167,6 +186,7 @@ if (GENESIA_BUILD_UI)
             PRIVATE FILE_SET editor_modules TYPE CXX_MODULES FILES
             genesia/editor/panels/loras.ixx
             genesia/editor/graphics/device.ixx
+            genesia/editor/graphics/diagnostics.ixx
             genesia/editor/graphics/interop.ixx
             genesia/editor/graphics/bridge.ixx
             genesia/editor/graphics/renderer.ixx
@@ -188,17 +208,21 @@ if (GENESIA_BUILD_UI)
             GLFW_INCLUDE_NONE
             GLFW_EXPOSE_NATIVE_WIN32
             GENESIA_SHADER_DIRECTORY="${GENESIA_SHADER_OUTPUT_DIRECTORY}"
+            GENESIA_VERSION="${PROJECT_VERSION}"
     )
     target_link_libraries(
             genesia_editor
             PRIVATE
             genesia_core
+            genesia_lan
             genesia::vulkan
+            genesia::aftermath
             genesia::imgui
             CUDA::cudart
             dwmapi
             imm32
             shell32
+            dbghelp
     )
     add_dependencies(genesia_editor genesia_shaders)
 endif ()
@@ -208,14 +232,18 @@ endif ()
 # ============================================================================
 add_executable(genesia main.cpp)
 target_compile_definitions(genesia_core PRIVATE GENESIA_VERSION="${PROJECT_VERSION}")
-target_link_libraries(genesia PRIVATE genesia_core)
+target_link_libraries(genesia PRIVATE genesia_lan)
 if (GENESIA_BUILD_UI)
     set_target_properties(genesia PROPERTIES WIN32_EXECUTABLE TRUE)
     target_compile_definitions(genesia PRIVATE GENESIA_HAS_EDITOR)
     target_link_libraries(genesia PRIVATE genesia_editor)
+    add_custom_command(TARGET genesia POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:genesia::aftermath>" "$<TARGET_FILE_DIR:genesia>"
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${aftermath_SOURCE_DIR}/LICENSE" "$<TARGET_FILE_DIR:genesia>/NVIDIA_Nsight_Aftermath_LICENSE.txt"
+            VERBATIM)
 endif ()
 if (MSVC)
-    set_property(TARGET genesia genesia_core PROPERTY MSVC_DEBUG_INFORMATION_FORMAT ProgramDatabase)
+    set_property(TARGET genesia genesia_core genesia_lan PROPERTY MSVC_DEBUG_INFORMATION_FORMAT ProgramDatabase)
     if (GENESIA_BUILD_UI)
         set_property(TARGET genesia_editor PROPERTY MSVC_DEBUG_INFORMATION_FORMAT ProgramDatabase)
     endif ()
@@ -405,7 +433,6 @@ target_compile_definitions(foreground PRIVATE
 target_compile_options(foreground PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:-lineinfo;--extended-lambda>")
 target_link_libraries(foreground PRIVATE tools_compute Threads::Threads genesia::stb)
 
-genesia_require_dependency(httplib)
 add_executable(qwen tools/qwen/main.cpp)
 target_sources(qwen PRIVATE
         tools/qwen/core/qwen.cpp

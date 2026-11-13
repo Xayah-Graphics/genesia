@@ -23,10 +23,6 @@ namespace genesia::editor {
         }
     }
 
-    Interop::~Interop() {
-        device.logical.waitIdle();
-    }
-
     void Interop::prepare(const int width, const int height, const ::cuda::stream_ref stream) {
         const auto bytes = std::size_t(width) * height * 4;
         for (auto& slot : slots) {

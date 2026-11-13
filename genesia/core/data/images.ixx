@@ -3,6 +3,7 @@ export import genesia.generation.settings;
 import std;
 
 export namespace genesia {
+    std::vector<std::filesystem::path> list_output_images();
     struct Record final {
         generation::Settings parameters;
         std::uint64_t seed{};

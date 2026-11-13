@@ -13,6 +13,7 @@ export namespace genesia::generation {
         std::function<void(bool)> prepare;
         std::function<std::shared_ptr<const void>(bool, const std::uint8_t*, int, int, ::cuda::stream_ref, std::size_t)> publish;
         std::function<bool(std::size_t)> available;
+        std::function<std::shared_ptr<const std::uint8_t>(const std::uint8_t*, int, int, ::cuda::stream_ref)> capture;
     };
     struct Engine final {
         Engine(Visuals visuals, std::function<void(runtime::Event)> report, std::function<void(runtime::PreviewFrame)> preview);
@@ -28,6 +29,7 @@ export namespace genesia::generation {
         struct Active final {
             std::uint64_t id;
             int steps;
+            bool capture_preview;
         };
         Visuals visuals;
         std::function<void(runtime::Event)> report;

@@ -9,6 +9,7 @@ export namespace genesia::runtime {
         int count{1};
         bool random_seed{};
         std::filesystem::path output{project::output};
+        bool capture_preview{};
     };
     enum class State { running, saving, complete, stopped, failed };
     inline constexpr std::array<std::string_view, 5> states{"running", "saving", "complete", "stopped", "failed"};
@@ -38,6 +39,7 @@ export namespace genesia::runtime {
         std::uint32_t step{};
         int width{}, height{};
         std::shared_ptr<const void> frame;
+        std::shared_ptr<const std::uint8_t> pixels;
     };
     enum class GenerationStage { idle, loading, preparing, sampling, decoding, transferring, complete, cancelled };
     struct GenerationProgress final {

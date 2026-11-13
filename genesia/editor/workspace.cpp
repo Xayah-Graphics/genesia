@@ -68,9 +68,12 @@ namespace genesia::editor {
     }
 
     void Workspace::receive() {
-        auto [events, previews] = runtime.session.drain();
-        session_state          = runtime.session.snapshot();
+        auto delivery = runtime.session.drain();
+        if (lan_server) lan_server->receive(delivery);
+        auto& [events, previews] = delivery;
+        session_state = runtime.session.snapshot();
         for (const auto& frame : previews) {
+            if (!frame.frame) continue;
             const auto presentation = std::static_pointer_cast<const PresentedFrame>(frame.frame);
             auto& source            = presentation->bridge->slots[presentation->slot];
             const bool final_ready  = std::ranges::any_of(events, [&](const runtime::Event& event) { return event.kind == runtime::EventKind::generated && event.id == frame.id; });
@@ -282,8 +285,10 @@ namespace genesia::editor {
             std::random_device random;
             seed = std::uniform_int_distribution<std::uint64_t>{}(random);
         }
-        task          = runtime.session.submit({parameters(), seed});
+        const auto submitted = runtime.session.submit({parameters(), seed});
         session_state = runtime.session.snapshot();
+        if (!submitted) return false;
+        task          = std::move(submitted);
         animate_until = glfwGetTime() + 0.2;
         return true;
     }

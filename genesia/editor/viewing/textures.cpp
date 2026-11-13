@@ -1,5 +1,4 @@
 module;
-#include <Windows.h>
 #include <GLFW/glfw3.h>
 module genesia.editor.viewing.textures;
 import genesia.io.files;
@@ -152,18 +151,7 @@ namespace genesia::editor {
                 std::vector<std::filesystem::path> paths;
                 std::string failure;
                 try {
-                    std::filesystem::create_directories(project::output);
-                    std::vector<std::pair<std::uint64_t, std::filesystem::path>> images;
-                    for (const auto& entry : std::filesystem::directory_iterator{project::output}) {
-                        if (!entry.is_regular_file() || entry.path().extension() != ".png") continue;
-                        WIN32_FILE_ATTRIBUTE_DATA attributes;
-                        if (!GetFileAttributesExW(entry.path().c_str(), GetFileExInfoStandard, &attributes)) throw std::system_error{static_cast<int>(GetLastError()), std::system_category(), "Read image creation time: " + files::utf8(entry.path())};
-                        const auto created = (std::uint64_t{attributes.ftCreationTime.dwHighDateTime} << 32) | attributes.ftCreationTime.dwLowDateTime;
-                        images.emplace_back(created, entry.path());
-                    }
-                    std::ranges::sort(images);
-                    paths.reserve(images.size());
-                    for (auto& [created, path] : images) paths.push_back(std::move(path));
+                    paths = list_output_images();
                 } catch (const std::exception& error) {
                     failure = error.what();
                 }

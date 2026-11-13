@@ -9,6 +9,7 @@ import genesia.editor.platform.window;
 import genesia.editor.graphics.device;
 import genesia.editor.graphics.resources;
 import genesia.data.images;
+import genesia.runtime.diagnostics;
 import std;
 import vulkan;
 
@@ -32,7 +33,8 @@ namespace genesia::editor {
             file.read(reinterpret_cast<char*>(code[i].data()), code[i].size() * 4);
             info[i] = {vk::ShaderCreateFlagBitsEXT::eLinkStage | vk::ShaderCreateFlagBitsEXT::eDescriptorHeap, i == 0 ? vk::ShaderStageFlagBits::eVertex : vk::ShaderStageFlagBits::eFragment, i == 0 ? vk::ShaderStageFlagBits::eFragment : vk::ShaderStageFlags{}, vk::ShaderCodeTypeEXT::eSpirv, code[i].size() * 4, code[i].data(), names[i]};
         }
-        shaders = vk::raii::ShaderEXTs{device.logical, info};
+        shaders                    = vk::raii::ShaderEXTs{device.logical, info};
+        device.diagnostics.shaders = std::move(code);
         device.logical.writeSamplerDescriptorsEXT(vk::SamplerCreateInfo{{}, vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerMipmapMode::eNearest, vk::SamplerAddressMode::eClampToEdge, vk::SamplerAddressMode::eClampToEdge, vk::SamplerAddressMode::eClampToEdge}, vk::HostAddressRangeEXT{resources.sampler_heap.mapped, device.heap_properties.samplerDescriptorSize});
         ImGui::CreateContext();
         auto& io               = ImGui::GetIO();
@@ -57,7 +59,6 @@ namespace genesia::editor {
     }
 
     Renderer::~Renderer() {
-        device.logical.waitIdle();
         for (auto* texture : ImGui::GetPlatformIO().Textures) {
             texture->BackendUserData = nullptr;
             texture->SetTexID(ImTextureID_Invalid);
@@ -74,6 +75,11 @@ namespace genesia::editor {
         if (visible && (extent.width != width || extent.height != height)) recreate();
         auto& frame = frames[frame_index];
         static_cast<void>(device.logical.waitForFences(*frame.finished, true, std::numeric_limits<std::uint64_t>::max()));
+        frame.submission = ++submission;
+        frame.submitted  = false;
+        frame.waits.clear();
+        frame.signals.clear();
+        frame.transfers.clear();
         frame.uploads.clear();
         frame.retired.clear();
         free_descriptors.insert(free_descriptors.end(), frame.recycled.begin(), frame.recycled.end());
@@ -90,8 +96,7 @@ namespace genesia::editor {
         device.logical.resetFences(*frame.finished);
         commands[frame_index].reset();
         commands[frame_index].begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-        waits.clear();
-        signals.clear();
+        commands[frame_index].setCheckpointNV("frame.begin");
         float scale, vertical;
         glfwGetWindowContentScale(window.window, &scale, &vertical);
         if (scale != dpi || !window.hand_cursors[0]) window.prepare_hand_cursors(scale);
@@ -118,13 +123,16 @@ namespace genesia::editor {
         update_fonts();
         if (visible) draw();
         const auto& command = commands[frame_index];
+        auto& frame         = frames[frame_index];
+        command.setCheckpointNV("frame.end");
         command.end();
         if (visible) {
-            waits.emplace_back(*frames[frame_index].available, 0, vk::PipelineStageFlagBits2::eColorAttachmentOutput);
-            signals.emplace_back(*rendered[image_index], 0, vk::PipelineStageFlagBits2::eAllCommands);
+            frame.waits.emplace_back(*frame.available, 0, vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+            frame.signals.emplace_back(*rendered[image_index], 0, vk::PipelineStageFlagBits2::eAllCommands);
         }
         const vk::CommandBufferSubmitInfo submitted{*command};
-        device.graphics.submit2(vk::SubmitInfo2{{}, static_cast<std::uint32_t>(waits.size()), waits.data(), 1, &submitted, static_cast<std::uint32_t>(signals.size()), signals.data()}, *frames[frame_index].finished);
+        device.graphics.submit2(vk::SubmitInfo2{{}, static_cast<std::uint32_t>(frame.waits.size()), frame.waits.data(), 1, &submitted, static_cast<std::uint32_t>(frame.signals.size()), frame.signals.data()}, *frame.finished);
+        frame.submitted      = true;
         const auto semaphore = *rendered[image_index];
         const auto chain     = *swapchain;
         try {
@@ -133,6 +141,22 @@ namespace genesia::editor {
             extent = vk::Extent2D{};
         }
         frame_index = (frame_index + 1) % frames.size();
+    }
+
+    void Renderer::diagnose(const std::string_view reason) {
+        try {
+            diagnostics::record("gpu.renderer", std::format("frame={} submission={} image={} visible={}", frame_index, submission, image_index, visible));
+            for (const auto& frame : frames) {
+                diagnostics::record("gpu.submission", std::format("id={} submitted={} waits={} signals={}", frame.submission, frame.submitted, frame.waits.size(), frame.signals.size()));
+                for (const auto& wait : frame.waits) diagnostics::record("gpu.wait", std::format("submission={} semaphore=0x{:x} value={} stage=0x{:x}", frame.submission, std::bit_cast<std::uint64_t>(wait.semaphore), wait.value, static_cast<std::uint64_t>(wait.stageMask)));
+                for (const auto& signal : frame.signals) diagnostics::record("gpu.signal", std::format("submission={} semaphore=0x{:x} value={} stage=0x{:x}", frame.submission, std::bit_cast<std::uint64_t>(signal.semaphore), signal.value, static_cast<std::uint64_t>(signal.stageMask)));
+                for (const auto& transfer : frame.transfers) diagnostics::record("gpu.transfer", std::format("submission={} upload={} texture={} source=0x{:x} bytes={}", frame.submission, transfer.upload, transfer.texture, transfer.source, transfer.bytes));
+            }
+            for (const auto& checkpoint : device.graphics.getCheckpointData2NV()) diagnostics::record("gpu.checkpoint", std::format("stage=0x{:x} marker={}", static_cast<std::uint64_t>(checkpoint.stage), checkpoint.pCheckpointMarker ? static_cast<const char*>(checkpoint.pCheckpointMarker) : "none"));
+        } catch (const std::exception& error) {
+            diagnostics::record("gpu.checkpoint.error", error.what());
+        }
+        device.diagnostics.capture(reason);
     }
 
     std::uint64_t Renderer::texture(const vk::Extent2D extent, const vk::Format format) {
@@ -158,21 +182,27 @@ namespace genesia::editor {
     void Renderer::upload(const std::uint64_t id, const void* pixels, const int width, const int height, const bool initial) {
         auto& image   = textures.at(id).image;
         auto& staging = frames[frame_index].uploads.emplace_back(device, std::size_t(width) * height * 4, true);
+        frames[frame_index].transfers.push_back({true, id, staging.address, staging.size});
         std::memcpy(staging.mapped, pixels, staging.size);
         const auto& command = commands[frame_index];
+        command.setCheckpointNV("upload.begin");
         const vk::ImageMemoryBarrier2 transfer{initial ? vk::PipelineStageFlagBits2::eNone : vk::PipelineStageFlagBits2::eFragmentShader, initial ? vk::AccessFlags2{} : vk::AccessFlagBits2::eShaderSampledRead, vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite, initial ? vk::ImageLayout::eUndefined : vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eTransferDstOptimal, vk::QueueFamilyIgnored, vk::QueueFamilyIgnored, *image.image, {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
         command.pipelineBarrier2(vk::DependencyInfo{{}, {}, {}, {}, {}, 1, &transfer});
         command.copyBufferToImage(*staging.buffer, *image.image, vk::ImageLayout::eTransferDstOptimal, vk::BufferImageCopy{0, 0, 0, {vk::ImageAspectFlagBits::eColor, 0, 0, 1}, {0, 0, 0}, {std::uint32_t(width), std::uint32_t(height), 1}});
         const vk::ImageMemoryBarrier2 sampled{vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite, vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, vk::QueueFamilyIgnored, vk::QueueFamilyIgnored, *image.image, {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
         command.pipelineBarrier2(vk::DependencyInfo{{}, {}, {}, {}, {}, 1, &sampled});
         textures.at(id).initialized = true;
+        command.setCheckpointNV("upload.end");
     }
 
     void Renderer::copy(const std::uint64_t id, const graphics::Buffer& source, const vk::Semaphore semaphore, const std::uint64_t ready) {
         auto& target        = textures.at(id);
         const auto& command = commands[frame_index];
-        waits.emplace_back(semaphore, ready, vk::PipelineStageFlagBits2::eCopy);
-        signals.emplace_back(semaphore, ready + 1, vk::PipelineStageFlagBits2::eAllCommands);
+        auto& frame         = frames[frame_index];
+        frame.waits.emplace_back(semaphore, ready, vk::PipelineStageFlagBits2::eCopy);
+        frame.signals.emplace_back(semaphore, ready + 1, vk::PipelineStageFlagBits2::eAllCommands);
+        frame.transfers.push_back({false, id, source.address, source.size});
+        command.setCheckpointNV("interop.copy.begin");
         const vk::BufferMemoryBarrier2 acquire{vk::PipelineStageFlagBits2::eNone, {}, vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferRead, vk::QueueFamilyExternal, device.family, *source.buffer, 0, source.size};
         const vk::ImageMemoryBarrier2 transfer{target.initialized ? vk::PipelineStageFlagBits2::eFragmentShader : vk::PipelineStageFlagBits2::eNone, target.initialized ? vk::AccessFlagBits2::eShaderSampledRead : vk::AccessFlags2{}, vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite, target.initialized ? vk::ImageLayout::eShaderReadOnlyOptimal : vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, vk::QueueFamilyIgnored, vk::QueueFamilyIgnored, *target.image.image, {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
         command.pipelineBarrier2(vk::DependencyInfo{{}, 0, nullptr, 1, &acquire, 1, &transfer});
@@ -181,12 +211,14 @@ namespace genesia::editor {
         const vk::ImageMemoryBarrier2 sampled{vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite, vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderSampledRead, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, vk::QueueFamilyIgnored, vk::QueueFamilyIgnored, *target.image.image, {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
         command.pipelineBarrier2(vk::DependencyInfo{{}, 0, nullptr, 1, &release, 1, &sampled});
         target.initialized = true;
+        command.setCheckpointNV("interop.copy.end");
     }
 
     void Renderer::discard(const vk::Semaphore semaphore, const std::uint64_t ready) {
         // A dropped frame still returns its external buffer to the CUDA producer.
-        waits.emplace_back(semaphore, ready, vk::PipelineStageFlagBits2::eAllCommands);
-        signals.emplace_back(semaphore, ready + 1, vk::PipelineStageFlagBits2::eAllCommands);
+        frames[frame_index].waits.emplace_back(semaphore, ready, vk::PipelineStageFlagBits2::eAllCommands);
+        frames[frame_index].signals.emplace_back(semaphore, ready + 1, vk::PipelineStageFlagBits2::eAllCommands);
+        commands[frame_index].setCheckpointNV("interop.discard");
     }
 
     void Renderer::retire(const std::uint64_t id) {
@@ -231,6 +263,7 @@ namespace genesia::editor {
         const auto& command = commands[frame_index];
         auto& frame         = frames[frame_index];
         auto& data          = *ImGui::GetDrawData();
+        command.setCheckpointNV("draw.begin");
         if (data.TotalVtxCount) {
             const auto vertex_bytes = std::size_t(data.TotalVtxCount) * sizeof(ImDrawVert);
             const auto index_bytes  = std::size_t(data.TotalIdxCount) * 4;
@@ -296,6 +329,7 @@ namespace genesia::editor {
             index_offset += list->IdxBuffer.Size;
         }
         command.endRendering();
+        command.setCheckpointNV("draw.end");
         const vk::ImageMemoryBarrier2 presented{vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::AccessFlagBits2::eColorAttachmentWrite, vk::PipelineStageFlagBits2::eNone, {}, vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::ePresentSrcKHR, vk::QueueFamilyIgnored, vk::QueueFamilyIgnored, images[image_index], {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
         command.pipelineBarrier2(vk::DependencyInfo{{}, {}, {}, {}, {}, 1, &presented});
     }

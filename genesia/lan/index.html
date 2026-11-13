@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Genesia</title>
+    <style>
+        :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+        body { margin: 0; }
+        main { display: grid; grid-template-columns: minmax(0, 1fr); justify-items: center; gap: 1rem; padding: 2rem 1rem; }
+        button { font: inherit; min-width: 8rem; min-height: 3rem; }
+        p { margin: 0; }
+        .gallery, .preview { width: min(100%, calc(75vh * var(--aspect))); aspect-ratio: var(--aspect); }
+        .gallery { overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: none; scroll-snap-type: x mandatory; user-select: none; }
+        .strip { display: flex; position: relative; width: 100%; height: 100%; }
+        .strip img { flex: 0 0 100%; width: 100%; height: 100%; object-fit: contain; scroll-snap-align: start; scroll-snap-stop: normal; }
+        .preview { object-fit: contain; }
+        [hidden] { display: none; }
+    </style>
+</head>
+<body>
+    <main>
+        <button type="button" disabled>生成</button>
+        <p role="status"></p>
+        <div class="gallery" role="region" aria-label="历史图片" tabindex="0" hidden>
+            <div class="strip"></div>
+        </div>
+        <img class="preview" alt="生成预览" hidden>
+    </main>
+    <script type="module">
+        const button = document.querySelector('button');
+        const status = document.querySelector('[role="status"]');
+        const gallery = document.querySelector('.gallery');
+        const strip = gallery.querySelector('.strip');
+        const preview = document.querySelector('.preview');
+        const observer = new IntersectionObserver((entries, observer) => {
+            for (const { target, isIntersecting } of entries) {
+                if (!isIntersecting) continue;
+                target.src = target.dataset.src;
+                observer.unobserve(target);
+            }
+        }, { root: gallery, rootMargin: '0px 300%' });
+        let mouseDrag;
+
+        async function showHistory(savedName) {
+            const result = await fetch('/api/history');
+            if (!result.ok) throw new Error('读取历史失败，请刷新重试。');
+            const names = (await result.json()).reverse();
+            if (names.length === 0 && savedName === undefined) return;
+
+            const slides = names.map(name => {
+                const slide = new Image();
+                slide.alt = name;
+                slide.draggable = false;
+                slide.decoding = 'async';
+                slide.dataset.src = `/api/history/image?name=${encodeURIComponent(name)}`;
+                return slide;
+            });
+            const selected = savedName === undefined ? slides.at(-1) : slides[names.indexOf(savedName)];
+            if (!selected) throw new Error('未在历史中找到刚保存的图片。');
+            selected.src = savedName === undefined ? selected.dataset.src : preview.src;
+            await selected.decode();
+
+            observer.disconnect();
+            const previousResult = strip.querySelector('img[src^="blob:"]');
+            strip.replaceChildren(...slides);
+            if (previousResult) URL.revokeObjectURL(previousResult.src);
+            gallery.style.setProperty('--aspect', selected.naturalWidth / selected.naturalHeight);
+            gallery.hidden = false;
+            gallery.scrollLeft = selected.offsetLeft;
+            for (const slide of slides) {
+                if (slide !== selected) observer.observe(slide);
+            }
+            if (savedName !== undefined) preview.removeAttribute('src');
+            preview.hidden = true;
+        }
+
+        async function showResult(result, alt) {
+            const nextUrl = URL.createObjectURL(await result.blob());
+            const next = new Image();
+            next.src = nextUrl;
+            try {
+                await next.decode();
+            } catch (error) {
+                URL.revokeObjectURL(nextUrl);
+                throw error;
+            }
+            if (preview.hasAttribute('src')) URL.revokeObjectURL(preview.src);
+            preview.src = nextUrl;
+            preview.alt = alt;
+            preview.style.setProperty('--aspect', next.naturalWidth / next.naturalHeight);
+            preview.hidden = false;
+        }
+
+        function finishMouseDrag(event) {
+            if (mouseDrag?.id !== event.pointerId) return;
+            mouseDrag = undefined;
+            const width = gallery.getBoundingClientRect().width;
+            const left = Math.round(gallery.scrollLeft / width) * width;
+            gallery.style.removeProperty('scroll-snap-type');
+            gallery.scrollTo({ left, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
+        }
+
+        gallery.addEventListener('pointerdown', event => {
+            if (event.pointerType !== 'mouse' || event.button !== 0) return;
+            mouseDrag = { id: event.pointerId, x: event.clientX, left: gallery.scrollLeft };
+            gallery.style.scrollSnapType = 'none';
+            gallery.setPointerCapture(event.pointerId);
+        });
+        gallery.addEventListener('pointermove', event => {
+            if (mouseDrag?.id === event.pointerId) gallery.scrollLeft = mouseDrag.left + mouseDrag.x - event.clientX;
+        });
+        gallery.addEventListener('pointerup', finishMouseDrag);
+        gallery.addEventListener('lostpointercapture', finishMouseDrag);
+        gallery.addEventListener('error', () => {
+            status.textContent = '读取历史图片失败，请刷新重试。';
+        }, true);
+
+        button.addEventListener('click', async () => {
+            button.disabled = true;
+            const previousScroll = gallery.scrollLeft;
+            let saved = false;
+            status.textContent = '生成中…';
+            try {
+                const submission = await fetch('/api/generate', { method: 'POST' });
+                if (submission.status === 409) {
+                    status.textContent = '主机忙碌，请稍后再试。';
+                    return;
+                }
+                if (submission.status !== 202) throw new Error('提交失败，请重试。');
+                const token = await submission.text();
+                gallery.hidden = true;
+                preview.hidden = true;
+                let step = 0;
+                for (;;) {
+                    await new Promise(resolve => setTimeout(resolve, 400));
+                    const result = await fetch(`/api/jobs/${token}?step=${step}`);
+                    if (result.status === 202) continue;
+                    if (result.status !== 200) throw new Error('生成失败，请重试。');
+
+                    if (result.headers.get('Content-Type') === 'image/png') {
+                        await showResult(result, '生成结果');
+                        saved = true;
+                        const name = decodeURIComponent(result.headers.get('X-Genesia-Image'));
+                        await showHistory(name);
+                        status.textContent = '';
+                        break;
+                    }
+                    await showResult(result, '生成预览');
+                    step = result.headers.get('X-Genesia-Step');
+                    status.textContent = `预览 · ${step} / ${result.headers.get('X-Genesia-Steps')}`;
+                }
+            } catch (error) {
+                if (!saved && strip.childElementCount && gallery.hidden) {
+                    preview.hidden = true;
+                    gallery.hidden = false;
+                    gallery.scrollLeft = previousScroll;
+                }
+                status.textContent = error.message;
+            } finally {
+                button.disabled = false;
+            }
+        });
+
+        try {
+            await showHistory();
+        } catch (error) {
+            status.textContent = error.message;
+        } finally {
+            button.disabled = false;
+        }
+    </script>
+</body>
+</html>

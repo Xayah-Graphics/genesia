@@ -22,6 +22,7 @@ export namespace genesia::editor {
         ~Renderer();
         bool begin();
         void present();
+        void diagnose(std::string_view reason);
         std::uint64_t texture(vk::Extent2D extent, vk::Format format = vk::Format::eR8G8B8A8Srgb);
         std::uint64_t upload(const Image& image);
         void upload(std::uint64_t id, const void* pixels, int width, int height, bool initial);
@@ -35,6 +36,12 @@ export namespace genesia::editor {
             bool initialized{};
         };
         struct Frame final {
+            struct Transfer final {
+                bool upload;
+                std::uint64_t texture;
+                vk::DeviceAddress source;
+                vk::DeviceSize bytes;
+            };
             graphics::Buffer vertices;
             graphics::Buffer indices;
             vk::raii::Semaphore available{nullptr};
@@ -42,6 +49,10 @@ export namespace genesia::editor {
             std::vector<graphics::Buffer> uploads;
             std::vector<Texture> retired;
             std::vector<std::uint32_t> recycled;
+            std::vector<vk::SemaphoreSubmitInfo> waits, signals;
+            std::vector<Transfer> transfers;
+            std::uint64_t submission{};
+            bool submitted{};
         };
         std::array<Frame, 2> frames;
         vk::raii::CommandPool pool{nullptr};
@@ -53,8 +64,7 @@ export namespace genesia::editor {
         vk::raii::ShaderEXTs shaders{nullptr};
         std::map<std::uint64_t, Texture> textures;
         std::vector<std::uint32_t> free_descriptors;
-        std::vector<vk::SemaphoreSubmitInfo> waits;
-        std::vector<vk::SemaphoreSubmitInfo> signals;
+        std::uint64_t submission{};
         std::size_t frame_index{};
         std::uint32_t image_index{};
 

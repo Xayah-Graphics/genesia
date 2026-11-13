@@ -19,7 +19,6 @@ export namespace genesia::editor {
         graphics::Device& device;
         std::array<Slot, 2> slots;
         explicit Interop(graphics::Device& device);
-        ~Interop();
         void prepare(int width, int height, ::cuda::stream_ref stream);
         std::uint64_t publish(const std::uint8_t* pixels, int width, int height, ::cuda::stream_ref stream, std::size_t slot);
     };

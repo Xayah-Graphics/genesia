@@ -9,8 +9,10 @@ import genesia.editor.graphics.renderer;
 import genesia.editor.workspace;
 import genesia.prompt.presets;
 import genesia.generation.settings;
+import genesia.lan;
 import genesia.runtime.diagnostics;
 import std;
+import vulkan;
 
 namespace genesia::editor {
     struct Application final {
@@ -21,16 +23,35 @@ namespace genesia::editor {
 
         Application(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog);
         void run();
+        void close();
     };
 
-    Application::Application(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog) : ui{std::move(preset), std::move(catalog), window, renderer} {}
+    Application::Application(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog) : ui{std::move(preset), std::move(catalog), window, renderer} {
+        try {
+            const auto address = lan::wifi_address();
+            if (address.empty()) throw std::runtime_error{"LAN unavailable: no active Wi-Fi address on 192.168.1.0/24"};
+            ui.lan_server.emplace(*ui.catalog);
+            if (!ui.lan_server->start(address, 7860, ui.runtime.session)) throw std::runtime_error{std::format("LAN unavailable: {}:7860 is already in use", address)};
+            ui.lan_url = std::format("http://{}:7860", address);
+        } catch (const std::exception& error) {
+            ui.lan_server.reset();
+            ui.action_error = error.what();
+            diagnostics::record("lan.start.failed", error.what());
+        }
+    }
 
     void Application::run() try {
         std::uint32_t previous_stage{}, previous_step{};
         bool previous_busy{};
         for (;;) {
+            if (ui.lan_server && !ui.lan_server->listening) {
+                ui.lan_server.reset();
+                ui.lan_url.clear();
+                ui.action_error = "LAN listener stopped";
+            }
             if (window.take_close_request()) {
                 closing                  = true;
+                ui.lan_server.reset();
                 ui.continuous_generation = false;
                 ui.textures.shutdown();
                 ui.runtime.session.shutdown();
@@ -69,9 +90,37 @@ namespace genesia::editor {
             if (wait > 0) glfwWaitEventsTimeout(wait);
             else glfwPollEvents();
         }
+        close();
     } catch (const std::exception& error) {
         diagnostics::record("editor.exception", error.what());
+        if (dynamic_cast<const vk::DeviceLostError*>(&error) || renderer.device.diagnostics.lost.load()) {
+            try {
+                renderer.diagnose(error.what());
+            } catch (const std::exception& failure) {
+                diagnostics::record("gpu.diagnostics.error", failure.what());
+            }
+        }
+        try {
+            close();
+        } catch (const vk::DeviceLostError& failure) {
+            diagnostics::record("editor.close.exception", failure.what());
+            try {
+                renderer.diagnose(failure.what());
+            } catch (const std::exception& capture_error) {
+                diagnostics::record("gpu.diagnostics.error", capture_error.what());
+            }
+        } catch (const std::exception& failure) {
+            diagnostics::record("editor.close.exception", failure.what());
+        }
         throw;
+    }
+
+    void Application::close() {
+        ui.lan_server.reset();
+        ui.textures.shutdown();
+        ui.runtime.session.finish();
+        // No more producers can enqueue work. Keep every graphics resource alive until idle.
+        if (!renderer.device.diagnostics.lost.load()) renderer.device.logical.waitIdle();
     }
 
     int run(const std::span<const std::string_view> arguments) {

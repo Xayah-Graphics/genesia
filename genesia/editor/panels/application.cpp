@@ -161,6 +161,7 @@ namespace genesia::editor {
         const float left_end = ImGui::GetItemRectMax().x + 4 * scale;
         if (ImGui::BeginPopup("Application")) {
             ImGui::MenuItem("Live preview", nullptr, &workspace.preview_enabled);
+            if (!workspace.lan_url.empty() && ImGui::MenuItem(workspace.lan_url.c_str())) ImGui::SetClipboardText(workspace.lan_url.c_str());
             ImGui::Separator();
             if (ImGui::MenuItem("Save prompt", "Ctrl+S", false, workspace.page == Workspace::Page::generation)) workspace.save_prompt();
             if (ImGui::MenuItem("View final prompt", nullptr, false, workspace.page == Workspace::Page::generation)) workspace.final_prompt_requested = true;

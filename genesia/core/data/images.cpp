@@ -1,4 +1,11 @@
 module;
+#if defined(_WIN32)
+#include <Windows.h>
+#else
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/stat.h>
+#endif
 #include <nlohmann/json.hpp>
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
@@ -9,6 +16,37 @@ import genesia.io.files;
 import std;
 
 namespace genesia {
+    std::vector<std::filesystem::path> list_output_images() {
+        std::filesystem::create_directories(project::output);
+#if defined(_WIN32)
+        std::vector<std::pair<std::uint64_t, std::filesystem::path>> images;
+#else
+        std::vector<std::pair<std::pair<std::int64_t, std::uint32_t>, std::filesystem::path>> images;
+#endif
+        for (const auto& entry : std::filesystem::directory_iterator{project::output}) {
+            const auto& path = entry.path();
+            auto extension   = files::utf8(path.extension());
+            for (auto& letter : extension) if (letter >= 'A' && letter <= 'Z') letter = static_cast<char>(letter + 'a' - 'A');
+            if (extension != ".png" || !entry.is_regular_file()) continue;
+#if defined(_WIN32)
+            WIN32_FILE_ATTRIBUTE_DATA attributes;
+            if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &attributes)) throw std::system_error{static_cast<int>(GetLastError()), std::system_category(), "Read image creation time: " + files::utf8(path)};
+            const auto created = (std::uint64_t{attributes.ftCreationTime.dwHighDateTime} << 32) | attributes.ftCreationTime.dwLowDateTime;
+#else
+            struct statx attributes;
+            if (statx(AT_FDCWD, path.c_str(), 0, STATX_BTIME, &attributes)) throw std::system_error{errno, std::system_category(), "Read image creation time: " + files::utf8(path)};
+            if (!(attributes.stx_mask & STATX_BTIME)) throw std::runtime_error{"Image creation time unavailable: " + files::utf8(path)};
+            const std::pair created{attributes.stx_btime.tv_sec, attributes.stx_btime.tv_nsec};
+#endif
+            images.emplace_back(created, path);
+        }
+        std::ranges::sort(images);
+        std::vector<std::filesystem::path> paths;
+        paths.reserve(images.size());
+        for (auto& [created, path] : images) paths.push_back(std::move(path));
+        return paths;
+    }
+
     ImageInfo read_image_info(const std::filesystem::path& path) {
         std::ifstream file{path, std::ios::binary};
         file.exceptions(std::ios::badbit | std::ios::failbit);
