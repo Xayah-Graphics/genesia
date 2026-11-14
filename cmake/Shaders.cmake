@@ -7,7 +7,7 @@ foreach (stage IN ITEMS vertex fragment)
             COMMAND "${GENESIA_SLANG_COMPILER}" "${PROJECT_SOURCE_DIR}/genesia/editor/shaders/imgui.slang"
             -target spirv -profile spirv_1_6 -entry imgui_${stage} -stage ${stage} -emit-spirv-directly
             -capability SPIRV_1_6+spvDescriptorHeapEXT -spirv-unified-descriptor-heap-stride -fvk-use-entrypoint-name -fvk-use-c-layout -matrix-layout-row-major -O2
-            -g2 -o "${output}"
+            -o "${output}"
             DEPENDS "${PROJECT_SOURCE_DIR}/genesia/editor/shaders/imgui.slang" VERBATIM)
     list(APPEND GENESIA_SHADER_BINARIES "${output}")
 endforeach ()

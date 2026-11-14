@@ -5,10 +5,9 @@ import secrets
 import shutil
 import sys
 import threading
-import traceback
 
 
-# Keep native libraries and Python diagnostics off the JSON protocol pipe.
+# Keep library output off the JSON protocol pipe.
 protocol = os.fdopen(os.dup(sys.stdout.fileno()), "w", encoding="utf-8", buffering=1)
 os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
 sys.stdout = sys.stderr
@@ -170,8 +169,6 @@ def run():
 if __name__ == "__main__":
     try:
         run()
-    except Exception:
-        error = traceback.format_exc()
-        sys.stderr.write(error)
-        emit({"type": "error", "error": error})
+    except Exception as error:
+        emit({"type": "error", "error": str(error)})
         sys.exit(1)

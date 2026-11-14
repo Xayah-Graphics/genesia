@@ -33,8 +33,6 @@ namespace genesia::sdxl {
             throw;
         }
         compute::check(cudaGraphInstantiate(std::out_ptr(executable), graph.get(), 0));
-        cache_hits   = runtime.cache_hits;
-        cache_misses = runtime.cache_misses;
     }
 
     Decoder::~Decoder() {

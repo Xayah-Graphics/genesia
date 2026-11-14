@@ -124,8 +124,6 @@ namespace genesia::sdxl {
             throw;
         }
         compute::check(cudaGraphInstantiate(std::out_ptr(executable), graph.get(), 0));
-        cache_hits   = model.runtime.cache_hits;
-        cache_misses = model.runtime.cache_misses;
     }
 
     Inference::~Inference() {

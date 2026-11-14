@@ -149,7 +149,7 @@ namespace genesia::editor {
         }
         if (session_state.active || current.state != runtime::State::complete || ImGui::GetTopMostPopupModal()) return;
         try {
-            continuous_generation = submit();
+            continuous_generation = submit() == Submission::accepted;
         } catch (const std::exception& failure) {
             continuous_generation = false;
             action_error          = failure.what();
@@ -278,19 +278,36 @@ namespace genesia::editor {
         return result;
     }
 
-    bool Workspace::submit() {
+    Workspace::Submission Workspace::submit(const bool capture_preview) {
+        if (session_state.active) return Submission::busy;
+        if (page != Page::generation || ImGui::GetTopMostPopupModal() || session_state.finished || !session_state.error.empty()) return Submission::unavailable;
         commit_parameters();
-        if (page != Page::generation || !prepare_prompt()) return false;
+        if (!prepare_prompt()) return Submission::invalid_prompt;
         if (random_seed) {
             std::random_device random;
             seed = std::uniform_int_distribution<std::uint64_t>{}(random);
         }
-        const auto submitted = runtime.session.submit({parameters(), seed});
+        auto submitted       = runtime.session.submit({.parameters = parameters(), .seed = seed, .capture_preview = capture_preview});
         session_state = runtime.session.snapshot();
-        if (!submitted) return false;
+        if (!submitted) return Submission::busy;
         task          = std::move(submitted);
         animate_until = glfwGetTime() + 0.2;
-        return true;
+        return Submission::accepted;
+    }
+
+    void Workspace::submit_web() {
+        try {
+            switch (continuous_generation ? Submission::busy : submit(true)) {
+                case Submission::accepted: lan_server->complete_submission(*task); break;
+                case Submission::busy: lan_server->complete_submission(std::unexpected(409)); break;
+                case Submission::unavailable: lan_server->complete_submission(std::unexpected(423)); break;
+                case Submission::invalid_prompt: lan_server->complete_submission(std::unexpected(422)); break;
+            }
+        } catch (const std::exception& failure) {
+            action_error = failure.what();
+            shown_error.clear();
+            lan_server->complete_submission(std::unexpected(500));
+        }
     }
 
     void Workspace::draw() {

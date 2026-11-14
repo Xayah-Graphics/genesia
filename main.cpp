@@ -7,8 +7,6 @@
 #include <cstdlib>
 #endif
 import genesia.headless;
-import genesia.lan;
-import genesia.runtime.diagnostics;
 #if defined(GENESIA_HAS_EDITOR)
 import genesia.editor;
 #endif
@@ -47,30 +45,21 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 int main(const int argc, char** argv) {
     bool editor = false;
 #endif
-    bool logging{};
     try {
         const std::vector<std::string_view> values{argv + 1, argv + argc};
         std::span<const std::string_view> arguments{values};
-        const bool lan = !arguments.empty() && arguments.front() == "--lan";
-        if (lan || (!arguments.empty() && arguments.front() == "--headless")) {
+        if (!arguments.empty() && arguments.front() == "--headless") {
             editor    = false;
             arguments = arguments.subspan(1);
         }
 #if defined(_WIN32)
         if (!editor) attach_console();
 #endif
-        genesia::diagnostics::initialize(editor);
-        logging = true;
-        int result;
 #if defined(GENESIA_HAS_EDITOR)
-        if (editor) result = genesia::editor::run(arguments);
-        else
+        if (editor) return genesia::editor::run(arguments);
 #endif
-            result = lan ? genesia::lan::run(arguments) : genesia::headless::run(arguments);
-        genesia::diagnostics::record("process.exit", std::format("code={}", result));
-        return result;
+        return genesia::headless::run(arguments);
     } catch (const std::exception& error) {
-        if (logging) genesia::diagnostics::record("main.exception", error.what());
 #if defined(_WIN32)
         if (editor) MessageBoxA(nullptr, error.what(), "Genesia", MB_OK | MB_ICONERROR);
         else

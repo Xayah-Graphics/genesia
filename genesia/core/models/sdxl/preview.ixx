@@ -23,8 +23,6 @@ export namespace genesia::sdxl {
     struct Decoder final {
         const int width;
         const int height;
-        std::size_t cache_hits{};
-        std::size_t cache_misses{};
         ::cuda::stream_ref stream;
         ::cuda::device_buffer<std::uint8_t> pixels;
         std::unique_ptr<std::remove_pointer_t<cudaEvent_t>, decltype(&cudaEventDestroy)> started{nullptr, cudaEventDestroy};

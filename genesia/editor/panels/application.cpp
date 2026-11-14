@@ -234,7 +234,7 @@ namespace genesia::editor {
                 workspace.continuous_generation = false;
                 if (active && !stopping) workspace.runtime.session.cancel(workspace.session_state.active->id);
             } else if (enabled && !stop_action && (clicked || continuous_clicked || ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_GraveAccent, ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverActive))) {
-                const bool submitted            = workspace.submit();
+                const bool submitted            = workspace.submit() == Workspace::Submission::accepted;
                 workspace.continuous_generation = submitted && continuous_clicked;
             }
         }

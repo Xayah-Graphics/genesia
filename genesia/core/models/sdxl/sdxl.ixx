@@ -58,8 +58,6 @@ export namespace genesia::sdxl {
 
     struct Inference final {
         const generation::Settings parameters;
-        std::size_t cache_hits{};
-        std::size_t cache_misses{};
         ::cuda::device_buffer<float> latent;
 
         Inference(Model& model, generation::Settings parameters, Control& control, Snapshots* snapshots = nullptr);

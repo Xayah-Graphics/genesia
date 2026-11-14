@@ -13,7 +13,7 @@ export namespace genesia::generation {
         std::function<void(bool)> prepare;
         std::function<std::shared_ptr<const void>(bool, const std::uint8_t*, int, int, ::cuda::stream_ref, std::size_t)> publish;
         std::function<bool(std::size_t)> available;
-        std::function<std::shared_ptr<const std::uint8_t>(const std::uint8_t*, int, int, ::cuda::stream_ref)> capture;
+        std::function<std::shared_ptr<const std::uint8_t>(const std::uint8_t*, int, int, const std::shared_ptr<::cuda::stream>&)> capture;
     };
     struct Engine final {
         Engine(Visuals visuals, std::function<void(runtime::Event)> report, std::function<void(runtime::PreviewFrame)> preview);
@@ -43,7 +43,7 @@ export namespace genesia::generation {
         bool finished{}, preview_closing{}, preview_working{}, preview_sampling{};
         std::string error;
         std::shared_ptr<sdxl::Snapshots> snapshots;
-        ::cuda::stream preview_stream{::cuda::no_init};
+        std::shared_ptr<::cuda::stream> preview_stream;
         std::unique_ptr<std::remove_pointer_t<cudaEvent_t>, decltype(&cudaEventDestroy)> preview_finished{nullptr, cudaEventDestroy};
         std::unique_ptr<sdxl::Model> model;
         std::unique_ptr<sdxl::Inference> inference;

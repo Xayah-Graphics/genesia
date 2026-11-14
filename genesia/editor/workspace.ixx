@@ -16,6 +16,7 @@ export namespace genesia::editor {
     struct Workspace final {
         enum class Page { generation, history };
         enum class View { browse, inspect };
+        enum class Submission { accepted, busy, unavailable, invalid_prompt };
         struct Output final {
             std::optional<std::uint64_t> task;
             std::optional<Record> record;
@@ -104,7 +105,8 @@ export namespace genesia::editor {
         void switch_preset(std::string name);
         void begin_generation(std::uint64_t task, int width, int height);
         generation::Settings parameters() const;
-        bool submit();
+        Submission submit(bool capture_preview = false);
+        void submit_web();
         void draw();
     };
 } // namespace genesia::editor

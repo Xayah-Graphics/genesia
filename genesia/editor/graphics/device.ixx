@@ -1,5 +1,4 @@
 export module genesia.editor.graphics.device;
-import genesia.editor.graphics.diagnostics;
 import std;
 import vulkan;
 
@@ -15,7 +14,6 @@ export namespace genesia::editor::graphics {
         Device(const Device&)            = delete;
         Device& operator=(const Device&) = delete;
 
-        Diagnostics diagnostics;
         vk::raii::PhysicalDevice physical{nullptr};
         vk::raii::Device logical{nullptr};
         vk::raii::Queue graphics{nullptr};

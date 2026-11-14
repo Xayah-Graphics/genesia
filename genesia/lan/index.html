@@ -2,30 +2,76 @@
 <html lang="zh-CN">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#000">
     <title>Genesia</title>
     <style>
-        :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+        :root {
+            color-scheme: dark;
+            font-family: Inter, "Microsoft YaHei UI", system-ui, sans-serif;
+            background: #000;
+            color: #f7f8fb;
+        }
         body { margin: 0; }
-        main { display: grid; grid-template-columns: minmax(0, 1fr); justify-items: center; gap: 1rem; padding: 2rem 1rem; }
-        button { font: inherit; min-width: 8rem; min-height: 3rem; }
-        p { margin: 0; }
-        .gallery, .preview { width: min(100%, calc(75vh * var(--aspect))); aspect-ratio: var(--aspect); }
+        main {
+            position: relative;
+            height: 100dvh;
+            overflow: hidden;
+        }
+        .gallery, .preview { position: absolute; inset: 0; }
         .gallery { overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: none; scroll-snap-type: x mandatory; user-select: none; }
         .strip { display: flex; position: relative; width: 100%; height: 100%; }
-        .strip img { flex: 0 0 100%; width: 100%; height: 100%; object-fit: contain; scroll-snap-align: start; scroll-snap-stop: normal; }
-        .preview { object-fit: contain; }
+        .slide { flex: 0 0 100%; min-width: 0; scroll-snap-align: start; }
+        .slide img, .preview img {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+        .controls {
+            --image-height-at-full-width: 100dvh;
+            position: absolute;
+            inset-inline: 0;
+            bottom: max(calc(12px + env(safe-area-inset-bottom)), calc((100dvh - var(--image-height-at-full-width)) / 2 + 12px));
+            display: grid;
+            justify-items: center;
+            gap: 8px;
+            padding-inline: max(16px, env(safe-area-inset-left)) max(16px, env(safe-area-inset-right));
+            pointer-events: none;
+        }
+        .controls button {
+            min-height: 44px;
+            padding: 0 18px;
+            border: 1px solid #ffffff60;
+            border-radius: 22px;
+            background: #000b;
+            color: inherit;
+            font: inherit;
+            font-size: .9375rem;
+            font-weight: 500;
+            pointer-events: auto;
+        }
+        .controls button:enabled { cursor: pointer; }
+        .controls button:enabled:hover { background: #000e; }
+        .controls button:disabled { opacity: .55; }
+        .controls p { margin: 0; padding: 6px 12px; border-radius: 16px; background: #000b; color: inherit; font-size: .875rem; text-align: center; font-variant-numeric: tabular-nums; }
+        .controls p:empty { display: none; }
+        .controls[data-generating] button { display: none; }
         [hidden] { display: none; }
     </style>
 </head>
 <body>
     <main>
-        <button type="button" disabled>生成</button>
-        <p role="status"></p>
         <div class="gallery" role="region" aria-label="历史图片" tabindex="0" hidden>
             <div class="strip"></div>
         </div>
-        <img class="preview" alt="生成预览" hidden>
+        <div class="preview" hidden>
+            <img alt="生成预览" draggable="false">
+        </div>
+        <footer class="controls">
+            <p role="status"></p>
+            <button type="button" disabled>生成</button>
+        </footer>
     </main>
     <script type="module">
         const button = document.querySelector('button');
@@ -33,14 +79,30 @@
         const gallery = document.querySelector('.gallery');
         const strip = gallery.querySelector('.strip');
         const preview = document.querySelector('.preview');
+        const previewImage = preview.querySelector('img');
+        const controls = document.querySelector('.controls');
         const observer = new IntersectionObserver((entries, observer) => {
             for (const { target, isIntersecting } of entries) {
                 if (!isIntersecting) continue;
-                target.src = target.dataset.src;
                 observer.unobserve(target);
+                const image = target.querySelector('img');
+                image.src = target.dataset.src;
+                image.decode().catch(() => {
+                    if (target.isConnected) status.textContent = '读取历史图片失败，请刷新重试。';
+                });
             }
         }, { root: gallery, rootMargin: '0px 300%' });
         let mouseDrag;
+
+        function positionControls() {
+            let image = previewImage;
+            if (preview.hidden) {
+                const index = Math.round(gallery.scrollLeft / gallery.clientWidth);
+                image = strip.children[index]?.firstElementChild;
+            }
+            if (image?.naturalWidth) controls.style.setProperty('--image-height-at-full-width', `${100 * image.naturalHeight / image.naturalWidth}vw`);
+            else controls.style.removeProperty('--image-height-at-full-width');
+        }
 
         async function showHistory(savedName) {
             const result = await fetch('/api/history');
@@ -49,30 +111,34 @@
             if (names.length === 0 && savedName === undefined) return;
 
             const slides = names.map(name => {
-                const slide = new Image();
-                slide.alt = name;
-                slide.draggable = false;
-                slide.decoding = 'async';
+                const slide = document.createElement('div');
+                slide.className = 'slide';
                 slide.dataset.src = `/api/history/image?name=${encodeURIComponent(name)}`;
+                const image = new Image();
+                image.alt = name;
+                image.draggable = false;
+                image.decoding = 'async';
+                slide.append(image);
                 return slide;
             });
             const selected = savedName === undefined ? slides.at(-1) : slides[names.indexOf(savedName)];
             if (!selected) throw new Error('未在历史中找到刚保存的图片。');
-            selected.src = savedName === undefined ? selected.dataset.src : preview.src;
-            await selected.decode();
+            const selectedImage = selected.querySelector('img');
+            selectedImage.src = savedName === undefined ? selected.dataset.src : previewImage.src;
+            await selectedImage.decode();
 
             observer.disconnect();
             const previousResult = strip.querySelector('img[src^="blob:"]');
             strip.replaceChildren(...slides);
             if (previousResult) URL.revokeObjectURL(previousResult.src);
-            gallery.style.setProperty('--aspect', selected.naturalWidth / selected.naturalHeight);
             gallery.hidden = false;
             gallery.scrollLeft = selected.offsetLeft;
             for (const slide of slides) {
                 if (slide !== selected) observer.observe(slide);
             }
-            if (savedName !== undefined) preview.removeAttribute('src');
+            if (savedName !== undefined) previewImage.removeAttribute('src');
             preview.hidden = true;
+            positionControls();
         }
 
         async function showResult(result, alt) {
@@ -85,10 +151,9 @@
                 URL.revokeObjectURL(nextUrl);
                 throw error;
             }
-            if (preview.hasAttribute('src')) URL.revokeObjectURL(preview.src);
-            preview.src = nextUrl;
-            preview.alt = alt;
-            preview.style.setProperty('--aspect', next.naturalWidth / next.naturalHeight);
+            if (previewImage.hasAttribute('src')) URL.revokeObjectURL(previewImage.src);
+            previewImage.src = nextUrl;
+            previewImage.alt = alt;
             preview.hidden = false;
         }
 
@@ -101,6 +166,9 @@
             gallery.scrollTo({ left, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
         }
 
+        gallery.addEventListener('scroll', positionControls, { passive: true });
+        strip.addEventListener('load', positionControls, true);
+        previewImage.addEventListener('load', positionControls);
         gallery.addEventListener('pointerdown', event => {
             if (event.pointerType !== 'mouse' || event.button !== 0) return;
             mouseDrag = { id: event.pointerId, x: event.clientX, left: gallery.scrollLeft };
@@ -112,12 +180,9 @@
         });
         gallery.addEventListener('pointerup', finishMouseDrag);
         gallery.addEventListener('lostpointercapture', finishMouseDrag);
-        gallery.addEventListener('error', () => {
-            status.textContent = '读取历史图片失败，请刷新重试。';
-        }, true);
-
         button.addEventListener('click', async () => {
             button.disabled = true;
+            controls.dataset.generating = '';
             const previousScroll = gallery.scrollLeft;
             let saved = false;
             status.textContent = '生成中…';
@@ -131,11 +196,15 @@
                 const token = await submission.text();
                 gallery.hidden = true;
                 preview.hidden = true;
+                positionControls();
                 let step = 0;
                 for (;;) {
                     await new Promise(resolve => setTimeout(resolve, 400));
                     const result = await fetch(`/api/jobs/${token}?step=${step}`);
                     if (result.status === 202) continue;
+                    if (result.status === 409) throw new Error('主机忙碌，请稍后再试。');
+                    if (result.status === 422) throw new Error('请在 Editor 修正当前提示词后重试。');
+                    if (result.status === 423) throw new Error('请在 Editor 打开生成界面并关闭对话框后重试。');
                     if (result.status !== 200) throw new Error('生成失败，请重试。');
 
                     if (result.headers.get('Content-Type') === 'image/png') {
@@ -155,9 +224,11 @@
                     preview.hidden = true;
                     gallery.hidden = false;
                     gallery.scrollLeft = previousScroll;
+                    positionControls();
                 }
                 status.textContent = error.message;
             } finally {
+                delete controls.dataset.generating;
                 button.disabled = false;
             }
         });

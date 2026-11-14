@@ -150,10 +150,8 @@ namespace genesia::compute {
         if (plan == convolutions.end()) {
             plan            = convolutions.emplace(convolutions.end(), key);
             const auto file = cache_directory / ("conv-" + cudnn_json::json(key).dump() + ".bin");
-            if (std::filesystem::exists(file)) {
-                check(plan->graph.deserialize(handles.dnn.get(), files::read_bytes(file), false, false));
-                ++cache_hits;
-            } else {
+            if (std::filesystem::exists(file)) check(plan->graph.deserialize(handles.dnn.get(), files::read_bytes(file), false, false));
+            else {
                 check(plan->graph.build_operation_graph(handles.dnn.get()));
                 check(plan->graph.create_execution_plans({cudnn_frontend::HeurMode_t::A}));
                 plan->graph.deselect_numeric_notes({cudnn_frontend::NumericalNote_t::NONDETERMINISTIC, cudnn_frontend::NumericalNote_t::REDUCED_PRECISION_REDUCTION});
@@ -167,7 +165,6 @@ namespace genesia::compute {
                 std::vector<std::uint8_t> bytes;
                 check(plan->graph.serialize(bytes, false));
                 files::write_bytes(file, bytes);
-                ++cache_misses;
             }
         }
         required_workspace = std::max(required_workspace, static_cast<std::size_t>(plan->graph.get_workspace_size()));
@@ -217,10 +214,8 @@ namespace genesia::compute {
             plan = attentions.emplace(attentions.end(), stream, shape);
             if (lengths) tensors.emplace(6, plan->query_lengths.data());
             const auto file = cache_directory / ("attention-" + cudnn_json::json(shape).dump() + ".bin");
-            if (std::filesystem::exists(file)) {
-                check(plan->graph.deserialize(handles.dnn.get(), files::read_bytes(file), false, false));
-                ++cache_hits;
-            } else {
+            if (std::filesystem::exists(file)) check(plan->graph.deserialize(handles.dnn.get(), files::read_bytes(file), false, false));
+            else {
                 check(plan->graph.build_operation_graph(handles.dnn.get()));
                 check(plan->graph.create_execution_plans({cudnn_frontend::HeurMode_t::A}));
                 plan->graph.deselect_numeric_notes({cudnn_frontend::NumericalNote_t::NONDETERMINISTIC, cudnn_frontend::NumericalNote_t::REDUCED_PRECISION_REDUCTION});
@@ -231,7 +226,6 @@ namespace genesia::compute {
                 std::vector<std::uint8_t> bytes;
                 check(plan->graph.serialize(bytes, false));
                 files::write_bytes(file, bytes);
-                ++cache_misses;
             }
         }
         required_workspace = std::max(required_workspace, static_cast<std::size_t>(plan->graph.get_workspace_size()));
@@ -257,8 +251,6 @@ namespace genesia::compute {
         const void* previous = residual.data ? residual.data : result.data;
         if (prepare) {
             const auto file = cache_directory / std::format("gemm-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}.json", shape.rows, shape.columns, shape.reduction, shape.leading_a, shape.leading_b, int(shape.scalar), int(shape.result_scalar), shape.transpose_a, shape.bias, shape.residual);
-            if (std::filesystem::exists(file)) ++cache_hits;
-            else ++cache_misses;
             select_matrix(*plan, handles.blas.get(), stream.get(), a.data, b.data, previous, alpha, beta, result.bytes(), workspace_data, workspace_limit, file);
         }
         required_workspace = std::max(required_workspace, plan->workspace_bytes);

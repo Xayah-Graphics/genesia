@@ -10,7 +10,6 @@ import genesia.editor.workspace;
 import genesia.prompt.presets;
 import genesia.generation.settings;
 import genesia.lan;
-import genesia.runtime.diagnostics;
 import std;
 import vulkan;
 
@@ -23,20 +22,19 @@ namespace genesia::editor {
 
         Application(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog);
         void run();
-        void close();
+        void close(bool wait);
     };
 
     Application::Application(prompt::Preset preset, std::shared_ptr<const prompt::Catalog> catalog) : ui{std::move(preset), std::move(catalog), window, renderer} {
         try {
             const auto address = lan::wifi_address();
             if (address.empty()) throw std::runtime_error{"LAN unavailable: no active Wi-Fi address on 192.168.1.0/24"};
-            ui.lan_server.emplace(*ui.catalog);
-            if (!ui.lan_server->start(address, 7860, ui.runtime.session)) throw std::runtime_error{std::format("LAN unavailable: {}:7860 is already in use", address)};
-            ui.lan_url = std::format("http://{}:7860", address);
+            ui.lan_server.emplace();
+            if (!ui.lan_server->start(address, ui.runtime.session, glfwPostEmptyEvent)) throw std::runtime_error{std::format("LAN unavailable: {}:{} is already in use", address, lan::port)};
+            ui.lan_url = std::format("http://{}:{}", address, lan::port);
         } catch (const std::exception& error) {
             ui.lan_server.reset();
             ui.action_error = error.what();
-            diagnostics::record("lan.start.failed", error.what());
         }
     }
 
@@ -50,13 +48,13 @@ namespace genesia::editor {
                 ui.action_error = "LAN listener stopped";
             }
             if (window.take_close_request()) {
-                closing                  = true;
+                closing = true;
                 ui.lan_server.reset();
                 ui.continuous_generation = false;
                 ui.textures.shutdown();
                 ui.runtime.session.shutdown();
             }
-            bool busy{}, done{true}, pending{ui.textures.pending.load()};
+            bool busy{}, done{true}, pending{ui.textures.pending.load() || (ui.lan_server && ui.lan_server->requested)};
             std::uint32_t stage{}, step{};
             {
                 const auto state = ui.runtime.session.snapshot();
@@ -74,7 +72,6 @@ namespace genesia::editor {
                 glfwWaitEventsTimeout(std::min(busy ? 0.1 : 1.0, std::max(0.0, ui.refresh_at - now)));
                 continue;
             }
-            if (stage != previous_stage || step / 10 != previous_step / 10 || busy != previous_busy) diagnostics::record("editor.progress", std::format("stage={} step={} busy={}", stage, step, busy));
             previous_stage = stage;
             previous_step  = step;
             previous_busy  = busy;
@@ -85,42 +82,27 @@ namespace genesia::editor {
             ui.receive();
             ui.draw();
             ui.update_generation();
+            if (ui.lan_server && ui.lan_server->requested) ui.submit_web();
             renderer.present();
             const double wait = std::min(ui.refresh_at - glfwGetTime(), glfwGetTime() < ui.animate_until || animating ? 1.0 / 120 : busy ? 0.1 : 1.0);
             if (wait > 0) glfwWaitEventsTimeout(wait);
             else glfwPollEvents();
         }
-        close();
-    } catch (const std::exception& error) {
-        diagnostics::record("editor.exception", error.what());
-        if (dynamic_cast<const vk::DeviceLostError*>(&error) || renderer.device.diagnostics.lost.load()) {
-            try {
-                renderer.diagnose(error.what());
-            } catch (const std::exception& failure) {
-                diagnostics::record("gpu.diagnostics.error", failure.what());
-            }
-        }
-        try {
-            close();
-        } catch (const vk::DeviceLostError& failure) {
-            diagnostics::record("editor.close.exception", failure.what());
-            try {
-                renderer.diagnose(failure.what());
-            } catch (const std::exception& capture_error) {
-                diagnostics::record("gpu.diagnostics.error", capture_error.what());
-            }
-        } catch (const std::exception& failure) {
-            diagnostics::record("editor.close.exception", failure.what());
-        }
+        close(true);
+    } catch (const vk::DeviceLostError&) {
+        close(false);
+        throw;
+    } catch (...) {
+        close(true);
         throw;
     }
 
-    void Application::close() {
+    void Application::close(const bool wait) {
         ui.lan_server.reset();
         ui.textures.shutdown();
         ui.runtime.session.finish();
         // No more producers can enqueue work. Keep every graphics resource alive until idle.
-        if (!renderer.device.diagnostics.lost.load()) renderer.device.logical.waitIdle();
+        if (wait) renderer.device.logical.waitIdle();
     }
 
     int run(const std::span<const std::string_view> arguments) {

@@ -18,14 +18,12 @@ namespace genesia::headless {
         if (arguments.empty() || arguments.front() == "--help") {
             std::println(R"(Genesia {}
 genesia [--preset NAME]
-genesia --lan --bind 192.168.1.ADDRESS [--port PORT]
 genesia --headless (--preset NAME | --preset-file FILE | --prompt-file FILE)
                   [--count N] [--seed SEED] [--output DIRECTORY]
                   [--width N] [--height N] [--steps N] [--cfg VALUE]
                   [--lora FILE.safetensors WEIGHT ...] [--lora-start FILE.safetensors FRACTION ...]
 
 Builds with the Editor open it by default. Builds without it default to headless mode.
-LAN mode uses the default preset and serves the Wi-Fi subnet on port 7860 unless specified.
 LoRA files are direct children of assets/loras. Selected filename stems are prepended to the positive prompt.
 --lora-start uses the full denoising schedule: 0 = always, 1 = never; default 0.1 (10%).
 Prompt files contain positive and negative strings. Presets contain the Editor's free groups and fixed text.

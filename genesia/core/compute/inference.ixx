@@ -51,8 +51,6 @@ export namespace genesia::compute {
 
     struct InferenceRuntime final {
         ::cuda::stream_ref stream;
-        std::size_t cache_hits{};
-        std::size_t cache_misses{};
 
     private:
         struct ConvPlan;

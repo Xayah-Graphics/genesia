@@ -2,7 +2,6 @@ module;
 #include <genesia/cuda.h>
 module genesia.runtime.session;
 import genesia.io.files;
-import genesia.runtime.diagnostics;
 import std;
 namespace genesia::runtime {
     Session::Session(generation::Visuals hooks) : visuals{std::move(hooks)}, worker{[this] { run(); }} {}
@@ -76,7 +75,6 @@ namespace genesia::runtime {
     void Session::emit(const State state, std::string failure) {
         {
             const std::lock_guard lock{mutex};
-            diagnostics::record("task.state", std::format("id={} state={} completed={}/{} error={}", active->id, states[static_cast<std::size_t>(state)], active->completed, active->total, failure));
             active->state = state;
             active->error = std::move(failure);
             delivery.events.push_back({EventKind::task, active->id, {}, {}, *active});
@@ -156,13 +154,11 @@ namespace genesia::runtime {
                         if (!engine->generate(id, image, interrupted)) break;
                     }
                 } catch (const std::exception& exception) {
-                    diagnostics::record("generation.exception", exception.what());
                     failure = exception.what();
                 }
                 try {
                     if (engine) engine->flush();
                 } catch (const std::exception& exception) {
-                    diagnostics::record("generation.flush.exception", exception.what());
                     if (failure.empty()) failure = exception.what();
                     else if (failure != exception.what()) failure += std::format("\n{}", exception.what());
                 }
@@ -176,7 +172,6 @@ namespace genesia::runtime {
             }
             if (previous) previous->finish();
         } catch (const std::exception& failure) {
-            diagnostics::record("session.exception", failure.what());
             const std::lock_guard lock{mutex};
             error = failure.what();
         }
